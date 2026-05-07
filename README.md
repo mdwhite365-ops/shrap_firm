@@ -7,53 +7,19 @@ A self-developing, self-improving, self-trading firm built primarily by AI agent
 See [`docs/00-vision.md`](docs/00-vision.md) for the full vision.
 
 ## Repository structure
-cat > .gitignore << 'EOF'
-# Python
-__pycache__/
-*.py[cod]
-*.so
-*.egg-info/
-.venv/
-venv/
-env/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
 
-# Environments and secrets
-.env
-.env.*
-!.env.example
-*.key
-*.pem
-secrets/
+- `docs/` — All project documentation (the firm's memory)
+- `docs/00-vision.md` — Foundational vision document
+- `docs/agents/` — Per-agent specifications
+- `docs/regimes/` — Historical regime profiles
+- `docs/universe/` — The 50-stock universe and per-ticker profiles
+- `docs/decisions/` — Architecture Decision Records (ADRs)
+- `docs/infrastructure/` — Deployment, networking, observability
+- `docs/trading/` — Risk rules, execution policy
+- `docs/data/` — Schemas and data sources
+- `status/` — Living state files
+- `reports/` — Generated reports (daily, weekly, trades)
 
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
+## Why this README is sparse
 
-# Data and models (don't commit large binaries)
-data/raw/
-data/processed/
-*.parquet
-*.csv
-*.feather
-*.h5
-models/
-*.pt
-*.pth
-*.gguf
-
-# Logs and outputs
-logs/
-*.log
-output/
-tmp/
-
-# Trading-specific (NEVER commit)
-broker_credentials/
-api_keys/
-positions_real/
+This is a private project in early documentation phase. The README will mature once the architecture stabilizes.
