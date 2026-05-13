@@ -339,3 +339,47 @@ Langfuse is self-hosted on the Dell and receives traces for every LLM call made 
 Each agent is a Python process running inside a Docker container. The container image is defined by a `Dockerfile` in the agent's directory; the `docker-compose.yml` in the repo root wires images, volumes, environment variables, and restart policies together. All containers use `restart: unless-stopped` — transient failures restart automatically; persistent failures surface as a Health Monitor anomaly. When the Deployment Agent deploys a new agent, it adds the container definition to `docker-compose.yml`, builds the image, and issues `docker compose up -d`. When an agent is retired, its container is removed from `docker-compose.yml` and stopped; its data remains in PostgreSQL and Qdrant for audit purposes.
 
 Agents that share a department but require isolation (e.g., the Execution Agent and Sweep Detector on the Trading Floor) run as separate containers in the same Compose service group. Agents that are logically the same but scaled horizontally (not applicable during the sprint) would use Compose's `scale` option — not Kubernetes.
+
+---
+
+## 9. LLM Routing
+
+Every agent in the firm is assigned to one of three model tiers: cloud-primary, local-primary, or no-LLM. The tier assignment is declared in each agent's spec and tracked by the Platform Department. The assignment can migrate over the sprint and post-sprint as local model quality is validated — migration is documented in `docs/infrastructure/llm-routing.md`.
+
+**Cloud-primary agents** call the Anthropic API directly, using Claude Sonnet 4.6 as the default and escalating to Opus 4.7 for tasks that demonstrably require it. Cloud-primary is the default for any agent whose errors have direct financial or architectural consequences: the Decision Maker, the Risk Officer, the Hypothesis Generator, and the Development Department's Implementation Agent. Cloud cost is accepted here because the cost of a degraded output is higher than the API bill.
+
+**Local-primary agents** call Ollama on the Dell (Qwen 9B) or, for heavier tasks, Ollama on the Ryzen (Qwen 14B or Mistral Small 24B). Local-primary is assigned to agents whose tasks are well-bounded classification or extraction problems: the Regime Router (classification), the Strategy Librarian (registry maintenance), the State Manager (status file synthesis), the Alert Agent (routine alert generation), and the News Analyzer and Filing Processor for their bulk summarization workload. Local agents fall back to cloud when the local instance is unavailable — this is handled in the agent's LLM client wrapper, not in the routing layer.
+
+**Cloud fallback.** When the Anthropic API is unavailable — outage, rate limit, or local network failure — cloud-primary agents fall back to the highest-quality local model the task can tolerate. For most agents this is Mistral Small 24B on the Ryzen. The fallback is logged as a degraded operation, surfaces in the next daily briefing, and the Decision Maker reduces position sizing by 50% on any signal evaluated during the degradation window. The Risk Officer's strategy promotion reviews are postponed rather than degraded; promotion is not a time-sensitive decision and waits for the cloud connection to restore.
+
+**No-LLM agents** are deterministic Python processes. The Pre-Trade Checker, Compliance Monitor, Reconciliation Agent, Strategy Evaluator's VectorBT PRO runner, and the Execution Agent contain no LLM calls. They are faster, cheaper, and more predictable than LLM-based equivalents for their respective tasks — rule enforcement and numerical computation do not benefit from language model reasoning.
+
+**The migration arc.** The sprint begins cloud-heavy, with local LLMs handling only the tasks where Qwen 9B quality is clearly sufficient. Over the sprint and post-sprint, the LLM Migration Evaluator runs shadow evaluations: for each cloud-primary agent, it feeds the same inputs to the local model and scores the outputs against the cloud outputs on a rubric defined in the agent's spec. When a local model passes the rubric on a rolling window of 50+ tasks, the Platform Department proposes migration to Mike for approval. The Decision Maker migrates last, if at all. Routing detail and per-agent migration milestones are documented in `docs/infrastructure/llm-routing.md`.
+
+---
+
+## 10. State and Memory Model
+
+Shrap's state is distributed across four layers with a clear hierarchy. The hierarchy exists so that any agent, at the start of any task, knows exactly where to look for current truth.
+
+**Layer 1: the repo (durable knowledge).** The canonical source for anything that is documented: vision, architecture, ADRs, agent specs, regime profiles, ticker profiles, living status files, and reports. Version-controlled, diffable, human-readable without tools. Agents read repo documents at task start to load the context relevant to their work. No agent holds a local copy of a repo document beyond the duration of a single task.
+
+**Layer 2: PostgreSQL (structured state).** The canonical source for anything that is queryable structured data: positions, fills, strategy registry state, backtest results, risk records, and the full audit log. PostgreSQL is append-preferred — records are updated only when lifecycle state genuinely changes (e.g., a strategy moving from `paper` to `retired`); historical records are not modified. LangGraph checkpoint state is stored here, allowing agents to resume after interruption.
+
+**Layer 3: Redis (live ephemera).** The canonical source for state that must be low-latency and is acceptable to lose on restart: the active strategy set, the Decision Maker's current signal window, heartbeat timestamps. Everything here is also written to PostgreSQL before or shortly after; Redis holds the hot copy. The message bus (Redis Streams) is also here — event log is durable within Redis's persistence configuration, but departments treat it as a delivery mechanism, not a store of record.
+
+**Layer 4: agent working memory (task-scoped).** LangGraph agent state within a single task execution: tool call results, intermediate reasoning, draft outputs. This layer does not persist beyond task completion. Anything an agent produces that needs to outlive the task is written to the repo, PostgreSQL, or Qdrant before the task exits.
+
+**What each agent reads at task start.** Each agent's spec declares its context loading list. The pattern is: always read `current-sprint.md`, `decision-queue.md`, own agent spec, and own department's recent Redis events. Read additional docs — architecture, regime profiles, ticker profiles, other agent specs — only when the task requires them. Selective loading keeps token consumption predictable and avoids agents accumulating stale context from documents they don't need.
+
+**Living status files.** Four files in the repo capture rapidly-changing operational state, updated by the State Manager on the Operations Department's behalf:
+- `current-sprint.md` — active sprint goal, open blockers, near-term priorities
+- `decision-queue.md` — items awaiting Mike's decision, oldest first
+- `known-issues.md` — active bugs and degraded conditions
+- `recent-changes.md` — last 10 deployments, schema migrations, and agent spec updates
+
+These files are written by agents and read by agents and by Mike. They are not append-only — they reflect current state, not history. History lives in git.
+
+**Append-only records.** ADRs, daily briefings, weekly reviews, trade logs, audit records, and strategy lifecycle decisions are append-only. Nothing in these files is edited or deleted; superseding entries reference and replace prior ones. Strategy lifecycle decisions in particular — every promotion, demotion, retirement, and parameter change — carry the full reasoning at the time of decision, so that retrospectives can answer "why did we activate this strategy then" rather than "what state was it in then."
+
+**Qdrant and Mem0.** Qdrant indexes documents for semantic retrieval (described in section 7). Mem0 is self-hosted and stores agent-side accumulated context that is not document-shaped: learned calibration on Mike's communication patterns, recurring preferences, and agent-specific lessons that are too fine-grained for a repo document. Mem0 is a secondary memory layer — it augments but never replaces the repo. If a Mem0 record conflicts with a repo document, the repo wins.
