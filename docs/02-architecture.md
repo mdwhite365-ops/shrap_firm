@@ -226,3 +226,69 @@ The subsection format is consistent across all nine departments: role, key agent
 **Sprint scope.** Cost Monitor operational by end of month 1 — cloud spend visibility is required from day one. LLM Migration Evaluator by end of month 4 (meaningful shadow data not available until agents have run for several months). Infrastructure Planner as needed, no fixed milestone.
 
 **Deferred.** Fine-tuning pipeline for local models on accumulated trade data. Full cloud-LLM retirement. Kubernetes migration (explicitly deferred indefinitely; Docker Compose on single host is the production target).
+
+---
+
+## 5. Hardware Topology
+
+Shrap runs on three machines. Each has a defined role. They are not interchangeable.
+
+**Dell Precision 5820 — production tier.**
+The Dell is the always-on production environment. It hosts everything that must run continuously: the trading floor, all intelligence and operations agents, the message bus (Redis), the primary database (PostgreSQL + TimescaleDB), the vector store (Qdrant), Langfuse, and the Ollama instance serving local models. The Dell is the only machine on the production trading path. If the Dell is down, the firm is down.
+
+Current GPU: GTX 1080, used for Ollama inference. Upgrade to RTX 2070 Super is planned for the early build period; the architecture does not depend on the specific card, only on Ollama being available with sufficient VRAM for Qwen 9B as the default classification model.
+
+The Dell runs Docker Compose. All production containers are defined in the repo's `docker-compose.yml`. Persistent volumes (PostgreSQL data, Qdrant indices, Redis Streams log) are mounted to paths on TrueNAS storage, which provides redundancy for the data layer independent of the compute.
+
+Services hosted on the Dell:
+- Redis (message bus + ephemera)
+- PostgreSQL + TimescaleDB (relational + time-series)
+- Qdrant (vector store)
+- Langfuse (LLM tracing)
+- Ollama (local LLM serving, Qwen 9B default)
+- All department containers except heavy Ryzen-routed workers
+
+**Ryzen 7 7800X with RTX 4070 Super — research and inference tier.**
+The Ryzen is an on-demand resource, not always-on. It is available via Tailscale and activated for workloads that exceed what the Dell can handle efficiently: heavier local models (Qwen 14B, Mistral Small 24B), VectorBT PRO backtest runs (CPU-bound, benefits from the faster cores), and the Development Department's heavier code-generation tasks. The Ryzen is not on the real-time trading path — latency-sensitive work stays on the Dell.
+
+The Ryzen runs its own Ollama instance, serving models that are too large for the Dell's current GPU. Routing to the Ryzen is event-driven: the requesting agent publishes to a `ryzen.tasks` stream; a worker process on the Ryzen consumes from that stream, executes the task, and publishes results to a `ryzen.results` stream that the requester consumes. The Ryzen never initiates a connection; it only reads task events and writes result events.
+
+**MacBook Pro M4 24GB — developer tier.**
+The MacBook is Mike's interactive environment. It is used for Claude Code sessions, on-the-go document review, and direct repo work. It is not part of the production trading path and does not run production containers. It connects to the Dell and Ryzen via Tailscale for remote agent monitoring and to pull logs and reports.
+
+**Network and trust model.**
+The three machines form a private network over Tailscale. The Dell is the trust anchor: it runs the message bus, the database, and the canonical container stack. The Ryzen accepts work routed from the Dell and returns results; it does not initiate connections to the trading core. The MacBook has read access to all services for monitoring and review, but production writes go through git and PR workflows — not directly to the Dell's running containers.
+
+No port is exposed to the public internet. All inter-machine communication traverses Tailscale. API credentials (Alpaca, IBKR, Anthropic, EDGAR) are stored as environment variables in a `.env` file on the Dell, excluded from the repo, and are not transmitted to the Ryzen or MacBook except as needed for task execution.
+
+---
+
+## 6. Loop Boundaries and Handoffs
+
+The three loops are failure-isolated by design. What crosses the boundaries between them — and how — determines whether that isolation holds in practice.
+
+**Research → Trading Floor: strategy promotion.**
+When the Strategy Evaluator passes a strategy and the Risk Officer approves promotion, the Strategy Librarian updates the strategy's lifecycle state in PostgreSQL and publishes a `strategy.promoted` event to Redis Streams. The Regime Router on the Trading Floor consumes this event, checks the promoted strategy's `regime_fit` tags against the current regime state, and either activates the strategy immediately or holds it dormant until regime conditions are met. The Trading Floor does not poll the strategy registry — it reacts to events. If the `strategy.promoted` event is missed (container restart, network interruption), the Regime Router will catch up on reconnect via Redis Streams consumer group replay.
+
+The strategy's code module is not transmitted over the bus. The event carries the strategy ID and version. The Trading Floor loads the strategy module from a read-only volume that mirrors the repo's `strategies/` directory at the deployed commit. New strategy versions reach the Trading Floor only through the Deployment Agent's container update process (described below), not through any direct git read at runtime.
+
+**Intelligence → Decision Maker: signal delivery.**
+The Intelligence Department publishes structured `intelligence.signal` events to Redis Streams. Each event carries a ticker, signal type, confidence score, source reference (a PostgreSQL record ID or Qdrant document ID for the full text), and a TTL after which the signal should be considered stale. (The exact field names and types are part of the unresolved event envelope schema — see Open Question 3 — but TTL semantics will be required regardless of how the schema is finalized.) The Decision Maker consumes these events and holds a short-term signal window in memory — signals that have arrived since the last position evaluation, weighted by confidence and freshness. Signals do not trigger immediate trades; they modify the context in which the next strategy signal is evaluated.
+
+The full text of the underlying document (a news item, filing extract, or structural finding) is never on the bus. The Decision Maker fetches it from Qdrant only if it needs to reason about it directly — which is the exception, not the rule.
+
+**Structural Analysis → Decision Maker: bias delivery.**
+Structural Analysis publishes `structural.bias.updated` events on a slower cadence — typically after each weekly watch list refresh or when a material finding warrants immediate attention. Each event carries a ticker, bias direction (positive/negative/neutral), magnitude, and an expiry. The Decision Maker holds these biases as persistent state, refreshed on each update event. A structural bias does not override a strategy signal; it modifies position sizing and acceptable risk on that ticker. A strong negative structural bias on a name does not prevent the system from trading it — it reduces the maximum allowed size.
+
+**Development Department → running agents: deployment.**
+When Mike merges a PR, the Deployment Agent detects the merge event (via GitHub webhook or polling), pulls the updated repo, rebuilds the affected container image, and issues a `docker compose up -d` for the changed service. The Operations Department's Health Monitor observes the container restart and publishes a `deployment.completed` event to Redis Streams. Agents that depend on the restarted service reconnect via their normal retry logic — Redis consumer groups preserve position in the stream, so no events are lost during a brief restart window.
+
+The Development Department cannot trigger a deployment that touches `trading/`, `risk/`, or `execution/` containers without a PR approved by Mike. This is enforced by OpenHands' path denylist and by a branch protection rule requiring Mike's review on any PR that modifies those paths. The gate is in the repo, not in the deployment agent.
+
+**Operations → Reporting → Mike: anomaly delivery.**
+When the Health Monitor detects a container failure, missed heartbeat, or service degradation, it publishes a `health.anomaly` event to Redis Streams. The Alert Agent consumes this stream and decides whether the anomaly is urgent (requires interrupting Mike) or routine (folded into the next daily briefing). Urgent alerts route to whatever alerting channel is settled (Open Question 2); routine anomalies are logged to PostgreSQL and surfaced in the Daily Briefing Agent's next report. Reconciliation discrepancies between internal state and broker records follow the same path — anomaly published, severity classified, routed accordingly.
+
+**Failure containment.**
+Each department's container fails independently. If the Intelligence Department crashes, the Trading Floor continues executing against existing strategy signals with no new intelligence context — acceptable degradation. If the Research Department crashes, no new hypotheses are generated and no promotions are processed, but the Trading Floor continues running active strategies — acceptable degradation. If the Risk and Compliance Department crashes, the Pre-Trade Checker goes offline; the Execution Agent is configured to halt order submission if it cannot confirm a passing risk check — not acceptable degradation, so the system stops trading until Risk is restored. This is a deliberate choice: in the absence of a passing risk check, the safe default is no trade, not a trade against a stale risk state. The cost of being offline for minutes is small; the cost of trading without a working risk gate could be large.
+
+The Operations Department's Health Monitor is responsible for detecting crashes and alerting Mike. It does not attempt automated restarts beyond Docker Compose's built-in `restart: unless-stopped` policy, which handles transient failures. Persistent failures require Mike's attention.
