@@ -383,3 +383,50 @@ These files are written by agents and read by agents and by Mike. They are not a
 **Append-only records.** ADRs, daily briefings, weekly reviews, trade logs, audit records, and strategy lifecycle decisions are append-only. Nothing in these files is edited or deleted; superseding entries reference and replace prior ones. Strategy lifecycle decisions in particular — every promotion, demotion, retirement, and parameter change — carry the full reasoning at the time of decision, so that retrospectives can answer "why did we activate this strategy then" rather than "what state was it in then."
 
 **Qdrant and Mem0.** Qdrant indexes documents for semantic retrieval (described in section 7). Mem0 is self-hosted and stores agent-side accumulated context that is not document-shaped: learned calibration on Mike's communication patterns, recurring preferences, and agent-specific lessons that are too fine-grained for a repo document. Mem0 is a secondary memory layer — it augments but never replaces the repo. If a Mem0 record conflicts with a repo document, the repo wins.
+
+---
+
+## 11. Security and Access
+
+**Tailscale trust model.**
+The three machines communicate exclusively over Tailscale. Each machine is an authenticated node in a private tailnet; no service port is exposed to the public internet. The Dell is the only machine that runs production containers, and it does not accept inbound connections from the Ryzen or MacBook except for explicitly allowed service ports within the tailnet (PostgreSQL, Redis, Qdrant, Langfuse, Ollama). The Ryzen accepts task events from the Dell's Redis instance and returns results — it does not expose its own services to the MacBook. The MacBook has read-only access to services on the Dell for monitoring and log review.
+
+**Credential management.**
+All API credentials — Alpaca, IBKR, Anthropic, EDGAR, any news or social APIs — are stored as environment variables in a `.env` file on the Dell. This file is excluded from the repo via `.gitignore` and is never committed. Containers receive credentials via Docker Compose's `env_file` directive. No credential is hardcoded in any source file; the Implementation Agent's OpenHands sandbox excludes all credential-matching paths. The Ryzen receives task-scoped credentials (e.g., an Ollama call does not need broker credentials) only when a specific task requires them, passed as environment variables in the task payload, not stored on the Ryzen at rest.
+
+**Agent permission scoping.**
+Agents interact with production systems only through their declared interfaces. No agent has direct shell access to the Dell outside its container. No agent has write access to another department's database tables — schema design will enforce this via PostgreSQL roles once the schema is built. The Implementation Agent's writable path list (section 8) is the enforcement boundary for the outer loop; it is not a convention but a hard sandbox constraint enforced by OpenHands. Any PR that modifies `trading/`, `risk/`, `execution/`, or `compliance/` paths requires Mike's explicit approval; this is enforced by a branch protection rule, not by agent policy.
+
+**Broker credential isolation.**
+Alpaca and IBKR credentials are held only by NautilusTrader's container. No other container has access to broker credentials. Broker API calls are proxied through NautilusTrader — other departments receive fill events and position data via Redis Streams, not through direct broker API access. This isolation means a compromised Intelligence or Research container cannot submit orders.
+
+**Secret rotation and compromise response.**
+API credentials are rotated on a schedule defined per provider — typically quarterly, sooner if a provider supports automated rotation. When a credential is rotated, the new value is written to the `.env` file on the Dell and the affected containers are restarted; Docker Compose reloads the environment automatically. If a credential is suspected to be compromised, the immediate response is to revoke at the provider, write a new value, and restart the trading containers; the audit trail in Redis Streams identifies any actions taken with the compromised credential during the exposure window. This response procedure is documented in `docs/infrastructure/credential-incident-response.md` (to be written).
+
+---
+
+## 12. Observability
+
+**LLM tracing (Langfuse).**
+Every LLM call — cloud or local — is traced to Langfuse. Traces include model, token counts, latency, and a tag set identifying the department, agent, and task type. Langfuse is the primary instrument for two operational needs: the Platform Department's Cost Monitor (cloud spend tracking by department and agent) and the LLM Migration Evaluator (cloud-vs-local quality comparison). Traces are retained for the duration of the sprint and used in retrospectives. Langfuse is self-hosted on the Dell; traces do not leave the local network.
+
+**System monitoring (Open Question 1).**
+Container health, PostgreSQL performance, Redis throughput, Qdrant index health, and Tailscale connectivity are not covered by Langfuse. The Operations Department's Health Monitor requires a substrate to query. Prometheus + Grafana is the most likely answer; the decision is deferred until the Operations Department spec is written. Until that question is resolved, container health is monitored via Docker health checks and heartbeat events on Redis, which are sufficient for early sprint operation but not adequate for production.
+
+**Audit trail.**
+The audit trail is the firm's answer to "why did the system do that." It has three layers that together make every decision traceable: the Redis Streams event log (what events were published and when), the PostgreSQL audit table (structured record of every agent decision and its inputs), and the append-only records in the repo (ADRs, strategy lifecycle decisions, daily reports). Any decision — a trade, a strategy promotion, a risk veto, a deployment — can be traced from the event that triggered it through the agent that processed it to the inputs that informed it. This is not aspirational; agents are required to write audit records as part of their task completion, not as an afterthought.
+
+**Alerting to Mike.**
+Urgent alerts — risk breach, system down, reconciliation discrepancy — route through the Alert Agent to whatever channel is settled (Open Question 2). Until that is resolved, alerts are logged to PostgreSQL and surfaced in the daily briefing. Routine operational state reaches Mike through the daily briefing and weekly review produced by the Reporting Department. Mike is not expected to monitor dashboards; the system surfaces what requires his attention, and the Reporting Department is responsible for calibrating the signal-to-noise ratio of that surface.
+
+---
+
+## 13. Open Questions — Status Update
+
+This section revisits the three open questions from section 2 in light of the intervening sections. One is partially resolved; two remain open.
+
+**Open Question 1: System-level monitoring stack.** Still open. The architecture sections have not resolved the technology choice for container and infrastructure monitoring. Prometheus + Grafana remains the most likely answer. Decision is needed before the Operations Department spec is written. Nothing in the intervening sections has changed the options or the tradeoffs.
+
+**Open Question 2: Alerting channel to Mike.** Still open. Sections 6, 10, 11, and 12 all reference this question and use the same interim behavior: alerts logged to PostgreSQL, surfaced in the daily briefing. The interim is coherent and workable for early sprint operation — paper trading with no real money at risk means a delayed alert is an inconvenience, not a crisis. The decision becomes more urgent when live risk exposure begins. Decision needed before the Reporting Department spec is written.
+
+**Open Question 3: Redis Streams event envelope schema.** Partially resolved by the intervening sections. The architecture has now named the fields that specific events need: `intelligence.signal` events carry ticker, signal type, confidence score, source reference, and TTL; `structural.bias.updated` events carry ticker, direction, magnitude, and expiry; `strategy.promoted` events carry strategy ID and version. The field inventory is building up through the department descriptions. What remains unresolved is the standardized envelope — the fields that every event carries regardless of type (event ID, timestamp, source department, schema version, correlation ID for tracing). That envelope needs to be settled before any department writes a producer or consumer. Decision still needed before any department spec that publishes or subscribes to cross-department events.
