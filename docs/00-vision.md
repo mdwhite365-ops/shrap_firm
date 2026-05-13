@@ -83,7 +83,7 @@ The firm is organized into departments, each with defined agents in defined role
 - **Risk and Compliance Department** — enforces guardrails with veto power over all other departments
 - **Operations Department** — keeps the lights on (state, reconciliation, health, audit)
 - **Reporting Department** — keeps Mike informed without overwhelming him
-- **Infrastructure and Growth Department** — manages self-expansion as the firm matures
+- **Platform Department** — manages self-expansion as the firm matures
 
 Detailed architecture is documented in `02-architecture.md`. Per-agent specifications live in `agents/`.
 
