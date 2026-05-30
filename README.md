@@ -2,7 +2,7 @@
 
 A self-developing, self-improving, self-trading firm built primarily by AI agents under human architectural direction.
 
-**Status:** Phase 0 — Documentation. No code yet.
+**Status:** Phase 0 — Documentation. Foundational doc set complete; awaiting review pass. No code yet.
 
 See [`docs/00-vision.md`](docs/00-vision.md) for the full vision.
 
