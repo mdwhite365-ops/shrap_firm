@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from typing import Any, cast
+from typing import cast
 
 import structlog
 from redis.asyncio import Redis
@@ -12,8 +12,8 @@ from redis.asyncio import Redis
 from shrap.agents.operations.audit_logger.config import Settings
 from shrap.agents.operations.audit_logger.postgres import AsyncPool, PostgresAuditSink
 from shrap.agents.operations.audit_logger.records import record_from_envelope
-from shrap.common.envelope import Envelope
 from shrap.common.logging import configure_logging
+from shrap.events import EventSubscriber, ReceivedEvent, RedisSubscriber, normalize_redis_fields
 
 log = structlog.get_logger(__name__)
 
@@ -34,8 +34,18 @@ async def process_redis_entry(
     fields: dict[str, str],
 ) -> None:
     """Validate and persist a single Redis Stream entry."""
-    envelope = Envelope.from_redis_fields(fields)
+    from shrap.events import Envelope
+
+    envelope = Envelope.from_redis_fields(
+        normalize_redis_fields(cast(dict[str | bytes, str | bytes], fields))
+    )
     record = record_from_envelope(stream_name, redis_stream_id, envelope)
+    await sink.insert(record)
+
+
+async def process_received_event(sink: PostgresAuditSink, event: ReceivedEvent) -> None:
+    """Persist one event already validated by ``shrap.events``."""
+    record = record_from_envelope(event.stream, event.redis_stream_id, event.envelope)
     await sink.insert(record)
 
 
@@ -52,28 +62,24 @@ async def poll_once(
     PostgreSQL uniqueness on ``event_id`` makes replay safe if the process restarts from
     the beginning during the early sprint.
     """
-    response = await redis.xread(
-        streams=cast(dict[Any, Any], last_ids),
-        count=count,
-        block=block_ms,
-    )
-    if not response:
+    subscriber = EventSubscriber(cast(RedisSubscriber, redis))
+    events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+    if not events:
         return 0
 
     written = 0
-    for stream_name, entries in cast(list[tuple[str, list[tuple[str, dict[str, str]]]]], response):
-        for redis_stream_id, fields in entries:
-            try:
-                await process_redis_entry(sink, stream_name, redis_stream_id, fields)
-                written += 1
-            except Exception:
-                log.exception(
-                    "audit_logger.entry_failed",
-                    stream=stream_name,
-                    redis_stream_id=redis_stream_id,
-                )
-            finally:
-                last_ids[stream_name] = redis_stream_id
+    for event in events:
+        try:
+            await process_received_event(sink, event)
+            written += 1
+        except Exception:
+            log.exception(
+                "audit_logger.entry_failed",
+                stream=event.stream,
+                redis_stream_id=event.redis_stream_id,
+            )
+        finally:
+            last_ids[event.stream] = event.redis_stream_id
     return written
 
 

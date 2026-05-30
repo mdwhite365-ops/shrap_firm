@@ -1,13 +1,11 @@
 # Dell bootstrap runbook (shrap-prod)
 
-**Status:** Phase 1, step 5. Substrate only.
+**Status:** Phase 1, operations substrate.
 **Target host:** Dell Precision 5820, hostname `shrap-prod` on the Tailscale tailnet.
 **OS:** TrueNAS SCALE (Linux kernel + Docker).
 **Owner:** Mike White.
 
-This runbook brings the Dell substrate online. It deploys: Redis, Postgres+TimescaleDB, Qdrant, Langfuse (with its own Postgres), Prometheus, Grafana, Ollama (GPU), and the exporters that feed Prometheus. Nothing else.
-
-**No agent code is deployed here.** This is substrate only. The first consumer is the Health Monitor agent (`docs/agents/operations/health-monitor.md`), which ships in a separate compose file in a later commit.
+This runbook brings the Dell substrate online. It deploys: Redis, Postgres+TimescaleDB, Qdrant, Langfuse (with its own Postgres), Prometheus, Grafana, Ollama (GPU), the exporters that feed Prometheus, and the first deterministic Operations agents: Health Monitor and Audit Logger.
 
 ## Honest limitations up front
 
@@ -92,6 +90,10 @@ This downloads everything. On a fresh Dell it is several GB. Expect 5-15 minutes
     docker compose up -d
 
 Compose prints each container start. The whole stack should reach `running` state within ~60s. Postgres and Langfuse take the longest because Langfuse runs its schema migrations on first boot.
+
+For a smaller local smoke subset during development, this is enough to test the Operations path without Qdrant/Langfuse/Ollama/Grafana:
+
+    docker compose up -d redis postgres prometheus health-monitor audit-logger
 
 ### 2.5 Wait for health
 
@@ -212,6 +214,30 @@ Then import dashboard IDs `1860` (Node Exporter Full) and `893` (cAdvisor) from 
 Expect a brief response. If GPU passthrough is working, `nvidia-smi` on the host shows the Ollama process using VRAM during generation.
 
 Note: the LLM routing doc specifies "Qwen 2.5 9B-instruct Q4_K_M" as the Dell default. The Ollama tag for the matching model is `qwen2.5:7b` or a custom Modelfile pinning the exact Q4_K_M build. Confirm with the routing doc owner which tag the firm standardizes on before locking it into agent specs. **Open question:** Ollama's library does not ship a `qwen2.5:9b` tag - the closest off-the-shelf sizes are 7B and 14B. Either standardize on 7B (fits trivially in 8GB VRAM with headroom) or pull a quantized 14B and validate VRAM fit.
+
+### 3.8 Operations event path - Health Monitor to Audit Logger
+
+The first end-to-end Operations path is:
+
+Health Monitor -> Redis Streams -> Audit Logger -> PostgreSQL `ops.audit_events`.
+
+Verify Redis has health events:
+
+    docker compose exec redis redis-cli --raw keys 'ops.health-*' | sort
+    docker compose exec redis redis-cli XLEN ops.health-tick
+
+Verify the Audit Logger persisted those envelopes:
+
+    docker compose exec postgres psql -U "$SHRAP_DB_USER" -d "$SHRAP_DB_NAME" \
+      -tAc "SELECT count(*) FROM ops.audit_events;"
+
+Inspect the first few audit records:
+
+    docker compose exec postgres psql -U "$SHRAP_DB_USER" -d "$SHRAP_DB_NAME" \
+      -P pager=off \
+      -c "SELECT stream_name, event_id, produced_by FROM ops.audit_events ORDER BY produced_at LIMIT 5;"
+
+Expected result: count is greater than zero and rows include `ops.health-startup` and `ops.health-tick` from `health-monitor@...`.
 
 ---
 
@@ -343,7 +369,7 @@ For multiple tunnels in one session, combine `-L` flags or run a single long-liv
 
 ## 6. What this runbook does **not** do
 
-- Does not deploy any agent. The Health Monitor agent is the first consumer of this substrate; it lives in a separate compose file in a future commit (`docs/agents/operations/health-monitor.md`).
+- Does not deploy the full firm. It deploys only deterministic Operations agents needed for the early substrate: Health Monitor and Audit Logger. Trading Floor, Research, Intelligence, Reporting, and Development Department agents come later.
 - Does not configure Grafana dashboards as code. Manual dashboard imports above are bootstrap-only; canonical dashboards will land as Grafana provisioning JSON in `infra/grafana/provisioning/` later.
 - Does not set up alerting. ADR-0005 covers the alerting channel; the Reporting Department spec wires it in.
 - Does not set up the Ryzen worker. The Ryzen is a separate host with its own (smaller) compose file - that ships when the first agent needs heavy local inference.
