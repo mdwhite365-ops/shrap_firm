@@ -5,6 +5,21 @@
 **Owner:** Mike White
 **Status:** Draft — proposed 50-name list requires Mike's review and lock-in
 
+> **SUPERSEDED IN PART — see ADR-0007 (2026-05-30).**
+>
+> As of ADR-0007, the universe is no longer a hand-curated 50-name locked
+> list. It is derived continuously from the Infrastructure Mapper's active
+> graphs. The list below is preserved as the **SEED GRAPH** — the initial
+> universe extracted from currently-obvious world-changers (NVIDIA AI
+> compute, GLP-1 obesity drugs, reusable launch, energy infrastructure for
+> AI training). The Universe Curator Agent
+> (see `docs/agents/research/universe-curator.md`) maintains this list
+> going forward based on Infrastructure Mapper outputs, not on the fixed
+> category quotas described below. The selection methodology, category
+> tags, and per-ticker profile schema below remain valid as the seed-graph
+> documentation and as advisory tagging for new graph nodes; they are no
+> longer treated as locked quotas.
+
 ## Purpose
 
 The universe is the set of tickers Shrap is allowed to trade. The vision document calls for "50 deliberately-chosen stocks" rather than a broad universe, on the thesis that depth of understanding per ticker compounds advantage in a way that breadth does not. This document defines the selection methodology and proposes a concrete 50-name list as a starting point.

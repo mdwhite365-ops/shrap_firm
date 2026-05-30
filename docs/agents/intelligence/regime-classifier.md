@@ -1,6 +1,6 @@
 # Regime Classifier
 
-**Department:** Research
+**Department:** Intelligence (moved from Research per ADR-0007)
 **LLM tier:** Hybrid — statistical layer is No LLM (deterministic); historical-analog layer is Cloud (Claude Sonnet 4.6) with planned migration to Local (Qwen 14B). See `docs/infrastructure/llm-routing.md`.
 **Status:** Draft
 **Date:** 2026-05-29
@@ -9,10 +9,14 @@
 
 ## Purpose
 
-The Regime Classifier produces the single most consequential piece of context the rest of
-the firm reads: "what kind of market are we in, right now." Strategy selection, position
-sizing, hypothesis generation, and the Decision Maker's veto thresholds all key off this
-output. If the classifier is wrong, the firm trades the wrong book against the wrong tape.
+The Regime Classifier produces a single piece of context the Risk Officer reads
+to modulate position sizing: "what kind of market are we in, right now, and what
+historical periods does it most resemble." Per ADR-0007, the classifier is a
+**sizing modifier, not a strategy-activation gate.** Strategies are activated by
+infrastructure graph state and Bottleneck Scout events; this agent's output tells
+the Risk Officer how much size those active strategies are allowed to take in the
+current environment, and which historical analogs argue for caution or
+aggression.
 
 It operates in two layers, which are kept deliberately separate so failures in one do not
 silently corrupt the other:
@@ -20,40 +24,53 @@ silently corrupt the other:
 1. **Statistical layer (deterministic).** Computes a state vector from price, volume,
    breadth, dispersion, and term-structure inputs and maps it to a labeled regime drawn
    from `docs/regimes/`. This layer is reproducible, fast, and the source of truth when
-   the LLM layer is unavailable.
+   the LLM layer is unavailable. Mechanically unchanged from the v0.1 Research-
+   department spec.
 2. **Historical-analog layer (LLM-driven).** Reads the current statistical state plus
    recent macro/intel context and returns a ranked list of historical periods the current
    regime most resembles (e.g. "late-1998 LTCM-recovery melt-up," "Q4-2018 risk-off,"
-   "post-COVID liquidity bloom"). These analogs are advisory context for the Hypothesis
-   Generator and Decision Maker — they never override the statistical label.
+   "post-COVID liquidity bloom"). These analogs are advisory context for the Risk
+   Officer's sizing calculation — they never override the statistical label and they
+   never directly trigger or block a trade. Mechanically unchanged from the v0.1 spec.
 
 What this agent cannot do, stated up front: it cannot predict regime *transitions* before
 they are visible in the data. It is a classifier, not a forecaster. It also cannot give a
 calibrated probability that its label is "correct" in any frequentist sense; the regime
 taxonomy is a human-defined ontology and the confidence scores it emits are internal
 consistency metrics, not posterior probabilities. Mike should read confidence as "how
-unanimous the underlying features are," not "how likely we are right."
+unanimous the underlying features are," not "how likely we are right." Because the
+classifier is now a sizing modifier rather than a strategy gate, a wrong label produces
+wrong sizing rather than wrong activation — still consequential, but a smaller blast
+radius than under the v0.1 framing.
 
 ## Trigger
 
 - **Schedule:** Statistical layer runs every 5 minutes during US market hours (09:30–16:00 ET)
   and once at 18:00 ET for the daily closing snapshot. Historical-analog layer runs once
   per trading day at 18:15 ET, and on demand when the statistical layer emits
-  `regime.changed`.
+  `intel.regime.changed`.
 - **Event:** Subscribes to `intel.macro.updated` (refreshes analog inputs) and
   `ops.health.degraded` (drops to deterministic-only mode if the LLM tier is unhealthy).
-- **On-demand:** Mike or the Hypothesis Generator can request a fresh classification with
-  a `regime.classify.request` event.
+- **On-demand:** Mike or the Risk Officer can request a fresh classification with
+  an `intel.regime.classify.request` event. (The Hypothesis Generator no longer
+  consumes this output and no longer issues on-demand requests; per ADR-0007, the
+  Hypothesis Generator is driven by Bottleneck Scout events instead.)
 
 ## Cross-references
 
 **Depends on:** Market Structure Reader (term structure, breadth), Intelligence
 Department's macro feeds, Operations Department (data freshness guarantees).
-**Depended on by:** Hypothesis Generator, Regime Router, Decision Maker, Risk Officer,
-Strategy Evaluator (for regime-stratified backtest splits), Daily Briefing Agent.
-**Related ADRs:** ADR-0004 (observability), ADR-0006 (Redis Streams envelope).
-**Related architecture sections:** `docs/02-architecture.md` §Research Department,
-§Regime taxonomy.
+**Depended on by:** **Risk Officer** (primary consumer — sizing modifier). Daily
+Briefing Agent (reads label and analogs for Mike's morning summary). Strategy
+Evaluator (uses regime label to stratify backtest splits for out-of-distribution
+checks, but no longer for activation gating). The Hypothesis Generator, Regime
+Router, and Decision Maker no longer consume this agent directly — strategy
+activation is driven by Bottleneck Scout events under ADR-0007.
+**Related ADRs:** ADR-0004 (observability), ADR-0006 (Redis Streams envelope),
+ADR-0007 (Research thesis — the decision that moved this agent and changed its
+downstream consumer).
+**Related architecture sections:** `docs/02-architecture.md` §Intelligence
+Department, §Regime taxonomy.
 
 ## Inputs
 
@@ -94,14 +111,24 @@ Strategy Evaluator (for regime-stratified backtest splits), Daily Briefing Agent
 
 ## Outputs
 
+The primary output under ADR-0007 is `intel.regime.sizing-modifier`, consumed by
+the Risk Officer. Heartbeat, change, and analog streams are preserved for audit
+and for the Daily Briefing Agent.
+
 | Destination | Type | Description |
 |---|---|---|
-| Redis stream: `research.regime.tick` | Event | Per-run heartbeat with current label + features (payload-by-reference) |
-| Redis stream: `research.regime.changed` | Event | Emitted only on debounced label change. Includes prior label, new label, debounce window, top contributing features |
-| Redis stream: `research.regime.analog` | Event | Daily / on-change historical analog output |
-| PostgreSQL: `research.regime_history` | Append-only write | Every tick: timestamp, features, scores, label, analog payload ref, confidence, ULID event_id, schema_version, correlation_id |
-| PostgreSQL: `research.regime_changes` | Append-only write | One row per debounced transition |
+| Redis stream: `intel.regime.sizing-modifier` | Event | **Primary output.** Consumed by Risk Officer. Carries: current statistical label, confidence, the top-K historical analogs and their fit/kill summaries, and a recommended sizing multiplier band (e.g. `[0.5, 1.0]` for risk-off regimes, `[1.0, 1.5]` for benign trend regimes) with the rule-based derivation attached. The Risk Officer applies this band on top of its Kelly-fractional sizing; this agent does not size positions directly. |
+| Redis stream: `intel.regime.tick` | Event | Per-run heartbeat with current label + features (payload-by-reference) |
+| Redis stream: `intel.regime.changed` | Event | Emitted only on debounced label change. Includes prior label, new label, debounce window, top contributing features. Audit and Daily Briefing only — no longer consumed for strategy activation. |
+| Redis stream: `intel.regime.analog` | Event | Daily / on-change historical analog output |
+| PostgreSQL: `intel.regime_history` | Append-only write | Every tick: timestamp, features, scores, label, analog payload ref, sizing-modifier band, confidence, ULID event_id, schema_version, correlation_id |
+| PostgreSQL: `intel.regime_changes` | Append-only write | One row per debounced transition |
 | Qdrant: `regime_analogs` | Upsert | New analog summaries indexed for future retrieval |
+
+Legacy `research.regime.*` stream names from the v0.1 spec are retained as
+read-only aliases for one sprint to avoid breaking any in-flight consumers, then
+removed. The envelope-registry update accompanying the ADR-0007 agent rewrites
+documents the alias window.
 
 Every emitted event conforms to the ADR-0006 envelope: ULID `event_id`, `schema_version`,
 `correlation_id` (set to the triggering event when applicable), `stream`, `produced_at`,
@@ -172,5 +199,22 @@ and `payload` or `payload_ref`. This is the firm's audit substrate; it is non-ne
   publishing the spec as approved. Owner: Mike.
 - **Tie-break epsilon:** What score gap counts as "tied"? Blocks: deterministic behavior
   under near-ties. Owner: Mike after regime profile cards are drafted.
-- **Should the analog layer ever block trading?** Current spec says no. Blocks: Decision
-  Maker spec finalization. Owner: Mike.
+- **Sizing-modifier band derivation rules.** What is the exact mapping from
+  (statistical label, analog set, confidence) to the `[min, max]` multiplier
+  band the Risk Officer consumes? The v0.1 spec did not need this because the
+  classifier was a gate; under ADR-0007 it is required. Proposed first pass:
+  hand-authored per-regime bands stored in `docs/regimes/<regime>.md` with the
+  historical-analog layer allowed to nudge within the band but not outside it.
+  Blocks: Risk Officer sizing-logic finalization. Owner: Mike, with Risk Officer
+  spec author.
+- **Should the analog layer ever clamp size to zero?** The v0.1 question
+  ("should the analog layer ever block trading?") was answered "no" under the
+  gate framing. Under the sizing-modifier framing, the equivalent question is
+  whether the analog layer can drive the sizing multiplier band to `[0.0, 0.0]`
+  in extreme historical-analog matches (e.g. a recognized pre-1987-crash
+  pattern). Current proposed answer: yes, but only via an explicit
+  Mike-approved analog tag, never via free-form LLM judgment. Blocks: Risk
+  Officer spec. Owner: Mike.
+- **Stream rename migration window.** How long do the `research.regime.*`
+  aliases stay live before removal? Default proposal: one sprint (4 weeks).
+  Blocks: envelope registry update. Owner: Mike.
