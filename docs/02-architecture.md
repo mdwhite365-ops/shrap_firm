@@ -42,14 +42,10 @@ The sprint target is a fully autonomous paper-trading system running on the Dell
 
 These are the architectural questions that remain unresolved as of this draft. Each has downstream consequences for what gets built and in what order. They are listed here rather than embedded in later sections so they cannot be overlooked.
 
-**1. System-level monitoring stack.**
-Langfuse handles LLM traces. It does not cover Redis, PostgreSQL, Qdrant, Docker containers, or Tailscale connectivity. The Operations Department's Health Monitor needs a substrate to query. Prometheus + Grafana is the standard answer but has not been committed. Decision needed before: Operations Department spec.
+**1. NautilusTrader-to-Redis event bridge coverage (ADR-0003).**
+The broker credential isolation model in section 11 holds only if NautilusTrader's Redis bridge is comprehensive enough that no other department has a legitimate reason to need direct broker API access. The completeness of fill, account, and position event coverage against NautilusTrader's actual adapter capabilities has not been verified. Decision needed before: Trading Floor spec.
 
-**2. Alerting channel to Mike.**
-The Reporting Department produces daily briefings, weekly reviews, and urgent alerts. The mechanism for reaching Mike is not decided. Candidates include a Slack bot (low friction, third-party dependency), email (reliable, lower urgency), or a self-hosted web dashboard (sovereign, requires build). Urgent alerts — risk breach, system down — need a path that works when Mike is away from his desk. Decision needed before: Reporting Department spec.
-
-**3. Redis Streams event envelope schema.**
-The choice of Redis Streams as the message bus is committed (ADR-0001). The topic namespace and message envelope format — stream names, field keys, schema versioning, required audit fields — are not. Every department that produces or consumes events needs this settled before it can be fully specced. Decision needed before: any department spec that publishes or subscribes to cross-department events.
+The three previously-listed open questions — monitoring stack, alerting channel, and Redis Streams event envelope — have been resolved in ADR-0004, ADR-0005, and ADR-0006 respectively.
 
 ---
 
@@ -423,10 +419,12 @@ Urgent alerts — risk breach, system down, reconciliation discrepancy — route
 
 ## 13. Open Questions — Status Update
 
-This section revisits the three open questions from section 2 in light of the intervening sections. One is partially resolved; two remain open.
+Of the four open questions tracked across this document and the ADR set, three are now resolved and one remains.
 
-**Open Question 1: System-level monitoring stack.** Still open. The architecture sections have not resolved the technology choice for container and infrastructure monitoring. Prometheus + Grafana remains the most likely answer. Decision is needed before the Operations Department spec is written. Nothing in the intervening sections has changed the options or the tradeoffs.
+**Resolved: System-level monitoring stack (ADR-0004).** Prometheus + Grafana on the Dell, single-host, with exporters for node, cAdvisor, Redis, PostgreSQL, and Qdrant. The Operations Department's Health Monitor queries Prometheus via PromQL and publishes `operations.health-anomaly` events.
 
-**Open Question 2: Alerting channel to Mike.** Still open. Sections 6, 10, 11, and 12 all reference this question and use the same interim behavior: alerts logged to PostgreSQL, surfaced in the daily briefing. The interim is coherent and workable for early sprint operation — paper trading with no real money at risk means a delayed alert is an inconvenience, not a crisis. The decision becomes more urgent when live risk exposure begins. Decision needed before the Reporting Department spec is written.
+**Resolved: Alerting channel to Mike (ADR-0005).** Two channels classified by urgency: Discord webhook for routine content (daily briefings, weekly reviews, strategy lifecycle), self-hosted ntfy.sh for urgent alerts (risk breach, system down, reconciliation discrepancy), with Pushover documented as a fallback for the urgent path.
 
-**Open Question 3: Redis Streams event envelope schema.** Partially resolved by the intervening sections. The architecture has now named the fields that specific events need: `intelligence.signal` events carry ticker, signal type, confidence score, source reference, and TTL; `structural.bias.updated` events carry ticker, direction, magnitude, and expiry; `strategy.promoted` events carry strategy ID and version. The field inventory is building up through the department descriptions. What remains unresolved is the standardized envelope — the fields that every event carries regardless of type (event ID, timestamp, source department, schema version, correlation ID for tracing). That envelope needs to be settled before any department writes a producer or consumer. Decision still needed before any department spec that publishes or subscribes to cross-department events.
+**Resolved: Redis Streams event envelope (ADR-0006).** Stream naming `<department>.<event-type>`, required envelope fields (event_id ULID, schema_version, produced_at, produced_by, correlation_id, payload), payload-by-reference rule for anything over 16 KB or document-shaped, semantic versioning of schemas in `schemas/events/`.
+
+**Still open: ADR-0003 — NautilusTrader-to-Redis event bridge coverage.** The broker credential isolation property described in section 11 depends on NautilusTrader's bridge being comprehensive enough that no department needs direct broker API access. This will be resolved during the Trading Floor agent specification, when the actual NautilusTrader event surface is enumerated against consumer needs.
