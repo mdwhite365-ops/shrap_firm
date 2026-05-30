@@ -5,24 +5,21 @@
 **Owner:** Mike White
 **Status:** Draft — proposed 50-name list requires Mike's review and lock-in
 
-> **SUPERSEDED IN PART — see ADR-0007 (2026-05-30).**
+> **SCOPE CORRECTED — see ADR-0010 (2026-05-31).**
 >
-> As of ADR-0007, the universe is no longer a hand-curated 50-name locked
-> list. It is derived continuously from the Infrastructure Mapper's active
-> graphs. The list below is preserved as the **SEED GRAPH** — the initial
-> universe extracted from currently-obvious world-changers (NVIDIA AI
-> compute, GLP-1 obesity drugs, reusable launch, energy infrastructure for
-> AI training). The Universe Curator Agent
-> (see `docs/agents/research/universe-curator.md`) maintains this list
-> going forward based on Infrastructure Mapper outputs, not on the fixed
-> category quotas described below. The selection methodology, category
-> tags, and per-ticker profile schema below remain valid as the seed-graph
-> documentation and as advisory tagging for new graph nodes; they are no
-> longer treated as locked quotas.
+> The list below is the **launch Universe** for the sprint. It is no longer
+> framed as a permanently locked list, and it is no longer framed as a seed
+> graph derived only from ADR-0007's world-changer infrastructure mapping.
+> Shrap maintains a merged universe across multiple approved sources: the
+> launch list, Research Thesis Framework #1 infrastructure-graph nodes,
+> future forced-proxy candidates, Structural Analysis watch-list names, and
+> any additional thesis frameworks approved by ADR. The Universe Curator Agent
+> maintains the merged active set and stages material changes for Mike's
+> approval.
 
 ## Purpose
 
-The universe is the set of tickers Shrap is allowed to trade. The vision document calls for "50 deliberately-chosen stocks" rather than a broad universe, on the thesis that depth of understanding per ticker compounds advantage in a way that breadth does not. This document defines the selection methodology and proposes a concrete 50-name list as a starting point.
+The universe is the set of tickers Shrap is allowed to trade. The vision document calls for a focused universe rather than a broad universe, on the thesis that depth of understanding per ticker compounds advantage in a way that breadth does not. This document defines the selection methodology and proposes the 50-name launch Universe as a starting point.
 
 A focused universe is not a constraint applied to make the system feasible. It is a deliberate edge: every name has a maintained behavioral profile, the regime classifier can be calibrated to how these specific names move, the news intelligence agents can deeply understand each issuer's catalyst calendar, and the structural-analysis department can read filings for the full set without skimming. The cost is foregone opportunities outside the universe. The cost is deliberate; the curators (Mike, with the Universe Curator Agent) treat it as the price of focus.
 
@@ -172,7 +169,7 @@ Items where Mike's review is specifically requested:
 
 ## Maintenance cadence
 
-Per the vision document, the Universe Curator Agent maintains the list. Material change cadence:
+Per ADR-0010, the Universe Curator Agent maintains a merged universe across multiple contributing sources. The launch list below is the starting point; additions can come from approved research thesis frameworks, Structural Analysis, or future ADR-defined sources. Material change cadence:
 
 - **Reviewed quarterly** by the Universe Curator Agent for liquidity, behavior changes, and category fit.
 - **Substitutions proposed** as standalone PRs with reasoning. Mike approves each.
