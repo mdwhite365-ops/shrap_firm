@@ -166,9 +166,7 @@ async def run(settings: Settings) -> None:
                 except Exception:
                     log.exception("health_monitor.tick_failed")
                 try:
-                    await asyncio.wait_for(
-                        stop.wait(), timeout=settings.tick_interval_seconds
-                    )
+                    await asyncio.wait_for(stop.wait(), timeout=settings.tick_interval_seconds)
                 except TimeoutError:
                     pass
         finally:

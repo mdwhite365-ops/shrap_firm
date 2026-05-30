@@ -47,9 +47,7 @@ async def send_discord(
             }
         ]
     }
-    resp = await client.post(
-        webhook_url.get_secret_value(), json=payload, timeout=10.0
-    )
+    resp = await client.post(webhook_url.get_secret_value(), json=payload, timeout=10.0)
     resp.raise_for_status()
 
 
@@ -66,9 +64,7 @@ async def send_ntfy(
         "Priority": str(priority),
         "Tags": "rotating_light",
     }
-    resp = await client.post(
-        ntfy_url, content=body.encode("utf-8"), headers=headers, timeout=10.0
-    )
+    resp = await client.post(ntfy_url, content=body.encode("utf-8"), headers=headers, timeout=10.0)
     resp.raise_for_status()
 
 
@@ -143,9 +139,7 @@ async def dispatch(
 
     if settings.discord_webhook_url is not None:
         try:
-            await send_discord(
-                http_client, settings.discord_webhook_url, title, body, severity
-            )
+            await send_discord(http_client, settings.discord_webhook_url, title, body, severity)
             sent_any = True
         except Exception as e:
             log.exception("alert.discord_failed", check=check.name, error=str(e))

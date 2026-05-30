@@ -325,3 +325,26 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Audit Logger - persists every configured Redis Stream envelope into
+  # PostgreSQL ops.audit_events for forensic reconstruction.
+  # -------------------------------------------------------------------------
+  audit-logger:
+    build:
+      context: ../
+      dockerfile: infra/audit-logger.Dockerfile
+    container_name: shrap_audit_logger
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      AUDIT_LOGGER_REDIS_URL: "redis://redis:6379/0"
+      AUDIT_LOGGER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net

@@ -87,9 +87,7 @@ async def check_qdrant(prom: PrometheusClient) -> CheckResult:
 async def check_docker(prom: PrometheusClient) -> CheckResult:
     """cadvisor exposes container_last_seen; count distinct container names seen recently."""
     t0 = time.perf_counter()
-    seen = await prom.query_instant(
-        "count(count by (name) (container_last_seen{name=~\".+\"}))"
-    )
+    seen = await prom.query_instant('count(count by (name) (container_last_seen{name=~".+"}))')
     ms = (time.perf_counter() - t0) * 1000.0
     evidence: dict[str, Any] = {
         "containers_seen": seen,
@@ -108,12 +106,8 @@ async def check_node(prom: PrometheusClient) -> CheckResult:
     load1 = await prom.query_instant("max(node_load1)")
     mem_avail = await prom.query_instant("max(node_memory_MemAvailable_bytes)")
     mem_total = await prom.query_instant("max(node_memory_MemTotal_bytes)")
-    fs_avail = await prom.query_instant(
-        'max(node_filesystem_avail_bytes{mountpoint="/"})'
-    )
-    fs_size = await prom.query_instant(
-        'max(node_filesystem_size_bytes{mountpoint="/"})'
-    )
+    fs_avail = await prom.query_instant('max(node_filesystem_avail_bytes{mountpoint="/"})')
+    fs_size = await prom.query_instant('max(node_filesystem_size_bytes{mountpoint="/"})')
     ms = (time.perf_counter() - t0) * 1000.0
 
     evidence: dict[str, Any] = {
