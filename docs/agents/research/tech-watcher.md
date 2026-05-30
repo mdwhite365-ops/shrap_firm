@@ -1,12 +1,13 @@
 # Tech Watcher
 
 **Department:** Research (Structural Funnel — Step 1)
-**LLM tier:** Cloud (Claude Sonnet 4.6) primary for source triage and synthesis;
-Cloud (Opus 4.7) for the weekly cross-source synthesis pass that produces the
-ranked candidate list. Local (Qwen 14B on the Ryzen) for the bulk
-filtering/deduplication pre-pass. Migration target: keep the synthesis pass
-cloud for the foreseeable future; move bulk filtering fully local once shadow
-evaluation passes. See `docs/infrastructure/llm-routing.md`.
+**LLM tier:** `cloud-default` primary for source triage and synthesis;
+`cloud-judgment-heavy` for the weekly cross-source synthesis pass that produces the
+ranked candidate list (judgment is load-bearing there). `local-classification` for the bulk
+filtering/deduplication pre-pass. Migration target: keep the synthesis pass on a cloud
+tier for the foreseeable future; move bulk filtering fully local once shadow
+evaluation passes. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-30
 **Author:** Mike White
@@ -104,7 +105,7 @@ Department, §Intelligence Department interface.
    Postgres + repo cache (filings as repo blobs, papers as Postgres rows
    with abstract inline and full text by repo path). Emit
    `ingestion.heartbeat` per source so the Health Monitor sees freshness.
-2. **Bulk filter (local LLM).** Qwen 14B on the Ryzen scores each new item
+2. **Bulk filter (local LLM).** The `local-classification` tier scores each new item
    for relevance to the active world-changer archetype list. Items below
    threshold are stored but excluded from the candidate-build step.
 3. **Cluster and triangulate.** Daily pass: cluster the relevant new items

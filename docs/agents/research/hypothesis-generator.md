@@ -1,11 +1,12 @@
 # Hypothesis Generator
 
 **Department:** Research
-**LLM tier:** Cloud (Claude Sonnet 4.6) primary, Cloud (Opus 4.7) for the once-weekly
+**LLM tier:** `cloud-default` primary, `cloud-judgment-heavy` for the once-weekly
 "hard problems" batch (typically bottleneck-rotation hypotheses where cross-graph
-reasoning matters). Migration target: Local (Mistral Small 24B) for routine
+reasoning matters and judgment is load-bearing). Migration target: `local-heavy` for routine
 infra-graph plays once shadow evaluation passes. See
-`docs/infrastructure/llm-routing.md`.
+`docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-30
 **Author:** Mike White

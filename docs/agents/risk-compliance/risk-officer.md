@@ -1,9 +1,13 @@
 # Risk Officer
 
 **Department:** Risk and Compliance
-**LLM tier:** No LLM — deterministic. The Risk Officer is the firm's circuit breaker;
-its decisions must be reproducible, auditable, and free of LLM unreliability. See
-`docs/infrastructure/llm-routing.md`.
+**LLM tier:** `no-llm` for the deterministic core — the Risk Officer is the firm's circuit breaker;
+its decisions must be reproducible, auditable, and free of LLM unreliability. A
+`cloud-default`-tier call MAY be used downstream of an already-made veto/escalation decision
+to draft human-readable escalation language (Slack/email body for Mike); that drafting
+cannot influence the decision itself. See `docs/infrastructure/llm-routing.md` and
+`docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-29
 **Author:** Mike White

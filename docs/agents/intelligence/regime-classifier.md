@@ -1,7 +1,8 @@
 # Regime Classifier
 
 **Department:** Intelligence (moved from Research per ADR-0007)
-**LLM tier:** Hybrid — statistical layer is No LLM (deterministic); historical-analog layer is Cloud (Claude Sonnet 4.6) with planned migration to Local (Qwen 14B). See `docs/infrastructure/llm-routing.md`.
+**LLM tier:** Hybrid — statistical layer is `no-llm` (deterministic); historical-analog layer is `cloud-default` with planned migration to `local-classification`. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-29
 **Author:** Mike White
@@ -183,7 +184,7 @@ and `payload` or `payload_ref`. This is the firm's audit substrate; it is non-ne
   events on Redis. Analog layer behind a feature flag, cloud LLM only.
 - Month 3: Analog layer enabled by default. Qdrant analog index populated with a
   Mike-curated seed set of 30–50 historical vignettes.
-- Month 4: Shadow-evaluate Qwen 14B against Claude on analog layer; document
+- Month 4: Shadow-evaluate the `local-classification` tier against `cloud-default` on the analog layer; document
   before-migration baseline.
 
 ## Deferred

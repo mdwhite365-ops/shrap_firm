@@ -1,17 +1,18 @@
 # Infrastructure Mapper
 
 **Department:** Research (Structural Funnel — Step 2)
-**LLM tier:** Cloud (Claude Sonnet 4.6) primary for initial graph
+**LLM tier:** `cloud-default` primary for initial graph
 construction from a newly promoted world-changer and for synthesis when
-incorporating new replacement layers from Bottleneck Scout. Cloud
-(Opus 4.7) for the once-per-graph "deep graph build" pass that produces
-the first full layer enumeration after Mike promotes a world-changer.
-Routine graph maintenance (node confirmation updates, kill-criterion
-evaluation, evidence-link refresh) starts as cloud LLM calls in the
+incorporating new replacement layers from Bottleneck Scout.
+`cloud-judgment-heavy` for the once-per-graph "deep graph build" pass that produces
+the first full layer enumeration after Mike promotes a world-changer (judgment is
+load-bearing on first build). Routine graph maintenance (node confirmation updates,
+kill-criterion evaluation, evidence-link refresh) starts on a cloud tier in the
 sprint and migrates to deterministic Python rules as the maintenance
 operations become well-understood. Migration target: deterministic
-maintenance plus periodic cloud-LLM audit pass by end of post-sprint
-month 6. See `docs/infrastructure/llm-routing.md`.
+maintenance plus periodic cloud-tier audit pass by end of post-sprint
+month 6. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-30
 **Author:** Mike White

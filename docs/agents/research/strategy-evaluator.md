@@ -1,10 +1,13 @@
 # Strategy Evaluator
 
 **Department:** Research
-**LLM tier:** No LLM — deterministic. The Evaluator is intentionally a numerical
+**LLM tier:** `no-llm` for the stats core — deterministic. The Evaluator is intentionally a numerical
 machine; LLMs are explicitly excluded from any pass/fail/demote decision
-because they are calibration disasters on this kind of question. See
-`docs/infrastructure/llm-routing.md`.
+because they are calibration disasters on this kind of question. A `cloud-default`-tier
+call MAY be used solely for human-readable narration of an already-decided kill/promote
+verdict (kill-criteria explainer text); the narration is downstream of the decision and
+cannot influence it. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-30
 **Author:** Mike White

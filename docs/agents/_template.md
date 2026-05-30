@@ -1,7 +1,8 @@
 # [Agent Name]
 
 **Department:** [Department Name]
-**LLM tier:** [Cloud (Claude Sonnet 4.6) | Local (Qwen 9B) | No LLM — deterministic]
+**LLM tier:** [cloud-judgment-heavy | cloud-default | cloud-cheap | local-classification | local-heavy | no-llm]
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** [YYYY-MM-DD]
 **Author:** Mike White

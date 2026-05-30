@@ -1,9 +1,10 @@
 # Health Monitor
 
 **Department:** Operations
-**LLM tier:** No LLM — deterministic. Health monitoring is a numerical pipeline; LLM
+**LLM tier:** `no-llm` — deterministic. Health monitoring is a numerical pipeline; LLM
 involvement would only add latency and unreliability to a load-bearing observability
-path. See `docs/infrastructure/llm-routing.md`.
+path. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-29
 **Author:** Mike White

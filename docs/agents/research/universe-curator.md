@@ -1,9 +1,10 @@
 # Universe Curator
 
 **Department:** Research
-**LLM tier:** Local (Qwen 9B) for rationale summarization and profile-staleness
+**LLM tier:** `local-classification` for rationale summarization and profile-staleness
 narrative generation only. All add/remove decision logic is deterministic — no
-LLM is in the approval path. See `docs/infrastructure/llm-routing.md`.
+LLM is in the approval path. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-30
 **Author:** Mike White

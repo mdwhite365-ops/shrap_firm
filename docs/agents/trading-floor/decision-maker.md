@@ -1,10 +1,12 @@
 # Decision Maker
 
 **Department:** Trading Floor
-**LLM tier:** Cloud (Claude Sonnet 4.6) for synthesis under uncertainty; falls back to
-deterministic-only mode when LLM tier is degraded. Most actual entries should be
+**LLM tier:** `cloud-judgment-heavy` for synthesis under uncertainty (uncertainty quantification
+is load-bearing here, so we pay for judgment); falls back to
+deterministic-only mode when the LLM tier is degraded. Most actual entries should be
 deterministic rule firings — the LLM is for narrative synthesis and edge-case veto, not
-primary signal generation. See `docs/infrastructure/llm-routing.md`.
+primary signal generation. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-29
 **Author:** Mike White

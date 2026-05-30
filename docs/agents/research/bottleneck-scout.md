@@ -1,15 +1,16 @@
 # Bottleneck Scout
 
 **Department:** Research (Structural Funnel — Step 3)
-**LLM tier:** Cloud (Claude Sonnet 4.6) primary for transcript/preprint
-synthesis and the "is this bottleneck binding?" reasoning step. Cloud
-(Opus 4.7) for the weekly cross-graph synthesis pass that ranks
-candidate bottlenecks across all active Mapper graphs. Local (Qwen 14B
-on the Ryzen) for bulk transcript filtering and language-pattern flag
+**LLM tier:** `cloud-default` primary for transcript/preprint
+synthesis and the "is this bottleneck binding?" reasoning step.
+`cloud-judgment-heavy` for the weekly cross-graph synthesis pass that ranks
+candidate bottlenecks across all active Mapper graphs (judgment is load-bearing
+there). `local-classification` for bulk transcript filtering and language-pattern flag
 detection (the "supply constrained / yield-limited / lead times
-extending" pre-pass). Migration target: keep the binding-judgment pass
-cloud indefinitely; move bulk filtering fully local once shadow
-evaluation passes. See `docs/infrastructure/llm-routing.md`.
+extending" pre-pass). Migration target: keep the binding-judgment pass on a cloud
+tier indefinitely; move bulk filtering fully local once shadow
+evaluation passes. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-30
 **Author:** Mike White
@@ -115,7 +116,7 @@ Department, §Universe Curator interface.
 
 1. **Ingest cursor advance.** Per-source cursor advance and raw persist
    (shared plumbing with Tech Watcher where possible).
-2. **Language-pattern pre-pass (local LLM).** Qwen 14B scans new
+2. **Language-pattern pre-pass (local LLM).** The `local-classification` tier scans new
    transcripts and filings for flagged phrases — "supply constrained",
    "yield-limited", "lead times extending", "capacity expansion delayed",
    "approaching physical limit", "co-packaged", "alternative

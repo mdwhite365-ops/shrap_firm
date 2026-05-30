@@ -1,10 +1,15 @@
 # Implementation Agent
 
 **Department:** Development
-**LLM tier:** Cloud (Claude Sonnet 4.6) as the driver model behind OpenHands SDK; Cloud
-(Opus 4.7) reserved for hard refactors at Mike's discretion. Migration target post-sprint:
-Local (Qwen 14B / Mistral Small 24B) for routine tasks once shadow evaluation passes.
-See `docs/infrastructure/llm-routing.md`.
+**LLM tier:** `cloud-default` as the driver model behind OpenHands SDK for routine
+non-protected-path work. **Escalates to `cloud-judgment-heavy` for any change touching a
+protected path** (Risk Officer core, order-router, execution adapters, kill-switches,
+secrets handling, anything in `docs/development/protected-paths.md`) — protected-path
+diffs get a judgment-heavy code-review pass before the PR is opened. Migration target
+post-sprint: `local-heavy` for routine tasks once shadow evaluation passes; protected-path
+work stays on `cloud-judgment-heavy` indefinitely. See `docs/infrastructure/llm-routing.md`
+and `docs/infrastructure/llm-registry.md`.
+_Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
 **Date:** 2026-05-29
 **Author:** Mike White
@@ -167,7 +172,7 @@ OpenHands run → PR open → review-response loop → terminal state.
   working from day one.
 - Month 2: Multi-iteration review-response loop. Cost ledger.
 - Month 3: Larger refactors with explicit Mike sign-off per refactor.
-- Month 4: Shadow-evaluate local LLM driver against Claude on the routine task subset.
+- Month 4: Shadow-evaluate the `local-heavy` driver against `cloud-default` on the routine task subset.
 
 ## Deferred
 
