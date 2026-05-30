@@ -18,6 +18,9 @@ _DEFAULT_STREAMS = ",".join(
         "ops.health-degraded",
         "ops.health-recovered",
         "ops.health-shutdown",
+        "trading.decision.intent",
+        "risk.intent.approved",
+        "risk.intent.vetoed",
     ]
 )
 
