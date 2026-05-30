@@ -1,6 +1,7 @@
 # ADR-0007: Research Thesis — World-Changers, Infrastructure Graphs, Bottleneck Scouting
 
-**Status:** Accepted
+**Status:** Superseded by ADR-0010
+Superseded 2026-05-31. See ADR-0010 for the corrected scope. The framework specified in this ADR remains in effect as Shrap's Research Thesis Framework #1.
 **Date:** 2026-05-30
 **Deciders:** Mike White
 
