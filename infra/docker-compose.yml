@@ -1,0 +1,302 @@
+# Shrap Firm - Phase 1 substrate stack
+#
+# Single-host Docker Compose for the Dell (shrap-prod on the Tailscale tailnet).
+# This file IS the deployment spec. If you need to change the substrate, change
+# this file and PR it; do not click around in the TrueNAS UI.
+#
+# Voice: boring beats clever. Well-known images, named volumes, restart
+# unless-stopped. All images pinned to a specific minor version - no :latest
+# drift on production-critical services. Update via PR.
+#
+# All host ports bind to 127.0.0.1 only. Remote access to anything in this
+# stack goes via Tailscale + SSH tunnel (see docs/runbooks/dell-bootstrap.md).
+# Inter-container traffic uses the shrap_net bridge with service DNS names.
+#
+# This is substrate only. No agent code runs here. The first consumer will be
+# the Health Monitor agent (docs/agents/operations/health-monitor.md), which
+# ships in a separate compose file in a future commit.
+
+version: "3.8"
+
+networks:
+  shrap_net:
+    driver: bridge
+
+volumes:
+  redis_data:
+  pg_data:
+  qdrant_storage:
+  langfuse_pg_data:
+  prom_data:
+  grafana_data:
+  ollama_models:
+
+services:
+
+  # -------------------------------------------------------------------------
+  # Redis - cross-department message bus (Streams) + cache.
+  # ADR-0001 commits Redis Streams. AOF every-second is the right
+  # durability/throughput tradeoff for an event bus.
+  # -------------------------------------------------------------------------
+  redis:
+    image: redis:7.4-alpine
+    container_name: shrap_redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - "900 1"
+      - --save
+      - "300 10"
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Postgres + TimescaleDB - primary OLTP + time-series store.
+  # All agent-owned tables live here. Langfuse uses its own DB (below).
+  # -------------------------------------------------------------------------
+  postgres:
+    image: timescale/timescaledb-ha:pg16
+    container_name: shrap_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${SHRAP_DB_USER}
+      POSTGRES_PASSWORD: ${SHRAP_DB_PASSWORD}
+      POSTGRES_DB: ${SHRAP_DB_NAME}
+    volumes:
+      - pg_data:/home/postgres/pgdata/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SHRAP_DB_USER} -d ${SHRAP_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Qdrant - vector store for embeddings (research memory, document search).
+  # 6333 HTTP, 6334 gRPC. Native Prometheus /metrics on 6333.
+  # -------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    container_name: shrap_qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6333/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Langfuse DB - dedicated Postgres for Langfuse. Kept separate so its
+  # migrations cannot collide with the firm's main schema.
+  # No host port binding - only reached from the langfuse container.
+  # -------------------------------------------------------------------------
+  langfuse-db:
+    image: postgres:16.4-alpine
+    container_name: shrap_langfuse_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${LANGFUSE_DB_USER}
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_pg_data:/var/lib/postgresql/data
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LANGFUSE_DB_USER} -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Langfuse - LLM tracing UI / collector. ADR-0004 keeps Langfuse for LLM
+  # specifics; Prometheus+Grafana covers everything else.
+  # -------------------------------------------------------------------------
+  langfuse:
+    image: langfuse/langfuse:2-latest
+    container_name: shrap_langfuse
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${LANGFUSE_DB_USER}:${LANGFUSE_DB_PASSWORD}@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      SALT: ${SALT}
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/public/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Prometheus - metrics scrape + storage. 30-day retention per ADR-0004.
+  # Scrape config lives in ./prometheus/prometheus.yml - the repo is truth.
+  # -------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: shrap_prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Grafana - dashboards for incident investigation. Mike's routine surface
+  # is the daily briefing; Grafana is for digging when something breaks.
+  # Bound to 3001 on the host because Langfuse owns 3000.
+  # -------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: shrap_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Ollama - local LLM serving. GPU passthrough via NVIDIA Container Toolkit.
+  # Hosts Qwen 2.5 9B on the Dell per docs/infrastructure/llm-routing.md.
+  # -------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:0.3.12
+    container_name: shrap_ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    networks:
+      - shrap_net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # -------------------------------------------------------------------------
+  # node-exporter - host CPU / memory / disk / network metrics.
+  # Uses host networking on :9100 - intentional, needs host-level visibility.
+  # -------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: shrap_node_exporter
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=127.0.0.1:9100
+    pid: host
+    network_mode: host
+    volumes:
+      - /:/host:ro,rslave
+
+  # -------------------------------------------------------------------------
+  # cadvisor - per-container CPU / memory / restart counts.
+  # -------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: shrap_cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # redis-exporter - Redis throughput, memory, stream length, consumer lag.
+  # -------------------------------------------------------------------------
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    container_name: shrap_redis_exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    ports:
+      - "127.0.0.1:9121:9121"
+    networks:
+      - shrap_net
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # postgres-exporter - Postgres connection pool, table sizes, replication lag.
+  # -------------------------------------------------------------------------
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: shrap_postgres_exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}?sslmode=disable"
+    ports:
+      - "127.0.0.1:9187:9187"
+    networks:
+      - shrap_net
+    depends_on:
+      postgres:
+        condition: service_healthy

@@ -1,0 +1,57 @@
+# Prometheus scrape config for the shrap-prod substrate.
+#
+# Targets are reached over the shrap_net Docker bridge using service DNS,
+# except node-exporter which runs in host networking mode and is reached at
+# host.docker.internal (Docker Desktop) or the docker bridge gateway
+# (typically 172.17.0.1 on Linux). Adjust NODE_EXPORTER_TARGET below if your
+# bridge gateway differs.
+#
+# ADR-0004: 30-day retention, single-host, Mike's daily surface is the
+# briefing - Grafana is for incident drilling.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    host: shrap-prod
+    env: prod
+
+scrape_configs:
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: node-exporter
+    # node-exporter runs with network_mode: host. From inside Prometheus
+    # container, the host is reachable via the docker0 bridge gateway.
+    static_configs:
+      - targets: ["172.17.0.1:9100"]
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    metric_relabel_configs:
+      # Drop noisy go runtime metrics emitted by cadvisor itself.
+      - source_labels: [__name__]
+        regex: "go_.*"
+        action: drop
+      # Drop process_* runtime metrics for the same reason.
+      - source_labels: [__name__]
+        regex: "process_.*"
+        action: drop
+
+  - job_name: redis-exporter
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+
+  - job_name: postgres-exporter
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  - job_name: qdrant
+    # Qdrant exposes Prometheus metrics natively on its HTTP port.
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["qdrant:6333"]
