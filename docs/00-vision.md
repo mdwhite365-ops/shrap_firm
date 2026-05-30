@@ -11,7 +11,7 @@
 
 Shrap is a self-developing, self-improving, self-trading firm that operates on Mike's hardware, manages Mike's capital, and is built and maintained primarily by AI agents under Mike's architectural direction.
 
-The firm trades a deliberately small universe of stocks deeply rather than a broad universe shallowly. That universe is not hand-curated up front — it is derived continuously from infrastructure dependency graphs built around the world-changing technologies and companies the Research Department promotes (see ADR-0007). Depth per name is still the point; the change is in how names enter and leave the set. The firm adapts position sizing to current market conditions using both statistical state classification and historical-analog reasoning. It generates, validates, promotes, and retires trading strategies autonomously through a research loop that runs while Mike sleeps. It reads news, financial filings, social sentiment, and structural macro data to find edges most retail traders cannot see. And it improves its own infrastructure over time, including drafting specifications and writing code under Mike's review.
+The firm trades a deliberately focused universe of stocks deeply rather than a broad universe shallowly. The launch Universe begins with a 50-name list and grows only when approved research theses surface tradable candidates worth adding. The firm adapts its active research lenses and strategy library to current market conditions using both statistical state classification and historical-analog reasoning. It generates, validates, promotes, and retires trading strategies autonomously through a research loop that runs while Mike sleeps. It reads news, financial filings, social sentiment, and structural macro data to find edges most retail traders cannot see. And it improves its own infrastructure over time, including drafting specifications and writing code under Mike's review.
 
 Shrap is not a trading bot. It is a firm — with departments, agents in defined roles, governance, and continuous learning — built at a scale that one person can architect and oversee.
 
@@ -43,9 +43,9 @@ The 4-month sprint (May 2026 – August 2026) ends when classes start. The succe
 - The system has audit trails sufficient to analyze every decision it has made
 
 **Target success (likely to achieve):**
-- The 50-name seed graph is in place with per-ticker profiles, and the universe is being maintained continuously from Infrastructure Mapper outputs rather than as a locked list
-- Tech Watcher, Infrastructure Mapper, and Bottleneck Scout are producing live, continuously-maintained infrastructure graphs around the promoted world-changers, with explicit kill criteria enforced at every funnel step
-- The two-layer regime classifier is operating as a sizing modifier consumed by the Risk Officer (statistical state + historical analog), not as a strategy-activation gate
+- The 50-name launch Universe is in place with per-ticker profiles, and the Universe Curator is maintaining a merged universe across approved research sources
+- The Research Department is operating multiple thesis frameworks in parallel, beginning with World-Changer + Bottleneck + Forced-Substitute and expanding only through Mike-approved ADRs
+- The two-layer regime classifier is operating as both a strategy-activation gate and a sizing input (statistical state + historical analog)
 - The Strategy Evaluator enforces rigorous overfitting controls (walk-forward, PBO, deflated Sharpe, purged cross-validation)
 - The Structural Analysis Department produces a continuous watch list
 - Multi-strategy regime adaptation produces measurably better risk-adjusted returns than any single static strategy on the same universe
@@ -90,76 +90,25 @@ Detailed architecture is documented in `02-architecture.md`. Per-agent specifica
 
 ## The trading thesis
 
-Shrap's edge, if any, comes from a three-step research funnel applied with
-discipline, not from any single layer in isolation:
+Shrap's edge, if any, comes from a specific combination of choices. The firm is not locked to one research thesis. It runs multiple research lenses in parallel, with the Regime Classifier helping decide which lenses and strategy classes are active in the current market environment.
 
-**1. World-Changer identification.** The Research Department continuously
-scans primary sources — 10-K / 10-Q / 8-K filings, arXiv preprints, USPTO
-patent filings, GTC / WWDC / Hot Chips / JPM Healthcare keynotes, hyperscaler
-capex disclosures, regulatory approvals — for companies and technologies with
-a credible path to changing how the general population lives, works, or
-consumes. The expected kill rate at this step is 80%+ of candidates.
-Survivorship bias is the dominant failure mode and is explicitly flagged on
-every promotion: Theranos, hydrogen-by-2025, the metaverse, and full
-autonomy-by-2020 all sounded credible. A world-changer thesis without an
-explicit kill criterion does not get promoted.
+**1. Focused launch Universe with controlled expansion.** Shrap starts from a 50-name launch Universe, chosen for depth of understanding rather than breadth. The list includes liquid ETFs, mega-cap tech and growth leaders, high-retail-interest names, defense contractors, liquid mid-caps, and a small crypto allocation. Each name has a maintained per-ticker profile capturing behavioral characteristics, news sensitivity, and historical patterns. The Universe Curator Agent maintains a merged universe across approved sources: the launch list, tradable candidates surfaced by world-changer infrastructure graphs, forced-proxy candidates, structural-analysis watch-list names, and future thesis frameworks approved by ADR.
 
-**2. Infrastructure graph mapping as the universe-derivation engine.** For
-each surviving world-changer, the Infrastructure Mapper builds and maintains
-the full dependency graph of suppliers, enablers, contractors, and downstream
-beneficiaries. The graph is the trading universe — derived continuously from
-the active world-changer set, not hand-curated up front. When a world-changer
-thesis is killed, its subgraph leaves the universe. When a new one is
-promoted, its subgraph enters. The Universe Curator Agent maintains the
-universe based on these graph diffs, applying liquidity and tradability
-filters, with Mike's approval on material changes.
+**2. Two-layer regime awareness.** The Regime Classifier operates at two layers. The statistical layer tracks volatility, trend, breadth, dispersion, and term structure to label current market state. The historical-analog layer uses LLM reasoning to identify which past regimes the current period most resembles — wartime, golden eras, stagflation, crisis recoveries, late-cycle melt-ups, and others — and uses those analogs to inform what kinds of strategies are likely to work. Strategies are tagged with `regime_fit` and `regime_kill` metadata. The Regime Router activates strategies appropriate to current regime and dormants ones that don't fit.
 
-**3. Bottleneck scouting for forced-substitute trades.** For each established
-world-changer, the Bottleneck Scout monitors each layer of the infrastructure
-graph for places where the current solution is hitting physical, economic,
-regulatory, or supply-chain limits. The trade is the forced substitute — the
-technology, vendor, or layer that necessarily replaces the saturating one.
-The trading formula is `world-changer × saturating layer = forced substitute
-= trade`. This is where the edge is densest for a part-time retail operator
-with primary-source discipline, because the saturation signal arrives in
-technical filings, supplier earnings calls, and engineering-conference talks
-before it arrives in price. The Cisco-1999 lesson is the reminder that being
-right about the world-changer and wrong about which layer captures the
-spend is itself a way to lose money; bottleneck detection identifies the
-layer.
+**3. Multiple research thesis frameworks.** The Research Department generates hypotheses through formal thesis frameworks. Research Thesis Framework #1 is World-Changer + Bottleneck + Forced-Substitute, as specified in ADR-0007 and scoped by ADR-0010. Research Thesis Framework #2 will be Forced-Proxy, to be specified in ADR-0011. Additional frameworks may be added by future ADRs. Each framework must define its mechanism, evidence sources, kill criteria, agent responsibilities, and downstream handoff to Hypothesis Generator / Strategy Evaluator.
 
-**4. Regime classification as sizing modifier.** The Regime Classifier
-(statistical state + historical analog, layers unchanged) is moved from
-strategy-activation gate to position-sizing modifier consumed by the Risk
-Officer. The classifier still labels what kind of market the firm is
-trading in, and historical analogs still inform what tends to work or
-break in that environment, but strategies are activated by infrastructure
-graph state and bottleneck events, not by regime label. Regime modulates
-how much size active hypotheses are allowed to take, not whether they run.
+**4. Regime-conditional strategy generation.** The Hypothesis Generator does not propose strategies in isolation. It proposes strategies grounded in current regime, specific universe members, active research-thesis outputs, and historical analogs. The output is testable, contextualized, and includes the conditions under which the strategy should be retired. This grounding dramatically reduces the LLM hallucination risk that plagues naive "ask an LLM for a trading strategy" approaches.
 
-**5. Rigorous overfitting controls and honest kill rates at every funnel
-step.** The Strategy Evaluator's controls — walk-forward validation,
-Probability of Backtest Overfitting, deflated Sharpe, combinatorial purged
-cross-validation, minimum 150–200 trade counts, realistic transaction costs,
-out-of-distribution testing — are preserved. The new requirement is that
-kill rates are tracked and published per funnel step: world-changer
-candidates rejected, graph nodes filtered out, bottleneck signals dropped,
-hypotheses killed at evaluation, paper strategies retired. The cumulative
-survival rate from raw candidate to live paper strategy is expected to be
-very low, and that is healthy. Promoting noise costs real money; killing
-real edge costs only the time to find it again.
+**5. Rigorous overfitting controls.** The Strategy Evaluator is built to be ruthless. Walk-forward validation only. Probability of Backtest Overfitting (PBO) testing. Deflated Sharpe Ratio. Combinatorial purged cross-validation. Minimum 150-200 trade counts before promotion is allowed. Realistic transaction costs modeled. Out-of-distribution testing across regimes the strategy was not fit on. The kill rate is expected to be 90%+ of generated hypotheses. Promoting noise costs real money; killing real edge costs only the time to find it again.
 
-> This thesis supersedes the v0.1 draft (which framed the edge as a curated
-> 50-name universe plus a two-layer regime classifier driving regime-
-> conditional strategy activation). The reasoning behind the change — why
-> the curated universe pre-locks the alpha source, why regime classification
-> is reactive rather than predictive, and why the structural-research lane
-> is where the asymmetry favors a small operator — is documented in
-> ADR-0007. The Structural Analysis Department's responsibilities are
-> absorbed into the Research funnel under that ADR; the Trap Detection,
-> Bayesian Updater, and honest-position-sizing components from the prior
-> framing are preserved and now feed the Risk Officer alongside the regime
-> sizing modifier.
+**6. Trap detection.** Mike's existing liquidation sweep detector catches the *execution* of institutional fade-the-retail patterns. The expanded Trap Detection subsystem catches the *setup* — identifying which tickers in the high-retail-interest subset of the universe are primed for a trap before it fires. Combined with the existing sweep detector, this creates high-confidence confluence on Shrap's signature trade type.
+
+**7. Structural Analysis as patient counterweight.** Most of Shrap's strategies trade on technical and short-term-catalyst signals — fast loops, many trades, modest per-trade edge. The Structural Analysis Department operates on a much slower clock, reading 10-Ks, 10-Qs, 8-Ks, debt maturity calendars, supply chain disclosures, insider behavior, credit markets, and litigation activity for the universe. It produces a continuous watch list of structural concerns and opportunities. Outputs feed the Decision Maker as biases and sizing modifiers — not entry triggers — making the system willing to fade a structurally-stressed name and willing to size up on a structurally-strong one. This is the analytical lens Burry, Eisman, and others used before 2008. The base rate for actionable findings is low, but the asymmetric payoff per finding is high.
+
+**8. Honest position sizing.** The Bayesian Updater Agent maintains posterior probabilities for each strategy's edge based on accumulated evidence. The Risk Officer applies Kelly-fractional sizing (typically 25-50% of full Kelly) tuned by recent performance and current regime fit. Concurrent positions are sized accounting for correlation, not independently.
+
+> ADR-0007 remains in effect as Research Thesis Framework #1, not as Shrap's exclusive or primary trading thesis. ADR-0010 corrects the scope: Shrap operates multiple thesis frameworks in parallel, regime-gated by the Regime Classifier, with Structural Analysis retained as a separate department.
 
 ## What Shrap is not
 
