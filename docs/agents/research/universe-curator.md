@@ -12,31 +12,34 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 
 ## Purpose
 
-Under the new Research thesis (ADR-0007), the firm's tradable universe is
-**derived from active Infrastructure Mapper graphs**, not hand-curated. The
-Universe Curator is the agent that turns Infra Mapper's proposed graph
-deltas into an actual, version-controlled active universe state — gated by
-Mike's approval policy and accompanied by per-ticker profile maintenance.
+Under ADR-0010, the firm's tradable universe is a **merged universe from
+multiple contributing research sources**, not a derived-only graph from
+Infrastructure Mapper. The Universe Curator is the agent that turns approved
+universe proposals into an actual, version-controlled active universe state —
+gated by Mike's approval policy and accompanied by per-ticker profile
+maintenance.
 
-This agent replaces the old "hand-curated list" Universe Curator. The
-behavioral change is fundamental: this version proposes nothing of its own.
-It consumes `universe.proposed-add` and `universe.proposed-remove` events
-from Infrastructure Mapper, applies the approval policy, stages or executes
-the change, and emits events the rest of the firm subscribes to.
+This agent maintains the launch Universe plus additions and removals proposed
+by approved research sources. Framework #1 Infrastructure Mapper graph deltas
+are one source. Future forced-proxy agents, Structural Analysis watch-list
+updates, and later ADR-approved thesis frameworks may also propose universe
+changes. Curator applies source-aware policy, stages or executes the change,
+and emits events the rest of the firm subscribes to.
 
-Why it exists separately from Infra Mapper: separation of concerns. Infra
-Mapper's job is to discover and update graph structure. The Universe
-Curator's job is to be the single source of truth for "what is Shrap
-allowed to trade right now," to enforce the approval policy, and to keep
-per-ticker profiles fresh. Conflating the two would mean every graph
-discovery edit touches trading state, which is exactly the failure mode
-Mike's approval policy is meant to prevent.
+Why it exists separately from contributing research sources: separation of
+concerns. Each research framework's job is to discover candidates under its
+own mechanism. The Universe Curator's job is to be the single source of truth
+for "what is Shrap allowed to trade right now," to enforce the approval
+policy, and to keep per-ticker profiles fresh. Conflating proposal generation
+with active-universe state would mean every research discovery edit touches
+trading state, which is exactly the failure mode Mike's approval policy is
+meant to prevent.
 
 What this agent cannot do, stated clearly:
 
-- It cannot evaluate whether a ticker *should* be on a graph — that is
-  Infra Mapper's job. Curator trusts the proposal payload and only checks
-  policy.
+- It cannot evaluate whether a ticker *should* be proposed by a thesis
+  framework — that is the proposing source's job. Curator validates payloads,
+  source authority, liquidity/tradability policy, and approval requirements.
 - It cannot decide a ticker has alpha — that is Hypothesis Generator +
   Strategy Evaluator.
 - It cannot auto-approve a removal under any circumstance. Removals always
@@ -55,13 +58,14 @@ What this agent cannot do, stated clearly:
 - **Event:** Subscribes to:
   - `research.infra.universe.proposed-add` from Infrastructure Mapper.
   - `research.infra.universe.proposed-remove` from Infrastructure Mapper.
+  - Future ADR-approved source streams such as forced-proxy or structural-analysis universe proposals.
   - `mike.universe.decision` (Mike's manual approve/reject for staged items).
 - **On-demand:** Mike-initiated force-add, force-remove, or
   force-mark-stale, each requiring Mike's identifier in the envelope.
 
 ## Cross-references
 
-**Depends on:** Infrastructure Mapper (only source of add/remove proposals),
+**Depends on:** approved universe-proposal sources (Infrastructure Mapper first, future sources by ADR),
 Mike (sole approver for low-confidence adds and any remove), per-ticker
 profile docs under `docs/universe/<ticker>.md`.
 **Depended on by:** Hypothesis Generator (filters proposals against
@@ -89,8 +93,7 @@ Department, §Universe lifecycle.
 ### Proposed-add handling
 
 1. **Validate payload.** Required fields present; `proposer_run_id` exists in
-   Infra Mapper's run log; confidence is a probability in [0, 1]; graph and
-   layer IDs are live. Reject malformed events with `universe.proposal.rejected`.
+   the proposing source's run log; confidence is a probability in [0, 1]; source-specific identifiers are live. Reject malformed events with `universe.proposal.rejected`.
 2. **Dedupe.** If the ticker is already in `universe.active` for the same
    `(graph_id, layer_id)`, drop as no-op. If it is active under a different
    graph/layer, record the additional membership and emit
@@ -216,8 +219,8 @@ output, not in the decision path.
 ## Deferred
 
 - Cross-asset universe (options, futures, crypto) — equities only for sprint.
-- Automatic profile refresh — refresh remains a Mike-directed Infra Mapper
-  job.
+- Automatic profile refresh — refresh remains a Mike-directed or source-directed
+  job, depending on which research framework owns the ticker rationale.
 - Ticker tiering / priority weights within the active set — Risk Officer
   handles sizing, Curator only tracks membership.
 - Any direct demotion of strategies — that authority stays with the
