@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyc
 *.so
 *.egg-info/
 .venv/
@@ -9,6 +10,8 @@ env/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+dist/
+build/
 
 # Environments and secrets
 .env

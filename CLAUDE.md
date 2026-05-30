@@ -5,7 +5,10 @@ This is **Shrap**, a self-developing multi-agent trading firm. The repo name is 
 **Read `docs/00-vision.md` first.** Everything in this project flows from that document. Do not propose changes that conflict with the vision without flagging the conflict explicitly.
 
 ## Current phase
-**Phase 0: Documentation — foundational set complete.** No code is being written yet. The foundational doc set is drafted and awaiting Mike's review pass. Do not write code unless explicitly asked.
+**Phase 0 → Phase 1 transition: foundational docs complete; substrate code landing.** The foundational doc set is drafted and awaiting Mike's review. First code now lives at `src/shrap/` (Python package `shrap`). Health Monitor is the first agent slated for implementation under `src/shrap/agents/operations/health_monitor/`.
+
+### Python project conventions
+Standard PEP 621 / hatchling layout, single `src/shrap/` package. Tooling: **ruff** (lint + format, line length 100, py312 target), **pytest** + **pytest-asyncio** (auto mode), **mypy --strict** scoped to `src/shrap/`, **pre-commit** wiring all three plus YAML/whitespace hygiene. Runtime deps: `redis`, `httpx`, `structlog`, `pydantic`, `python-ulid`. Boring beats clever — no exotic tooling. See `pyproject.toml` and `Makefile` (`make all` = install + lint + typecheck + test).
 
 ## Foundational doc set (all v0.1 drafts, awaiting Mike's review)
 1. `docs/00-vision.md` — DONE
