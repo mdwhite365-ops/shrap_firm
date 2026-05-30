@@ -256,6 +256,62 @@ A short list of principles that govern decisions across the project. These are n
 
 10. **Mike's time is the constraint.** Anything that costs Mike more than a few minutes of routine attention per day must justify itself. The system serves Mike, not the other way around.
 
+## Adaptation and pivoting
+
+Shrap is built to evolve, not to lock in a single approach. The firm's
+relationship to its own strategies and research frameworks is:
+
+**Strategies are killed when they don't work.** The Strategy Evaluator's
+overfitting controls are the front-end kill. Live performance against
+calibration expectations is the back-end kill. A strategy that promotes
+through evaluation and then underperforms its expected edge over a
+defined trade-count threshold is retired regardless of how it looked
+in backtest. Killing a real edge costs only the time to find it again;
+promoting noise costs real money.
+
+**Frameworks are pivoted when they don't deliver.** A research thesis
+framework — Framework #1 (World-Changer + Bottleneck + Forced-
+Substitute), Framework #2 (Forced-Proxy, planned), or any future
+framework — earns its place by producing tradable hypotheses that
+survive the Strategy Evaluator and generate positive expectancy in
+live paper trading. A framework that runs for a defined evaluation
+period (default: 6 months from formal launch) without producing
+promoted strategies, or whose promoted strategies systematically
+underperform their expected edge, is retired or restructured via ADR.
+Mike retains discretion to extend or shorten the evaluation period
+per framework based on the framework's specific nature.
+
+**The universe composition adapts.** The launch Universe is the
+starting point, not the locked roster. Names enter via approved
+research-thesis proposals subject to Mike's approval on material
+changes. Names leave when they fail liquidity or tradability filters,
+when their relevant thesis is killed, or when extended dormancy
+without trade signals suggests they no longer serve the firm. The
+Universe Curator Agent proposes adds and removes; Mike approves
+material changes.
+
+**Departments are not permanent.** The architectural decision to
+separate Research from Structural Analysis (reaffirmed by ADR-0010)
+could be revisited if experience shows a different structure works
+better. The same applies to all departmental scope decisions. The
+repo holds the current understanding; git history holds the path
+that led there. Re-organizing departments requires an ADR; it does
+not require apologizing for the prior structure.
+
+**The kill criterion for the entire firm.** Shrap exists to test
+specific theses about agentic systems and structural trading edges.
+If the calibration ledger shows after twelve months of forward-test
+that the firm has not produced edge above SPY on a risk-adjusted
+basis, Mike will revisit whether the project continues, pivots, or
+winds down. The 4-month sprint is the foundation phase, not the
+verdict. The 12-month decision point is the verdict.
+
+Adaptation is not the same as flailing. Each pivot — strategy kill,
+framework retirement, universe change, departmental reorganization,
+whole-firm decision — is documented in the calibration ledger or an
+ADR with reasoning attached. The system holds itself accountable for
+why it changed direction, not just for the fact that it did.
+
 ## Living document
 
 This vision will change. As the project unfolds, hypotheses will be tested, assumptions will prove wrong, and new opportunities will emerge. This document is updated to reflect what Shrap actually is, not just what it was originally imagined to be.
