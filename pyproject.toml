@@ -27,6 +27,10 @@ dev = [
     "mypy>=1.11",
     "pre-commit>=3.8",
 ]
+health-monitor = ["pydantic-settings>=2.4"]
+
+[project.scripts]
+shrap-health-monitor = "shrap.agents.operations.health_monitor.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shrap"]

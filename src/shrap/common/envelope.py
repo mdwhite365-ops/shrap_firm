@@ -18,7 +18,8 @@ MAX_INLINE_PAYLOAD_BYTES = 16 * 1024
 
 def must_use_ref(payload: dict[str, Any]) -> bool:
     """Return True if json-encoded payload exceeds the inline threshold."""
-    return len(json.dumps(payload, separators=(",", ":")).encode("utf-8")) > MAX_INLINE_PAYLOAD_BYTES
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return len(payload_bytes) > MAX_INLINE_PAYLOAD_BYTES
 
 
 class Envelope(BaseModel):
@@ -37,9 +38,13 @@ class Envelope(BaseModel):
         has_inline = self.payload is not None
         has_ref = self.payload_ref is not None
         if has_inline and has_ref:
-            raise ValueError("Envelope: exactly one of payload or payload_ref must be set (both set)")
+            raise ValueError(
+                "Envelope: exactly one of payload or payload_ref must be set (both set)"
+            )
         if not has_inline and not has_ref:
-            raise ValueError("Envelope: exactly one of payload or payload_ref must be set (neither set)")
+            raise ValueError(
+                "Envelope: exactly one of payload or payload_ref must be set (neither set)"
+            )
         return self
 
     @classmethod
@@ -70,7 +75,10 @@ class Envelope(BaseModel):
         )
 
     def to_redis_fields(self) -> dict[str, str]:
-        """Serialize for Redis XADD. Header keys prefixed 'h_'; payload either inline JSON or ref."""
+        """Serialize for Redis XADD.
+
+        Header keys are prefixed ``h_``; payload is either inline JSON or a ref.
+        """
         fields: dict[str, str] = {
             "h_event_id": self.event_id,
             "h_schema_version": self.schema_version,

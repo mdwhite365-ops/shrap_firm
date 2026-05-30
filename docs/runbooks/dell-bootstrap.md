@@ -361,3 +361,42 @@ Tail one service:               `docker compose logs -f <service>`
 Restart one service:            `docker compose restart <service>`
 Run a one-off command:          `docker compose exec <service> <cmd>`
 Update images per pinned tags:  `docker compose pull && docker compose up -d`
+
+---
+
+## 8. Health Monitor (first agent)
+
+The Health Monitor is the first agent that runs on top of this substrate. It polls
+Prometheus on a 30s cadence, publishes `ops.health-tick` / `ops.health-degraded` /
+`ops.health-recovered` envelopes on Redis Streams, and pages out via Discord
+(routine) and ntfy.sh (urgent, system-wide). Spec: `docs/agents/operations/health-monitor.md`.
+
+1. **Configure alert channels.** In `infra/.env`, set:
+   - `HEALTH_MONITOR_DISCORD_WEBHOOK_URL` to a Discord webhook URL for routine alerts.
+   - `HEALTH_MONITOR_NTFY_URL` to an ntfy topic URL (e.g. `http://ntfy:8080/shrap-urgent`) for urgent alerts.
+   Leaving either blank disables that channel; leaving both blank means alerts are logged only.
+
+2. **Build the image.** From `infra/`:
+   `docker compose build health-monitor`
+
+3. **Start the agent.** Substrate must already be up (`docker compose up -d`):
+   `docker compose up -d health-monitor`
+
+4. **Verify the first tick.** Tail the logs and look for a `health.tick` JSON
+   line within ~30 seconds:
+   `docker compose logs -f health-monitor`
+   You can also confirm the envelope landed on Redis:
+   `docker compose exec redis redis-cli XLEN ops.health-tick`
+
+5. **Smoke-test the alert path.** With the agent running and Discord webhook configured,
+   stop redis (`docker compose stop redis`) and wait ~2 ticks (~60s); a
+   "[shrap] DEGRADED - redis" embed should appear in Discord. Then restart redis
+   (`docker compose start redis`) and wait ~3 ticks (~90s); a "[shrap] RECOVERED - redis"
+   embed should follow.
+
+Open issues / known gaps:
+- The Tailscale check is a deliberate stub; it always reports `ok` with a `stub:true`
+  evidence flag until a tailscale exporter is wired into Prometheus.
+- Transition state is process-local; restarting the container resets counters.
+  Acceptable per the spec - a fresh `ops.health-startup` envelope is published on
+  boot and the next tick re-establishes baseline.

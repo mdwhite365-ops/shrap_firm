@@ -300,3 +300,28 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # Health Monitor - the first agent. No-LLM, polls Prometheus for
+  # substrate health, publishes ops.health-* events on Redis Streams,
+  # alerts via Discord (routine) / ntfy.sh (urgent). See
+  # docs/agents/operations/health-monitor.md.
+  # -------------------------------------------------------------------------
+  health-monitor:
+    build:
+      context: ../
+      dockerfile: infra/health-monitor.Dockerfile
+    container_name: shrap_health_monitor
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HEALTH_MONITOR_REDIS_URL: "redis://redis:6379/0"
+      HEALTH_MONITOR_PROM_URL: "http://prometheus:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    networks:
+      - shrap_net

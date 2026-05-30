@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 
@@ -22,8 +24,8 @@ class RedisStreamClient:
     async def xadd(self, stream: str, envelope: Envelope) -> str:
         """XADD an envelope; returns the Redis-generated stream ID."""
         fields = envelope.to_redis_fields()
-        stream_id: str = await self._redis.xadd(stream, fields)
-        return stream_id
+        stream_id = await self._redis.xadd(stream, cast(dict[Any, Any], fields))
+        return cast(str, stream_id)
 
     async def _ensure_group(self, stream: str, group: str) -> None:
         key = (stream, group)
@@ -56,7 +58,7 @@ class RedisStreamClient:
         results: list[tuple[str, Envelope]] = []
         if not resp:
             return results
-        for _stream_name, entries in resp:
+        for _stream_name, entries in cast(list[tuple[str, list[tuple[str, dict[str, str]]]]], resp):
             for stream_id, fields in entries:
                 results.append((stream_id, Envelope.from_redis_fields(fields)))
         return results
