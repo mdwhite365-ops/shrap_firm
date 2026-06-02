@@ -28,7 +28,7 @@ dev = [
     "pre-commit>=3.8",
 ]
 health-monitor = ["pydantic-settings>=2.4"]
-audit-logger = ["pydantic-settings>=2.4", "psycopg[binary,pool]>=3.2"]
+audit-logger = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 
 [project.scripts]
 shrap-health-monitor = "shrap.agents.operations.health_monitor.__main__:main"

@@ -1,9 +1,4 @@
-"""Audit event record mapping.
-
-The Audit Logger treats Redis Streams as the delivery mechanism and PostgreSQL as
-append-only durable history. This module is deliberately small and deterministic:
-validate the envelope upstream, then preserve it without interpretation.
-"""
+"""Audit event record mapping."""
 
 from __future__ import annotations
 
@@ -18,14 +13,14 @@ from shrap.common.envelope import Envelope
 class AuditRecord:
     """One append-only row for ``ops.audit_events``."""
 
-    stream_name: str
-    redis_stream_id: str
     event_id: str
     schema_version: str
-    produced_at: datetime
-    produced_by: str
-    correlation_id: str | None
+    source_agent: str
+    event_topic: str
     payload_json: str | None
+    occurred_at: datetime
+    redis_stream_id: str
+    correlation_id: str | None
     payload_ref: str | None
 
 
@@ -37,13 +32,13 @@ def record_from_envelope(stream_name: str, redis_stream_id: str, envelope: Envel
         payload_json = json.dumps(envelope.payload, separators=(",", ":"), sort_keys=True)
 
     return AuditRecord(
-        stream_name=stream_name,
-        redis_stream_id=redis_stream_id,
         event_id=envelope.event_id,
         schema_version=envelope.schema_version,
-        produced_at=envelope.produced_at,
-        produced_by=envelope.produced_by,
-        correlation_id=envelope.correlation_id,
+        source_agent=envelope.produced_by,
+        event_topic=stream_name,
         payload_json=payload_json,
+        occurred_at=envelope.produced_at,
+        redis_stream_id=redis_stream_id,
+        correlation_id=envelope.correlation_id,
         payload_ref=envelope.payload_ref,
     )

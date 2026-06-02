@@ -340,6 +340,7 @@ services:
       - .env
     environment:
       AUDIT_LOGGER_REDIS_URL: "redis://redis:6379/0"
+      AUDIT_LOGGER_STREAM_PATTERN: "*"
       AUDIT_LOGGER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
     depends_on:
       redis:

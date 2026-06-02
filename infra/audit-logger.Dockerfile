@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir /wheels/*.whl \
         "structlog>=24.1" \
         "pydantic>=2.7" \
         "pydantic-settings>=2.4" \
-        "psycopg[binary,pool]>=3.2" \
+        "asyncpg>=0.29" \
     && rm -rf /wheels
 
 USER shrap
