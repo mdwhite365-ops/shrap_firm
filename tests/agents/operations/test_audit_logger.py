@@ -22,12 +22,12 @@ def test_audit_record_preserves_stream_identity_and_envelope_fields() -> None:
 
     record = record_from_envelope("ops.health-tick", "1780125772540-0", env)
 
-    assert record.stream_name == "ops.health-tick"
+    assert record.event_topic == "ops.health-tick"
     assert record.redis_stream_id == "1780125772540-0"
     assert record.event_id == "01KSVW00000000000000000000"
     assert record.schema_version == "1.0.0"
-    assert record.produced_at == datetime(2026, 5, 30, 7, 30, tzinfo=UTC)
-    assert record.produced_by == "operations/health-monitor"
+    assert record.occurred_at == datetime(2026, 5, 30, 7, 30, tzinfo=UTC)
+    assert record.source_agent == "operations/health-monitor"
     assert record.correlation_id == "01KSVW11111111111111111111"
     assert json.loads(record.payload_json or "{}") == {"summary": {"ok": 1, "degraded": 0}}
     assert record.payload_ref is None
@@ -51,15 +51,16 @@ def test_audit_record_preserves_payload_ref_without_inlining_payload() -> None:
 
 
 def test_insert_sql_is_append_only_and_idempotent_on_event_id() -> None:
-    from shrap.agents.operations.audit_logger.postgres import INSERT_AUDIT_EVENT_SQL
+    from shrap.agents.operations.audit_logger.db import INSERT_AUDIT_EVENT_SQL
 
     assert "INSERT INTO ops.audit_events" in INSERT_AUDIT_EVENT_SQL
     assert "ON CONFLICT (event_id) DO NOTHING" in INSERT_AUDIT_EVENT_SQL
     assert "UPDATE" not in INSERT_AUDIT_EVENT_SQL.upper()
+    assert "$1" in INSERT_AUDIT_EVENT_SQL
 
 
 @pytest.mark.asyncio
-async def test_poll_once_reads_stream_entries_and_advances_offsets() -> None:
+async def test_poll_once_discovers_matching_streams_and_advances_offsets() -> None:
     from shrap.agents.operations.audit_logger.agent import poll_once
 
     env = Envelope(
@@ -71,6 +72,15 @@ async def test_poll_once_reads_stream_entries_and_advances_offsets() -> None:
     )
 
     class FakeRedis:
+        async def scan_iter(self, match: str) -> object:
+            assert match == "ops.*"
+            for stream in ["ops.health-tick"]:
+                yield stream
+
+        async def type(self, key: str) -> str:
+            assert key == "ops.health-tick"
+            return "stream"
+
         async def xread(
             self, streams: dict[str, str], count: int, block: int
         ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
@@ -87,9 +97,17 @@ async def test_poll_once_reads_stream_entries_and_advances_offsets() -> None:
             self.records.append(record)
 
     sink = FakeSink()
-    last_ids = {"ops.health-tick": "0-0"}
+    last_ids: dict[str, str] = {}
 
-    written = await poll_once(FakeRedis(), sink, last_ids, count=10, block_ms=1)  # type: ignore[arg-type]
+    written = await poll_once(
+        FakeRedis(),  # type: ignore[arg-type]
+        sink,  # type: ignore[arg-type]
+        last_ids,
+        stream_pattern="ops.*",
+        start_id="0-0",
+        count=10,
+        block_ms=1,
+    )
 
     assert written == 1
     assert last_ids == {"ops.health-tick": "1780125900000-0"}
@@ -97,26 +115,23 @@ async def test_poll_once_reads_stream_entries_and_advances_offsets() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sink_inserts_record_with_expected_parameters() -> None:
-    from shrap.agents.operations.audit_logger.postgres import PostgresAuditSink
+async def test_sink_inserts_record_with_expected_asyncpg_parameters() -> None:
+    from shrap.agents.operations.audit_logger.db import PostgresAuditSink
     from shrap.agents.operations.audit_logger.records import AuditRecord
-
-    class FakeCursor:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, tuple[object, ...] | None]] = []
-
-        async def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
-            self.calls.append((sql, params))
 
     class FakeConnection:
         def __init__(self) -> None:
-            self.cursor = FakeCursor()
+            self.calls: list[tuple[str, tuple[object, ...]]] = []
 
-        async def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
-            await self.cursor.execute(sql, params)
+        async def execute(self, sql: str, *args: object) -> None:
+            self.calls.append((sql, args))
+
+    class FakeAcquire:
+        def __init__(self, conn: FakeConnection) -> None:
+            self.conn = conn
 
         async def __aenter__(self) -> FakeConnection:
-            return self
+            return self.conn
 
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
             return None
@@ -125,18 +140,18 @@ async def test_sink_inserts_record_with_expected_parameters() -> None:
         def __init__(self) -> None:
             self.conn = FakeConnection()
 
-        def connection(self) -> FakeConnection:
-            return self.conn
+        def acquire(self) -> FakeAcquire:
+            return FakeAcquire(self.conn)
 
     record = AuditRecord(
-        stream_name="ops.health-tick",
-        redis_stream_id="1780125772540-0",
         event_id="01KSVW00000000000000000000",
         schema_version="1.0.0",
-        produced_at=datetime(2026, 5, 30, 7, 30, tzinfo=UTC),
-        produced_by="operations/health-monitor",
-        correlation_id=None,
+        source_agent="operations/health-monitor",
+        event_topic="ops.health-tick",
         payload_json='{"ok":true}',
+        occurred_at=datetime(2026, 5, 30, 7, 30, tzinfo=UTC),
+        redis_stream_id="1780125772540-0",
+        correlation_id=None,
         payload_ref=None,
     )
     pool = FakePool()
@@ -144,17 +159,17 @@ async def test_sink_inserts_record_with_expected_parameters() -> None:
 
     await sink.insert(record)
 
-    assert len(pool.conn.cursor.calls) == 1
-    sql, params = pool.conn.cursor.calls[0]
+    assert len(pool.conn.calls) == 1
+    sql, params = pool.conn.calls[0]
     assert "INSERT INTO ops.audit_events" in sql
     assert params == (
-        "ops.health-tick",
-        "1780125772540-0",
         "01KSVW00000000000000000000",
         "1.0.0",
-        datetime(2026, 5, 30, 7, 30, tzinfo=UTC),
         "operations/health-monitor",
-        None,
+        "ops.health-tick",
         '{"ok":true}',
+        datetime(2026, 5, 30, 7, 30, tzinfo=UTC),
+        "1780125772540-0",
+        None,
         None,
     )

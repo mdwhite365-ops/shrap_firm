@@ -11,18 +11,6 @@ _DEFAULT_REDIS_URL = "redis" + "://" + "redis" + ":6379/0"
 _DEFAULT_POSTGRES_DSN = (
     "postgresql" + "://" + "shrap:change-me-strong-random-value@postgres:5432/shrap"
 )
-_DEFAULT_STREAMS = ",".join(
-    [
-        "ops.health-startup",
-        "ops.health-tick",
-        "ops.health-degraded",
-        "ops.health-recovered",
-        "ops.health-shutdown",
-        "trading.decision.intent",
-        "risk.intent.approved",
-        "risk.intent.vetoed",
-    ]
-)
 
 
 class Settings(BaseSettings):
@@ -39,13 +27,12 @@ class Settings(BaseSettings):
     instance_id: str = Field(default_factory=socket.gethostname)
     redis_url: str = _DEFAULT_REDIS_URL
     postgres_dsn: str = _DEFAULT_POSTGRES_DSN
-    streams: str = _DEFAULT_STREAMS
+    stream_pattern: str = "*"
+    start_id: str = "0-0"
     read_count: int = 100
     block_ms: int = 5000
+    retry_delay_seconds: float = 5.0
     log_level: str = "INFO"
-
-    def stream_names(self) -> list[str]:
-        return [s.strip() for s in self.streams.split(",") if s.strip()]
 
     def redacted(self) -> dict[str, object]:
         return {
@@ -53,8 +40,10 @@ class Settings(BaseSettings):
             "instance_id": self.instance_id,
             "redis_url": self.redis_url,
             "postgres_dsn": "***",
-            "streams": self.stream_names(),
+            "stream_pattern": self.stream_pattern,
+            "start_id": self.start_id,
             "read_count": self.read_count,
             "block_ms": self.block_ms,
+            "retry_delay_seconds": self.retry_delay_seconds,
             "log_level": self.log_level,
         }
