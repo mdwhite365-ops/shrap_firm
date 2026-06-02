@@ -122,6 +122,18 @@ Every event carries the ADR-0006 envelope. The `trading.decisions` table is the
 forensic substrate; combined with the strategy signal log and the regime history, any
 intent can be fully reconstructed.
 
+**Field availability in Card 2 stub:**
+
+- Required at full implementation, placeholder in stub:
+  `strategy_ids` (will be empty array), `regime_label` (will be
+  "unknown"), `structural_bias` (will be "neutral"), `intel_refs`
+  (will be empty array), `confluence_score` (will be 0.0)
+- Required and meaningful in stub: `ticker`, `side`, `size_hint`,
+  `urgency`, `justification_text`, `expiry`, `mode=paper`
+- The envelope shape is stable as of Card 2. Cards 3-5 may rely on
+  field presence; they cannot rely on meaningful values for
+  placeholder fields.
+
 ## LangGraph structure
 
 **Nodes:**
@@ -160,6 +172,14 @@ intent can be fully reconstructed.
 
 ## Sprint scope
 
+- Month 1 (Card 2): Wire-only stub. Subscribes to
+  `trading.strategy.signal`, applies placeholder pass-through rule
+  (e.g. confidence > 0.7), publishes `trading.decision.intent` with
+  full envelope schema (placeholders allowed for fields whose
+  producers don't exist yet). No real confluence policy. No LLM
+  synthesis. No EXTREME-block (depends on Intel agents not yet built).
+  Sole purpose: prove the signal → decision wire, validate the intent
+  envelope shape that Cards 3-5 will consume.
 - Month 2: Deterministic confluence policy + EXTREME block + paper-only emit. No LLM
   synthesis yet.
 - Month 3: LLM synthesis for marginals with full audit. Structural bias integration.
