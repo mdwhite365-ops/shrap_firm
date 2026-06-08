@@ -79,6 +79,7 @@ def build_stub_intent(
     confidence = _confidence(signal)
     urgency = str(signal.get("urgency", DEFAULT_URGENCY)).strip() or DEFAULT_URGENCY
     expiry = str(signal.get("expiry", DEFAULT_EXPIRY)).strip() or DEFAULT_EXPIRY
+    mode = str(signal.get("mode", "paper")).strip() or "paper"
 
     return {
         "ticker": ticker,
@@ -92,7 +93,7 @@ def build_stub_intent(
             "No real confluence policy, LLM synthesis, or EXTREME-block applied."
         ),
         "expiry": expiry,
-        "mode": "paper",
+        "mode": mode,
         "strategy_ids": [],
         "regime_label": "unknown",
         "structural_bias": "neutral",

@@ -29,3 +29,37 @@ replay idempotent on `event_id`.
 **Notes for Month 2:** Card scope was right-sized. Phase A discipline (one card,
 manual review, manual merge) produced clean output. No friction in the review
 itself.
+
+## Card 3 — Pre-Trade Checker risk-gate wiring
+
+**Scope:** Implement the Risk and Compliance Pre-Trade Checker as the Card 3
+message-bus wrapper around the existing pure-function `PreTradeChecker`. The
+agent consumes `trading.decision.intent`, invokes the deterministic risk gate,
+and publishes `risk.intent.approved` or `risk.intent.vetoed` with correlation
+back to the source intent. Include the agent spec, unit tests for approval,
+veto, idempotent replay, graceful shutdown, and an integration test proving the
+Card 2 signal-to-intent output flows through risk.
+
+**Outcome:** Card 3 implemented on branch `phase1/card-03-risk-gate-wiring`.
+The risk gate remains `no-llm`, stateless for Month 1, and preserves the
+original intent payload while publishing scaled approved quantity or veto reason.
+
+**Review time:** Not separately tracked in-session.
+
+**Drift caught:** Card 2 was not actually merged into `origin/main` when this
+card began, despite the handoff context saying it was merged. This branch was
+stacked on the existing Card 2 branch so Card 3 could consume the required
+Decision Maker stub.
+
+**Hermes performance:** Followed the requested option A architecture: separate
+long-running risk agent process using Redis Streams, not synchronous Decision
+Maker coupling.
+
+**Notes:** The Card 3 integration test required the Card 2 stub to preserve an
+optional upstream `mode` field so the message-bus path can prove the non-paper
+veto case end-to-end. Default behavior remains `mode = paper`.
+
+**Notes for Month 2:** Replace the stub policy with real Risk Officer state:
+position/exposure checks, kill switches, correlation caps, and persistent risk
+decision tables. Keep real-money blocked until a post-sprint ADR and Mike's
+explicit approval.
