@@ -57,8 +57,30 @@ def signal_payload(**overrides: object) -> dict[str, Any]:
     return payload
 
 
+def decision_intent_payload(**overrides: object) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ticker": "AAPL",
+        "side": "buy",
+        "size_hint": 1,
+        "quantity": 1,
+        "urgency": "normal",
+        "justification_text": "test decision intent",
+        "expiry": "2026-06-08T21:00:00Z",
+        "mode": "paper",
+        "strategy_ids": [],
+        "regime_label": "unknown",
+        "structural_bias": "neutral",
+        "intel_refs": [],
+        "confluence_score": 0.0,
+        "source": "test-fixture",
+        "stub_threshold": 0.7,
+    }
+    payload.update(overrides)
+    return payload
+
+
 @pytest.mark.asyncio
-async def test_signal_to_risk_path_publishes_approved_event_with_traceable_chain() -> None:
+async def test_signal_to_approved_intent() -> None:
     from shrap.events import Envelope
     from shrap.risk_compliance.pre_trade_checker_agent import poll_once as risk_poll_once
     from shrap.trading_floor.decision_maker_stub import (
@@ -100,22 +122,20 @@ async def test_signal_to_risk_path_publishes_approved_event_with_traceable_chain
 
 
 @pytest.mark.asyncio
-async def test_signal_to_risk_path_can_veto_non_paper_intent() -> None:
+async def test_signal_to_vetoed_intent() -> None:
     from shrap.events import Envelope
     from shrap.risk_compliance.pre_trade import REAL_MONEY_FORBIDDEN_REASON
     from shrap.risk_compliance.pre_trade_checker_agent import poll_once as risk_poll_once
-    from shrap.trading_floor.decision_maker_stub import STREAM_STRATEGY_SIGNAL, DecisionMakerStub
+    from shrap.trading_floor.decision_maker_stub import STREAM_DECISION_INTENT
 
     redis = FakeRedis()
-    await EventPublisher(redis).publish(
-        stream=STREAM_STRATEGY_SIGNAL,
-        produced_by="strategy/test",
+    intent = await EventPublisher(redis).publish(
+        stream=STREAM_DECISION_INTENT,
+        produced_by="trading-floor/decision-maker-card-2-stub",
         schema_version="1.0.0",
-        payload=signal_payload(mode="live"),
+        payload=decision_intent_payload(mode="live"),
+        correlation_id="01KTESTSIGNAL0000000000000",
     )
-
-    decision_result = await DecisionMakerStub(redis).process_once(last_id="0-0")  # type: ignore[arg-type]
-    assert decision_result is not None
 
     processed = await risk_poll_once(
         redis,  # type: ignore[arg-type]
@@ -129,5 +149,7 @@ async def test_signal_to_risk_path_can_veto_non_paper_intent() -> None:
     assert processed == 1
     assert redis.calls[-1][0] == "risk.intent.vetoed"
     risk_envelope = Envelope.from_redis_fields(redis.calls[-1][1])
+    assert risk_envelope.correlation_id == intent.envelope.event_id
     assert risk_envelope.payload is not None
     assert risk_envelope.payload["reason"] == REAL_MONEY_FORBIDDEN_REASON
+    assert risk_envelope.payload["intent_payload"]["mode"] == "live"
