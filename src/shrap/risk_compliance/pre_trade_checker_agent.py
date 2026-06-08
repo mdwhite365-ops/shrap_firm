@@ -1,4 +1,9 @@
-"""Event-loop wrapper for the deterministic pre-trade checker."""
+"""Event-loop wrapper for the deterministic pre-trade checker.
+
+Month 1 deliberately starts from ``0-0`` so the risk gate replays queued
+``trading.decision.intent`` events after startup/recovery. Consumer groups with
+explicit XACKs are the post-sprint upgrade.
+"""
 
 from __future__ import annotations
 
@@ -95,11 +100,16 @@ async def poll_once(
 
     last_ids.setdefault(STREAM_DECISION_INTENT, start_id)
     subscriber = EventSubscriber(redis)
-    events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+    try:
+        events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+    except Exception:
+        log.exception("pre_trade_checker.read_failed", streams=dict(last_ids))
+        return 0
     processed = 0
     for event in events:
         try:
             result = await process_intent_event(redis, event, policy)
+            last_ids[event.stream] = event.redis_stream_id
             processed += 1
             log.info(
                 "pre_trade_checker.decision_published",
@@ -114,8 +124,7 @@ async def poll_once(
                 redis_stream_id=event.redis_stream_id,
                 intent_event_id=event.envelope.event_id,
             )
-        finally:
-            last_ids[event.stream] = event.redis_stream_id
+            break
     return processed
 
 
@@ -123,12 +132,17 @@ async def run_loop(
     redis: RedisStreamClient,
     policy: RiskPolicy,
     stop: asyncio.Event,
-    start_id: str = "$",
+    start_id: str = "0-0",
     count: int = 100,
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
 ) -> None:
-    """Run the pre-trade checker loop until ``stop`` is set."""
+    """Run the pre-trade checker loop until ``stop`` is set.
+
+    The Month 1 default ``start_id='0-0'`` intentionally replays queued
+    intents on startup; Redis consumer groups with explicit acknowledgments are
+    deferred to a future card.
+    """
 
     last_ids: dict[str, str] = {}
     while not stop.is_set():
@@ -155,7 +169,7 @@ async def run(
     policy: RiskPolicy,
     service_name: str = "risk/pre-trade-checker",
     log_level: str = "INFO",
-    start_id: str = "$",
+    start_id: str = "0-0",
     count: int = 100,
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,

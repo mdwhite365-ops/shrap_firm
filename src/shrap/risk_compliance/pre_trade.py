@@ -46,7 +46,6 @@ class PreTradeDecision:
             "requested_quantity": self.requested_quantity,
             "approved_quantity": self.approved_quantity,
             "reasons": self.reasons,
-            "mode": "paper",
         }
 
 
@@ -56,9 +55,35 @@ class PreTradeChecker:
     def __init__(self, policy: RiskPolicy) -> None:
         self._policy = policy
 
+    @staticmethod
+    def _parse_requested_quantity(raw_quantity: Any) -> tuple[int, str | None]:
+        """Parse quantity strictly; fractional values are vetoed, not rounded.
+
+        The risk gate should be conservative. A fractional share/order quantity
+        is rejected as malformed in this Month 1 stub instead of being silently
+        floored or rounded.
+        """
+
+        if isinstance(raw_quantity, float) and not raw_quantity.is_integer():
+            return 0, f"quantity is not a parseable integer: got {raw_quantity!r}"
+        try:
+            return int(raw_quantity), None
+        except (TypeError, ValueError):
+            return 0, f"quantity is not a parseable integer: got {raw_quantity!r}"
+
     def check(self, intent: dict[str, Any]) -> PreTradeDecision:
         ticker = str(intent.get("ticker", "")).upper()
-        requested_quantity = int(intent.get("quantity", 0))
+        requested_quantity, quantity_error = self._parse_requested_quantity(
+            intent.get("quantity", 0)
+        )
+        if quantity_error is not None:
+            return PreTradeDecision(
+                approved=False,
+                reason_code="INVALID_QUANTITY",
+                ticker=ticker,
+                requested_quantity=requested_quantity,
+                reasons=[quantity_error],
+            )
 
         if intent.get("mode") != "paper":
             return PreTradeDecision(
