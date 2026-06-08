@@ -9,9 +9,23 @@ the shared event library, and writes append-only audit rows to PostgreSQL
 Dockerfile, optional dependency wiring, and unit coverage for mapping, SQL
 idempotency, sink parameter order, and polling offset advancement.
 
-**Outcome:** PR opened, awaiting review.
+**Outcome:** PR #1 merged 2026-06-01. 354 lines Audit Logger implementation,
+175 lines tests, 134 lines docs. All quality gates green. One in-scope
+reconciliation handled (`psycopg` → `asyncpg`).
+
+**Review time:** Not separately tracked in-session.
+
+**Drift caught:** None — Hermes flagged the `psycopg` reconciliation in its own
+report.
+
+**Hermes performance:** Clean execution within scope. Real-world auth blocker
+surfaced and reported honestly.
 
 **Notes:** Existing main already contained an early Audit Logger implementation,
-but it used `psycopg` and fixed stream names. This card reconciles the code with
+but it used `psycopg` and fixed stream names. This card reconciled the code with
 the requested asyncpg-based shape and all-stream discovery pattern while keeping
 replay idempotent on `event_id`.
+
+**Notes for Month 2:** Card scope was right-sized. Phase A discipline (one card,
+manual review, manual merge) produced clean output. No friction in the review
+itself.
