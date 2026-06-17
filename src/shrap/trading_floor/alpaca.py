@@ -111,3 +111,17 @@ class AlpacaPaperClient:
         )
         response.raise_for_status()
         return response.json()
+
+    async def get_order(
+        self,
+        http_client: AsyncHttpClient,
+        order_id: str,
+    ) -> dict[str, Any]:
+        """Fetch one Alpaca paper order by broker order ID."""
+
+        response = await http_client.get(
+            f"{self._api_base()}/orders/{order_id}",
+            headers=self.auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
