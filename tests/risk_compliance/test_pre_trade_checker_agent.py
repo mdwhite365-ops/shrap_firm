@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from shrap.events import EventPublisher
+from shrap.events import EventPublisher, PublishedEvent
 from shrap.risk_compliance.pre_trade import RiskPolicy
 
 
@@ -45,7 +45,7 @@ class FakeRedis:
         return redis_id > last_id
 
 
-async def publish_intent(redis: FakeRedis, payload: dict[str, Any]) -> object:
+async def publish_intent(redis: FakeRedis, payload: dict[str, Any]) -> PublishedEvent:
     return await EventPublisher(redis).publish(
         stream="trading.decision.intent",
         produced_by="trading-floor/decision-maker-card-2-stub",
@@ -196,6 +196,32 @@ async def test_reprocessing_same_intent_event_emits_same_decision_payload() -> N
     second_payload = Envelope.from_redis_fields(redis.calls[-1][1]).payload
 
     assert first_payload == second_payload
+
+
+@pytest.mark.asyncio
+async def test_process_intent_event_preserves_original_intent_payload() -> None:
+    from shrap.events import Envelope
+    from shrap.risk_compliance.pre_trade_checker_agent import process_intent_event
+
+    redis = FakeRedis()
+    intent = await publish_intent(redis, paper_intent(quantity=3, size_hint=3))
+    event_fields = redis.calls[0][1]
+    received = __import__("shrap.events", fromlist=["ReceivedEvent"]).ReceivedEvent(
+        stream="trading.decision.intent",
+        redis_stream_id="1780128100001-0",
+        envelope=Envelope.from_redis_fields(event_fields),
+    )
+
+    published = await process_intent_event(
+        redis,  # type: ignore[arg-type]
+        received,
+        RiskPolicy(allowed_universe={"AAPL"}, max_quantity_per_order=2),
+    )
+
+    assert published.envelope.correlation_id == intent.envelope.event_id
+    assert published.envelope.payload is not None
+    assert published.envelope.payload["intent_payload"]["quantity"] == 3
+    assert published.envelope.payload["approved_intent_payload"]["quantity"] == 2
 
 
 @pytest.mark.asyncio
