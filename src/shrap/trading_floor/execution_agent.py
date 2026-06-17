@@ -23,6 +23,8 @@ log = structlog.get_logger(__name__)
 
 STREAM_RISK_APPROVED = "risk.intent.approved"
 STREAM_EXECUTION_ORDER_SUBMITTED = "execution.order.submitted"
+STREAM_EXECUTION_ORDER_STATUS_UPDATED = "execution.order.status-updated"
+STREAM_EXECUTION_ORDER_FILLED = "execution.order.filled"
 PRODUCED_BY = "trading-floor/execution-agent"
 SCHEMA_VERSION = "1.0.0"
 
@@ -41,6 +43,8 @@ class RedisStreamClient(Protocol):
 class PaperBroker(Protocol):
     async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]: ...
 
+    async def get_order(self, order_id: str) -> dict[str, Any]: ...
+
 
 class AlpacaPaperBroker:
     """Adapter from Execution Agent's broker protocol to Alpaca paper HTTP."""
@@ -51,6 +55,9 @@ class AlpacaPaperBroker:
 
     async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
         return await self._client.submit_order(self._http_client, order)
+
+    async def get_order(self, order_id: str) -> dict[str, Any]:
+        return await self._client.get_order(self._http_client, order_id)
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
@@ -117,6 +124,66 @@ def build_order_submitted_payload(
     }
 
 
+def build_order_status_payload(
+    event: ReceivedEvent,
+    broker_response: dict[str, Any],
+) -> dict[str, Any]:
+    """Build an execution status/fill payload for one submitted order."""
+
+    submitted_payload = event.envelope.payload
+    if submitted_payload is None:
+        raise ValueError("execution.order.submitted must carry an inline payload")
+    broker_order_id = str(submitted_payload.get("broker_order_id", "")).strip()
+    if not broker_order_id:
+        raise ValueError("execution.order.submitted must include broker_order_id")
+
+    return {
+        "submitted_event_id": event.envelope.event_id,
+        "submitted_stream": event.stream,
+        "submitted_redis_stream_id": event.redis_stream_id,
+        "broker": submitted_payload.get("broker", "alpaca-paper"),
+        "broker_order_id": broker_order_id,
+        "status": broker_response.get("status"),
+        "filled_qty": broker_response.get("filled_qty"),
+        "filled_avg_price": broker_response.get("filled_avg_price"),
+        "filled_at": broker_response.get("filled_at"),
+        "submitted_payload": submitted_payload,
+        "broker_response": broker_response,
+    }
+
+
+def _order_status_stream(status: object) -> str:
+    if str(status).lower() == "filled":
+        return STREAM_EXECUTION_ORDER_FILLED
+    return STREAM_EXECUTION_ORDER_STATUS_UPDATED
+
+
+async def process_order_status_event(
+    redis: RedisStreamClient,
+    broker: PaperBroker,
+    event: ReceivedEvent,
+    produced_by: str = PRODUCED_BY,
+) -> PublishedEvent:
+    """Fetch broker order status and publish status/fill event."""
+
+    submitted_payload = event.envelope.payload
+    if submitted_payload is None:
+        raise ValueError("execution.order.submitted must carry an inline payload")
+    broker_order_id = str(submitted_payload.get("broker_order_id", "")).strip()
+    if not broker_order_id:
+        raise ValueError("execution.order.submitted must include broker_order_id")
+
+    broker_response = await broker.get_order(broker_order_id)
+    payload = build_order_status_payload(event, broker_response)
+    return await EventPublisher(redis).publish(
+        stream=_order_status_stream(payload["status"]),
+        produced_by=produced_by,
+        schema_version=SCHEMA_VERSION,
+        payload=payload,
+        correlation_id=event.envelope.event_id,
+    )
+
+
 async def process_risk_event(
     redis: RedisStreamClient,
     broker: PaperBroker,
@@ -178,6 +245,47 @@ async def poll_once(
     return processed
 
 
+async def poll_order_status_once(
+    redis: RedisStreamClient,
+    broker: PaperBroker,
+    last_ids: dict[str, str],
+    start_id: str,
+    count: int,
+    block_ms: int,
+) -> int:
+    """Read submitted paper orders and publish current broker status/fill events."""
+
+    last_ids.setdefault(STREAM_EXECUTION_ORDER_SUBMITTED, start_id)
+    subscriber = EventSubscriber(redis)
+    try:
+        events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+    except Exception:
+        log.exception("execution_agent.status_read_failed", streams=dict(last_ids))
+        return 0
+
+    processed = 0
+    for event in events:
+        try:
+            result = await process_order_status_event(redis, broker, event)
+            last_ids[event.stream] = event.redis_stream_id
+            processed += 1
+            log.info(
+                "execution_agent.order_status_published",
+                submitted_event_id=event.envelope.event_id,
+                status_event_id=result.envelope.event_id,
+                stream=result.stream,
+            )
+        except Exception:
+            log.exception(
+                "execution_agent.order_status_failed",
+                stream=event.stream,
+                redis_stream_id=event.redis_stream_id,
+                submitted_event_id=event.envelope.event_id,
+            )
+            break
+    return processed
+
+
 async def run_loop(
     redis: RedisStreamClient,
     broker: PaperBroker,
@@ -189,19 +297,35 @@ async def run_loop(
 ) -> None:
     """Run the paper Execution Agent loop until ``stop`` is set."""
 
-    last_ids: dict[str, str] = {}
+    risk_last_ids: dict[str, str] = {}
+    status_last_ids: dict[str, str] = {}
     while not stop.is_set():
         try:
-            processed = await poll_once(
+            submitted = await poll_once(
                 redis=redis,
                 broker=broker,
-                last_ids=last_ids,
+                last_ids=risk_last_ids,
                 start_id=start_id,
                 count=count,
                 block_ms=block_ms,
             )
+            status_checked = await poll_order_status_once(
+                redis=redis,
+                broker=broker,
+                last_ids=status_last_ids,
+                start_id=start_id,
+                count=count,
+                block_ms=block_ms,
+            )
+            processed = submitted + status_checked
             if processed:
-                log.info("execution_agent.batch", processed=processed, last_ids=dict(last_ids))
+                log.info(
+                    "execution_agent.batch",
+                    submitted=submitted,
+                    status_checked=status_checked,
+                    risk_last_ids=dict(risk_last_ids),
+                    status_last_ids=dict(status_last_ids),
+                )
             else:
                 await asyncio.sleep(0)
         except Exception:
@@ -257,12 +381,17 @@ async def run(
 __all__ = [
     "PRODUCED_BY",
     "SCHEMA_VERSION",
+    "STREAM_EXECUTION_ORDER_FILLED",
+    "STREAM_EXECUTION_ORDER_STATUS_UPDATED",
     "STREAM_EXECUTION_ORDER_SUBMITTED",
     "STREAM_RISK_APPROVED",
     "AlpacaPaperBroker",
+    "build_order_status_payload",
     "build_order_submitted_payload",
     "build_paper_order",
     "poll_once",
+    "poll_order_status_once",
+    "process_order_status_event",
     "process_risk_event",
     "run",
     "run_loop",

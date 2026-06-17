@@ -111,6 +111,14 @@ before next-card-build is the discipline pattern that surfaced these issues.
 
 **Scope:** Package the paper Execution Agent as an operational service. Add `EXECUTION_AGENT_*` settings, an Alpaca paper broker adapter, `shrap-execution-agent` console script, Dockerfile, Compose service, and deployability tests while preserving the paper-only invariant.
 
-**Outcome:** In progress on branch `phase1/card-07-execution-agent-deployability`.
+**Outcome:** PR #9 opened against `main`; Card 8 is stacked on PR #9 until PR #9 merges.
 
 **Notes:** This still does not add fill polling, position updates, reconciliation, or NautilusTrader bridge validation.
+
+## Card 8 — Alpaca paper order status/fill polling
+
+**Scope:** Extend the Execution Agent to query Alpaca paper order status for submitted broker orders and publish `execution.order.status-updated` or `execution.order.filled` events. Add Alpaca paper `GET /v2/orders/{id}` helper and tests. No real credentials are required for unit/PR verification.
+
+**Outcome:** In progress on branch `phase1/card-08-alpaca-order-status`, stacked on PR #9's branch while PR #9 is open.
+
+**Notes:** Real endpoint/key/secret are only needed for a live paper smoke after the PR code path is reviewed and merged/deployed.
