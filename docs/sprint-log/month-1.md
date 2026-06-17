@@ -93,8 +93,16 @@ before next-card-build is the discipline pattern that surfaced these issues.
 
 **Scope:** Package the Month 1 Pre-Trade Checker as an operational service, not just a callable module. Add an environment-backed settings object, console script, Dockerfile, Compose service, and deployability tests while keeping the risk logic deterministic and paper-only.
 
-**Outcome:** In progress on branch `phase1/card-05-pre-trade-deployability`.
+**Outcome:** PR #7 merged 2026-06-17. The Pre-Trade Checker is packaged as `shrap-pre-trade-checker` with settings, Dockerfile, and Compose service.
 
 **Drift caught:** PR #5 had been automatically closed when PR #4's stacked base branch was deleted; Card 4 was recovered through PR #6 before this card began.
 
 **Notes:** This card deliberately does not add consumer groups, execution handoff, or new risk rules. It only makes the existing reliable risk gate runnable in the stack.
+
+## Card 6 — Paper Execution Agent core
+
+**Scope:** Add the deterministic no-LLM Execution Agent core that consumes `risk.intent.approved`, refuses non-paper approved payloads, submits Alpaca paper market orders through an injected broker client, and publishes `execution.order.submitted` with correlation back to the risk event.
+
+**Outcome:** In progress on branch `phase1/card-06-paper-execution-agent`.
+
+**Notes:** This card is the next missing link in the Month 1 paper spine after Pre-Trade deployability. It does not yet package the Execution Agent as a service, poll fills, update positions, or validate the NautilusTrader bridge.
