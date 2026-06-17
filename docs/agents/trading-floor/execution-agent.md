@@ -30,7 +30,8 @@ The agent is deterministic and no-LLM. It refuses any approved intent whose mode
 | Source | Type | Description |
 |---|---|---|
 | Redis: `risk.intent.approved` | Event | Risk-approved paper intents containing `approved_intent_payload`. |
-| Alpaca paper API | HTTP | Paper order submission endpoint only. |
+| Redis: `execution.order.submitted` | Event | Submitted paper orders whose broker status should be checked. |
+| Alpaca paper API | HTTP | Paper order submission and order-status endpoints only. |
 
 ## Processing
 
@@ -40,13 +41,18 @@ The agent is deterministic and no-LLM. It refuses any approved intent whose mode
 4. Build an Alpaca paper market order with `symbol`, `qty`, `side`, `type=market`, `time_in_force=day`, and `client_order_id` equal to the risk event ID.
 5. Submit to the injected paper broker client.
 6. Publish `execution.order.submitted` with the broker order ID/status, submitted order, original risk payload, and correlation ID set to the risk event ID.
-7. Advance the stream offset only after successful broker submission and successful event publication.
+7. Read ADR-0006 envelopes from `execution.order.submitted`.
+8. Query Alpaca paper order status by `broker_order_id`.
+9. Publish `execution.order.status-updated` for non-filled statuses and `execution.order.filled` when Alpaca reports `status=filled`; correlation ID is the submitted-order event ID.
+10. Advance each stream offset only after the corresponding broker operation and event publication succeed.
 
 ## Outputs
 
 | Destination | Type | Description |
 |---|---|---|
 | Redis: `execution.order.submitted` | Event | Records the submitted paper order and broker response. |
+| Redis: `execution.order.status-updated` | Event | Records current non-filled broker status for a submitted paper order. |
+| Redis: `execution.order.filled` | Event | Records fill details when Alpaca reports the paper order filled. |
 
 ## State
 
@@ -62,7 +68,8 @@ Stateless in the Month 1 core. The in-memory stream offset map starts at `0-0` s
 
 - Month 1 Card 6: Core event consumer, paper order builder, Alpaca paper order submission helper, and tests.
 - Month 1 Card 7: Package as `shrap-execution-agent` with `EXECUTION_AGENT_*` settings, Dockerfile, and Compose service.
-- Future cards: fill polling/streaming, position updates, reconciliation, and NautilusTrader bridge work.
+- Month 1 Card 8: Add Alpaca paper order-status polling and publish status/fill events.
+- Future cards: position updates, reconciliation, and NautilusTrader bridge work.
 
 ## Deferred
 
