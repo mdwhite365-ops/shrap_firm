@@ -74,7 +74,7 @@ offsets on processing or publish failure, returns deterministic
 vetoes for malformed quantity input, and stops emitting a misleading
 top-level mode field in risk decision payloads.
 
-**Outcome:** PR opened, awaiting review.
+**Outcome:** PR #6 merged 2026-06-17. Card 4 is now on `main` via merge commit `2250fca`; merged main passed the targeted reliability tests, full suite, Ruff, format check, and mypy.
 
 **Drift caught:** PR #4, the Card 3 cleanup PR, was still open when this work
 started. Card 4 is stacked on that cleanup branch so this card does not modify
@@ -88,3 +88,13 @@ audit findings for later cards.
 **Notes for Month 2:** Consumer groups (XREADGROUP with acks) are the
 post-sprint upgrade. Card 4's "0-0" replay is the Month 1 stub. Per-card audit
 before next-card-build is the discipline pattern that surfaced these issues.
+
+## Card 5 — Pre-Trade Checker deployability
+
+**Scope:** Package the Month 1 Pre-Trade Checker as an operational service, not just a callable module. Add an environment-backed settings object, console script, Dockerfile, Compose service, and deployability tests while keeping the risk logic deterministic and paper-only.
+
+**Outcome:** In progress on branch `phase1/card-05-pre-trade-deployability`.
+
+**Drift caught:** PR #5 had been automatically closed when PR #4's stacked base branch was deleted; Card 4 was recovered through PR #6 before this card began.
+
+**Notes:** This card deliberately does not add consumer groups, execution handoff, or new risk rules. It only makes the existing reliable risk gate runnable in the stack.

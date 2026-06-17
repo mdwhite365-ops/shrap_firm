@@ -349,3 +349,31 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Pre-Trade Checker - deterministic Month 1 risk gate. Consumes
+  # trading.decision.intent and publishes risk.intent.approved/vetoed.
+  # -------------------------------------------------------------------------
+  pre-trade-checker:
+    build:
+      context: ../
+      dockerfile: infra/pre-trade-checker.Dockerfile
+    container_name: shrap_pre_trade_checker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PRE_TRADE_CHECKER_REDIS_URL: "redis://redis:6379/0"
+      PRE_TRADE_CHECKER_ALLOWED_UNIVERSE: "${PRE_TRADE_CHECKER_ALLOWED_UNIVERSE:-AAPL,NVDA,QQQ,SPY,TSLA,LMT}"
+      PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER: "${PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER:-1}"
+      PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE: "${PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE:-false}"
+      PRE_TRADE_CHECKER_START_ID: "0-0"
+      PRE_TRADE_CHECKER_COUNT: "100"
+      PRE_TRADE_CHECKER_BLOCK_MS: "5000"
+      PRE_TRADE_CHECKER_RETRY_DELAY_SECONDS: "1.0"
+      PRE_TRADE_CHECKER_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net

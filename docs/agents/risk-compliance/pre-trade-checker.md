@@ -3,7 +3,7 @@
 **Department:** Risk and Compliance
 **LLM tier:** `no-llm`
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
-**Status:** Draft
+**Status:** Implemented for Month 1 wire path; deployable service PR in progress
 **Date:** 2026-06-08
 **Author:** Mike White
 
@@ -70,6 +70,10 @@ Stateless in the Month 1 Card 3 stub. The pure-function check has no persistence
 
 - Month 1 Card 3: Wire-only event-loop wrapper around the existing pure-function `PreTradeChecker`; publish approved/vetoed events with correlation and tests proving the signal-to-risk path.
 - Future cards: Position correlation, exposure limits, kill-switch state, daily-loss limits, execution handoff, and persistent risk decision tables.
+
+## Deployability
+
+Card 5 packages this agent as `shrap-pre-trade-checker` with a `PRE_TRADE_CHECKER_*` environment contract, a Dockerfile, and a Compose service. The service remains paper-only, deterministic, and starts from `0-0` during Month 1 so queued decision intents are replayed on startup.
 
 ## Deferred
 
