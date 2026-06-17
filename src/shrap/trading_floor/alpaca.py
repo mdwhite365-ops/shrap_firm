@@ -22,6 +22,13 @@ class HttpResponse(Protocol):
 class AsyncHttpClient(Protocol):
     async def get(self, url: str, headers: dict[str, str]) -> HttpResponse: ...
 
+    async def post(
+        self,
+        url: str,
+        headers: dict[str, str],
+        json: dict[str, Any],
+    ) -> HttpResponse: ...
+
 
 class AlpacaPaperSettings(BaseModel):
     """Paper-only Alpaca credentials loaded from env by default."""
@@ -82,6 +89,25 @@ class AlpacaPaperClient:
         response = await http_client.get(
             f"{self._api_base()}/account",
             headers=self.auth_headers(),
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def submit_order(
+        self,
+        http_client: AsyncHttpClient,
+        order: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Submit one order to Alpaca paper.
+
+        The settings validator guarantees the host is the paper endpoint. The
+        caller is still responsible for passing only risk-approved paper orders.
+        """
+
+        response = await http_client.post(
+            f"{self._api_base()}/orders",
+            headers=self.auth_headers(),
+            json=order,
         )
         response.raise_for_status()
         return response.json()
