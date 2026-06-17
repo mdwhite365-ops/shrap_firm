@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
+import httpx
 import structlog
+from redis.asyncio import Redis
 
+from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher, EventSubscriber, PublishedEvent, ReceivedEvent
+from shrap.trading_floor.alpaca import AlpacaPaperClient, AlpacaPaperSettings, AsyncHttpClient
 
 log = structlog.get_logger(__name__)
 
@@ -36,6 +40,17 @@ class RedisStreamClient(Protocol):
 
 class PaperBroker(Protocol):
     async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class AlpacaPaperBroker:
+    """Adapter from Execution Agent's broker protocol to Alpaca paper HTTP."""
+
+    def __init__(self, settings: AlpacaPaperSettings, http_client: AsyncHttpClient) -> None:
+        self._client = AlpacaPaperClient(settings)
+        self._http_client = http_client
+
+    async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
+        return await self._client.submit_order(self._http_client, order)
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
@@ -194,14 +209,61 @@ async def run_loop(
             await asyncio.sleep(retry_delay_seconds)
 
 
+async def run(
+    redis_url: str,
+    alpaca_settings: AlpacaPaperSettings,
+    service_name: str = "execution-agent",
+    log_level: str = "INFO",
+    start_id: str = "0-0",
+    count: int = 100,
+    block_ms: int = 5000,
+    retry_delay_seconds: float = 1.0,
+) -> None:
+    """Run the paper Execution Agent service until SIGINT/SIGTERM."""
+
+    configure_logging(service_name, log_level)
+    log.info(
+        "execution_agent.starting",
+        redis_url=redis_url,
+        alpaca=alpaca_settings.redacted(),
+        start_id=start_id,
+        count=count,
+        block_ms=block_ms,
+    )
+    stop = asyncio.Event()
+    _install_signal_handlers(stop)
+    redis: Redis = Redis.from_url(
+        redis_url,
+        decode_responses=True,
+        socket_timeout=(block_ms / 1000) + 10,
+    )
+    async with httpx.AsyncClient(timeout=(block_ms / 1000) + 10) as http_client:
+        broker = AlpacaPaperBroker(alpaca_settings, cast(AsyncHttpClient, http_client))
+        try:
+            await run_loop(
+                cast(RedisStreamClient, redis),
+                broker=broker,
+                stop=stop,
+                start_id=start_id,
+                count=count,
+                block_ms=block_ms,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+        finally:
+            await redis.aclose()
+            log.info("execution_agent.stopped")
+
+
 __all__ = [
     "PRODUCED_BY",
     "SCHEMA_VERSION",
     "STREAM_EXECUTION_ORDER_SUBMITTED",
     "STREAM_RISK_APPROVED",
+    "AlpacaPaperBroker",
     "build_order_submitted_payload",
     "build_paper_order",
     "poll_once",
     "process_risk_event",
+    "run",
     "run_loop",
 ]

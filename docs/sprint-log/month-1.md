@@ -103,6 +103,14 @@ before next-card-build is the discipline pattern that surfaced these issues.
 
 **Scope:** Add the deterministic no-LLM Execution Agent core that consumes `risk.intent.approved`, refuses non-paper approved payloads, submits Alpaca paper market orders through an injected broker client, and publishes `execution.order.submitted` with correlation back to the risk event.
 
-**Outcome:** In progress on branch `phase1/card-06-paper-execution-agent`.
+**Outcome:** PR #8 merged 2026-06-17. The paper Execution Agent core is on `main` via merge commit `f228863`.
 
 **Notes:** This card is the next missing link in the Month 1 paper spine after Pre-Trade deployability. It does not yet package the Execution Agent as a service, poll fills, update positions, or validate the NautilusTrader bridge.
+
+## Card 7 — Execution Agent deployability
+
+**Scope:** Package the paper Execution Agent as an operational service. Add `EXECUTION_AGENT_*` settings, an Alpaca paper broker adapter, `shrap-execution-agent` console script, Dockerfile, Compose service, and deployability tests while preserving the paper-only invariant.
+
+**Outcome:** In progress on branch `phase1/card-07-execution-agent-deployability`.
+
+**Notes:** This still does not add fill polling, position updates, reconciliation, or NautilusTrader bridge validation.

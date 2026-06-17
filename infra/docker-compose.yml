@@ -377,3 +377,31 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Execution Agent - paper-only broker handoff. Consumes approved risk
+  # decisions and submits Alpaca paper market orders.
+  # -------------------------------------------------------------------------
+  execution-agent:
+    build:
+      context: ../
+      dockerfile: infra/execution-agent.Dockerfile
+    container_name: shrap_execution_agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      EXECUTION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      EXECUTION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY}"
+      EXECUTION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      EXECUTION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      EXECUTION_AGENT_START_ID: "0-0"
+      EXECUTION_AGENT_COUNT: "100"
+      EXECUTION_AGENT_BLOCK_MS: "5000"
+      EXECUTION_AGENT_RETRY_DELAY_SECONDS: "1.0"
+      EXECUTION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
