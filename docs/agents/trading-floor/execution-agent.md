@@ -61,7 +61,8 @@ Stateless in the Month 1 core. The in-memory stream offset map starts at `0-0` s
 ## Sprint scope
 
 - Month 1 Card 6: Core event consumer, paper order builder, Alpaca paper order submission helper, and tests.
-- Future cards: service packaging, fill polling/streaming, position updates, reconciliation, and NautilusTrader bridge work.
+- Month 1 Card 7: Package as `shrap-execution-agent` with `EXECUTION_AGENT_*` settings, Dockerfile, and Compose service.
+- Future cards: fill polling/streaming, position updates, reconciliation, and NautilusTrader bridge work.
 
 ## Deferred
 

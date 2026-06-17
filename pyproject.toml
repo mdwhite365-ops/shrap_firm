@@ -30,11 +30,13 @@ dev = [
 health-monitor = ["pydantic-settings>=2.4"]
 audit-logger = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 pre-trade-checker = ["pydantic-settings>=2.4"]
+execution-agent = ["pydantic-settings>=2.4"]
 
 [project.scripts]
 shrap-health-monitor = "shrap.agents.operations.health_monitor.__main__:main"
 shrap-audit-logger = "shrap.agents.operations.audit_logger.__main__:main"
 shrap-pre-trade-checker = "shrap.agents.risk_compliance.pre_trade_checker.__main__:main"
+shrap-execution-agent = "shrap.agents.trading_floor.execution_agent.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shrap"]
