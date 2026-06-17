@@ -45,6 +45,40 @@ class FakeRedis:
         return redis_id > last_id
 
 
+class FailRiskPublishRedis(FakeRedis):
+    async def xadd(self, stream: str, fields: dict[str, str]) -> str:
+        if stream.startswith("risk.intent."):
+            raise RuntimeError("risk publish failed")
+        return await super().xadd(stream, fields)
+
+
+class ToggleFailRiskPublishRedis(FakeRedis):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_risk_publish = False
+
+    async def xadd(self, stream: str, fields: dict[str, str]) -> str:
+        if self.fail_risk_publish and stream.startswith("risk.intent."):
+            raise RuntimeError("risk publish failed")
+        return await super().xadd(stream, fields)
+
+
+class StopAfterRiskDecisionsRedis(FakeRedis):
+    def __init__(self, stop: asyncio.Event, target: int) -> None:
+        super().__init__()
+        self._stop = stop
+        self._target = target
+
+    async def xadd(self, stream: str, fields: dict[str, str]) -> str:
+        redis_id = await super().xadd(stream, fields)
+        risk_decisions = sum(
+            1 for written_stream, _ in self.calls if written_stream.startswith("risk.intent.")
+        )
+        if risk_decisions >= self._target:
+            self._stop.set()
+        return redis_id
+
+
 async def publish_intent(redis: FakeRedis, payload: dict[str, Any]) -> PublishedEvent:
     return await EventPublisher(redis).publish(
         stream="trading.decision.intent",
@@ -196,6 +230,109 @@ async def test_reprocessing_same_intent_event_emits_same_decision_payload() -> N
     second_payload = Envelope.from_redis_fields(redis.calls[-1][1]).payload
 
     assert first_payload == second_payload
+
+
+@pytest.mark.asyncio
+async def test_agent_replays_queued_intents_on_startup() -> None:
+    from shrap.risk_compliance.pre_trade_checker_agent import run_loop
+
+    stop = asyncio.Event()
+    redis = StopAfterRiskDecisionsRedis(stop=stop, target=3)
+    for quantity in [1, 2, 3]:
+        await publish_intent(redis, paper_intent(quantity=quantity, size_hint=quantity))
+
+    await asyncio.wait_for(
+        run_loop(
+            redis,  # type: ignore[arg-type]
+            RiskPolicy(allowed_universe={"AAPL"}, max_quantity_per_order=5),
+            stop=stop,
+            count=10,
+            block_ms=1,
+            retry_delay_seconds=0,
+        ),
+        timeout=1,
+    )
+
+    assert [stream for stream, _ in redis.calls].count("risk.intent.approved") == 3
+    assert redis.reads[0] == {"trading.decision.intent": "0-0"}
+
+
+@pytest.mark.asyncio
+async def test_poll_once_does_not_advance_offset_on_publish_failure() -> None:
+    from shrap.risk_compliance.pre_trade_checker_agent import poll_once
+
+    redis = FailRiskPublishRedis()
+    await publish_intent(redis, paper_intent(quantity=1))
+    last_ids: dict[str, str] = {}
+
+    processed = await poll_once(
+        redis,  # type: ignore[arg-type]
+        RiskPolicy(allowed_universe={"AAPL"}),
+        last_ids,
+        start_id="0-0",
+        count=10,
+        block_ms=1,
+    )
+
+    assert processed == 0
+    assert last_ids == {"trading.decision.intent": "0-0"}
+
+
+@pytest.mark.asyncio
+async def test_poll_once_does_not_advance_offset_on_processing_exception() -> None:
+    from shrap.risk_compliance.pre_trade_checker_agent import STREAM_DECISION_INTENT, poll_once
+
+    redis = FakeRedis()
+    redis.calls.append((STREAM_DECISION_INTENT, {"payload": "{not-json"}))
+    last_ids: dict[str, str] = {}
+
+    processed = await poll_once(
+        redis,  # type: ignore[arg-type]
+        RiskPolicy(allowed_universe={"AAPL"}),
+        last_ids,
+        start_id="0-0",
+        count=10,
+        block_ms=1,
+    )
+
+    assert processed == 0
+    assert last_ids == {"trading.decision.intent": "0-0"}
+
+
+@pytest.mark.asyncio
+async def test_poll_once_advances_offset_only_after_successful_publish() -> None:
+    from shrap.risk_compliance.pre_trade_checker_agent import poll_once
+
+    redis = ToggleFailRiskPublishRedis()
+    await publish_intent(redis, paper_intent(quantity=1))
+    last_ids: dict[str, str] = {}
+
+    processed = await poll_once(
+        redis,  # type: ignore[arg-type]
+        RiskPolicy(allowed_universe={"AAPL"}),
+        last_ids,
+        start_id="0-0",
+        count=1,
+        block_ms=1,
+    )
+
+    assert processed == 1
+    assert last_ids == {"trading.decision.intent": "1780128100001-0"}
+
+    await publish_intent(redis, paper_intent(quantity=2, size_hint=2))
+    redis.fail_risk_publish = True
+
+    processed = await poll_once(
+        redis,  # type: ignore[arg-type]
+        RiskPolicy(allowed_universe={"AAPL"}),
+        last_ids,
+        start_id="0-0",
+        count=1,
+        block_ms=1,
+    )
+
+    assert processed == 0
+    assert last_ids == {"trading.decision.intent": "1780128100001-0"}
 
 
 @pytest.mark.asyncio

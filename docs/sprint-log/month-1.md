@@ -63,3 +63,28 @@ veto case end-to-end. Default behavior remains `mode = paper`.
 position/exposure checks, kill switches, correlation caps, and persistent risk
 decision tables. Keep real-money blocked until a post-sprint ADR and Mike's
 explicit approval.
+
+## Card 4 — Risk Gate Reliability
+
+**Scope:** Fix the startup-replay, offset-on-failure, malformed-input,
+and misleading-mode-field bugs identified in the post-Card-3 audit.
+Card 4 makes the Pre-Trade Checker agent reliable under realistic
+conditions: it replays queued intents on startup, refuses to advance
+offsets on processing or publish failure, returns deterministic
+vetoes for malformed quantity input, and stops emitting a misleading
+top-level mode field in risk decision payloads.
+
+**Outcome:** PR opened, awaiting review.
+
+**Drift caught:** PR #4, the Card 3 cleanup PR, was still open when this work
+started. Card 4 is stacked on that cleanup branch so this card does not modify
+Decision Maker stub behavior and keeps its diff focused on the reliability
+fixes.
+
+**Hermes performance:** Followed the audit findings with failing tests first,
+kept the card scope to the four requested reliability fixes, and left the other
+audit findings for later cards.
+
+**Notes for Month 2:** Consumer groups (XREADGROUP with acks) are the
+post-sprint upgrade. Card 4's "0-0" replay is the Month 1 stub. Per-card audit
+before next-card-build is the discipline pattern that surfaced these issues.
