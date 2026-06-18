@@ -127,6 +127,14 @@ before next-card-build is the discipline pattern that surfaced these issues.
 
 **Scope:** Add an injected end-to-end smoke harness proving a hand-crafted strategy signal traverses Decision Maker stub, Pre-Trade Checker, Execution Agent order submission, and Alpaca-status/fill event emission. Uses fake Redis/broker in tests; no real credentials required.
 
-**Outcome:** In progress on branch `phase1/card-09-e2e-paper-spine-smoke`.
+**Outcome:** PR #12 merged 2026-06-18. Card 9 is on `main` via merge commit `4586c64`.
 
 **Notes:** This proves event contracts compose locally. It does not add Postgres persistence, reconciliation, or Docker-stack orchestration.
+
+## Card 10 — Paper order/fill persistence
+
+**Scope:** Add an append-only PostgreSQL persistence seam for `execution.order.submitted`, `execution.order.status-updated`, and `execution.order.filled` events. Include record mapping, schema SQL, sink tests, and schema docs.
+
+**Outcome:** In progress on branch `phase1/card-10-order-fill-persistence`.
+
+**Notes:** This creates the event trail that a later Reconciliation Agent can compare against Alpaca paper. It does not derive current positions or run reconciliation yet.
