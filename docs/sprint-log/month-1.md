@@ -135,6 +135,14 @@ before next-card-build is the discipline pattern that surfaced these issues.
 
 **Scope:** Add an append-only PostgreSQL persistence seam for `execution.order.submitted`, `execution.order.status-updated`, and `execution.order.filled` events. Include record mapping, schema SQL, sink tests, and schema docs.
 
-**Outcome:** In progress on branch `phase1/card-10-order-fill-persistence`.
+**Outcome:** PR #13 merged 2026-06-18. Card 10 is on `main` via merge commit `04e773d`.
 
 **Notes:** This creates the event trail that a later Reconciliation Agent can compare against Alpaca paper. It does not derive current positions or run reconciliation yet.
+
+## Card 11 — Paper order event persistence consumer
+
+**Scope:** Add a long-running consumer core for `execution.order.submitted`, `execution.order.status-updated`, and `execution.order.filled` that maps events with `record_from_execution_event()` and writes them through `PostgresPaperOrderSink`.
+
+**Outcome:** In progress on branch `phase1/card-11-order-event-consumer`.
+
+**Notes:** This wires the persistence seam into a consumer loop, but does not package it as a Docker service or add reconciliation/position derivation yet.
