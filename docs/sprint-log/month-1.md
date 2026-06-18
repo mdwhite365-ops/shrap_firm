@@ -119,6 +119,14 @@ before next-card-build is the discipline pattern that surfaced these issues.
 
 **Scope:** Extend the Execution Agent to query Alpaca paper order status for submitted broker orders and publish `execution.order.status-updated` or `execution.order.filled` events. Add Alpaca paper `GET /v2/orders/{id}` helper and tests. No real credentials are required for unit/PR verification.
 
-**Outcome:** In progress on branch `phase1/card-08-alpaca-order-status`, stacked on PR #9's branch while PR #9 is open.
+**Outcome:** PR #11 merged 2026-06-17. Card 8 is on `main` via merge commit `5580fa4`.
 
 **Notes:** Real endpoint/key/secret are only needed for a live paper smoke after the PR code path is reviewed and merged/deployed.
+
+## Card 9 — Full local paper-spine smoke
+
+**Scope:** Add an injected end-to-end smoke harness proving a hand-crafted strategy signal traverses Decision Maker stub, Pre-Trade Checker, Execution Agent order submission, and Alpaca-status/fill event emission. Uses fake Redis/broker in tests; no real credentials required.
+
+**Outcome:** In progress on branch `phase1/card-09-e2e-paper-spine-smoke`.
+
+**Notes:** This proves event contracts compose locally. It does not add Postgres persistence, reconciliation, or Docker-stack orchestration.
