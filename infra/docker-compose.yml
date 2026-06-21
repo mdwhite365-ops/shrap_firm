@@ -405,3 +405,32 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Paper Order Store - persists paper execution submitted/status/fill events
+  # into trading.paper_order_events. It is append-only; reconciliation and
+  # current position derivation are intentionally later cards.
+  # -------------------------------------------------------------------------
+  paper-order-store:
+    build:
+      context: ../
+      dockerfile: infra/paper-order-store.Dockerfile
+    container_name: shrap_paper_order_store
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PAPER_ORDER_STORE_REDIS_URL: "redis://redis:6379/0"
+      PAPER_ORDER_STORE_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      PAPER_ORDER_STORE_START_ID: "0-0"
+      PAPER_ORDER_STORE_COUNT: "100"
+      PAPER_ORDER_STORE_BLOCK_MS: "5000"
+      PAPER_ORDER_STORE_RETRY_DELAY_SECONDS: "1.0"
+      PAPER_ORDER_STORE_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
