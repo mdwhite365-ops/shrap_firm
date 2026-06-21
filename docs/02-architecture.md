@@ -45,6 +45,8 @@ These are the architectural questions that remain unresolved as of this draft. E
 **1. NautilusTrader-to-Redis event bridge coverage (ADR-0003).**
 The broker credential isolation model in section 11 holds only if NautilusTrader's Redis bridge is comprehensive enough that no other department has a legitimate reason to need direct broker API access. The completeness of fill, account, and position event coverage against NautilusTrader's actual adapter capabilities has not been verified. Decision needed before: Trading Floor spec.
 
+**Current implementation note, 2026-06-21.** The Month 1 paper spine currently uses a direct Alpaca paper client inside the Execution Agent for order submission/status smoke. Treat this as a Month 1 implementation shortcut until ADR-0003 is explicitly resolved; do not let it silently become the long-term broker isolation architecture.
+
 The three previously-listed open questions — monitoring stack, alerting channel, and Redis Streams event envelope — have been resolved in ADR-0004, ADR-0005, and ADR-0006 respectively.
 
 ---
