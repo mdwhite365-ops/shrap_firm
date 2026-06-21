@@ -58,7 +58,7 @@ Month 1 is about making the system work as a system, not as a trader. The Tradin
 
 ### Current implementation snapshot — 2026-06-21
 
-The paper spine is now implemented through local event composition and paper order persistence schema/sink. `main` includes Decision Maker stub, Pre-Trade Checker service, Execution Agent service, Alpaca paper submit/status polling, full local paper-spine smoke, and `trading.paper_order_events` persistence seam. PR #14 is open to add the order-event persistence consumer core.
+The paper spine is now implemented through local event composition and paper order persistence consumption. `main` includes Decision Maker stub, Pre-Trade Checker service, Execution Agent service, Alpaca paper submit/status polling, full local paper-spine smoke, `trading.paper_order_events` persistence seam, and the paper order-event consumer core.
 
 The remaining Month 1 closure work is operational rather than research-oriented: package the Paper Order Store consumer, add Alpaca paper reconciliation, run the full Docker Compose paper-spine smoke, observe a real paper fill, and resolve/document the ADR-0003 NautilusTrader bridge boundary. Research implementation remains intentionally deferred until those spine items are acceptable.
 

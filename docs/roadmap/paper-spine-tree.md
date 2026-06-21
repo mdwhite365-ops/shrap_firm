@@ -28,7 +28,7 @@ Shrap paper-trading spine
 │
 ├── 3. Persistence path [in progress]
 │   ├── Paper order event schema/sink [done, PR #13]
-│   ├── Paper order event consumer core [open, PR #14]
+│   ├── Paper order event consumer core [done, PR #14]
 │   ├── Paper Order Store deployable service [next]
 │   └── Full service-stack persistence smoke [next+1]
 │
@@ -64,7 +64,7 @@ Shrap paper-trading spine
 
 ### Card 12 — Package Paper Order Store service
 
-**Depends on:** PR #14 merged.
+**Depends on:** PR #14 merged. [done]
 
 **Acceptance:**
 

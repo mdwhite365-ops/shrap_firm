@@ -143,6 +143,6 @@ before next-card-build is the discipline pattern that surfaced these issues.
 
 **Scope:** Add a long-running consumer core for `execution.order.submitted`, `execution.order.status-updated`, and `execution.order.filled` that maps events with `record_from_execution_event()` and writes them through `PostgresPaperOrderSink`.
 
-**Outcome:** PR #14 opened 2026-06-18 and is currently open/mergeable.
+**Outcome:** PR #14 merged 2026-06-21. Card 11 is on `main` via merge commit `ddfcff2`.
 
 **Notes:** This wires the persistence seam into a consumer loop, but does not package it as a Docker service or add reconciliation/position derivation yet.

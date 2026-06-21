@@ -34,9 +34,9 @@ Unit tests cover `execution.order.filled`; live Alpaca smoke observed `execution
 
 ## KI-004 — Paper order persistence consumer is not packaged yet
 
-**Status:** PR #14 open.
+**Status:** Consumer core merged in PR #14; service packaging still missing.
 
-`PostgresPaperOrderSink` exists on `main`; PR #14 adds the consumer core but not Docker/Compose packaging.
+`PostgresPaperOrderSink` and the paper order-event consumer core exist on `main`, but there is no Docker/Compose service yet.
 
 **Mitigation:** Card 12 should package `shrap-paper-order-store` as a service.
 

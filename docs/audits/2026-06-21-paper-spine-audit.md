@@ -1,7 +1,7 @@
 # Paper spine audit — 2026-06-21
 
 **Audit date:** 2026-06-21T15:47:43-07:00
-**Scope:** Month 1 paper-trading spine through PR #13 on `main`, with PR #14 open.
+**Scope:** Month 1 paper-trading spine through PR #14 on `main`.
 **Mode:** Paper only. No real-money path reviewed or approved.
 
 ## Executive summary
@@ -25,11 +25,11 @@ The strongest parts are the deterministic event contracts, paper-only Alpaca gua
 | Execution Agent | Implemented + packaged | submits Alpaca paper orders, status/fill polling. |
 | Local end-to-end paper smoke | Implemented | `tests/integration/test_paper_spine_smoke.py`. |
 | Paper order event persistence | Implemented | `trading.paper_order_events` schema/sink. |
-| Paper order event consumer | Open PR | PR #14, not yet on `main`. |
+| Paper order event consumer | Implemented | PR #14 merged into `main`. |
 
 ## Quality snapshot
 
-Most recent broad gate for PR #14 branch:
+Most recent broad gate for PR #14 branch before merge:
 
 ```text
 81 passed
@@ -56,7 +56,7 @@ The code path is locally composable and live Alpaca account/order/status calls w
 
 **Impact:** Medium. The paper spine is not yet a deploy-and-watch system.
 
-**Next action:** Merge PR #14, package the Paper Order Store service, then run Docker Compose stack smoke.
+**Next action:** Package the Paper Order Store service, then run Docker Compose stack smoke.
 
 ### A2 — NautilusTrader bridge remains unresolved
 

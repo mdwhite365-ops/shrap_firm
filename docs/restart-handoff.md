@@ -6,8 +6,7 @@ Last updated: 2026-06-21T15:47:43-07:00
 
 - Repo path used by Hermes: `/tmp/shrap-start/shrap_firm`
 - Remote: `github.com/mdwhite365-ops/shrap_firm`
-- Main branch currently includes PR #13: paper order/fill persistence schema and sink.
-- PR #14 is open and mergeable: `feat: consume paper order events`.
+- Main branch currently includes PR #14: paper order-event persistence consumer core.
 - Current docs/status update branch: `phase1/status-audit-roadmap`.
 
 ## Operating priority
@@ -36,7 +35,7 @@ Merged on `main`:
 
 Open:
 
-- PR #14 — Paper order-event persistence consumer core.
+- Paper order-event persistence consumer core.
 
 Not yet done:
 
@@ -82,14 +81,13 @@ docs/roadmap/paper-spine-tree.md
 
 ## Next recommended sequence
 
-1. Merge PR #14 after review.
-2. Card 12 — package Paper Order Store service.
-3. Card 13 — Reconciliation Agent core against Alpaca paper.
-4. Card 14 — Reconciliation deployability.
-5. Card 15 — full Docker Compose paper-spine smoke.
-6. Card 16 — live market-hours fill smoke and persistence verification.
-7. Card 17 — ADR-0003 NautilusTrader bridge validation/decision.
-8. Card 18 — only then start Research implementation.
+1. Card 12 — package Paper Order Store service.
+2. Card 13 — Reconciliation Agent core against Alpaca paper.
+3. Card 14 — Reconciliation deployability.
+4. Card 15 — full Docker Compose paper-spine smoke.
+5. Card 16 — live market-hours fill smoke and persistence verification.
+6. Card 17 — ADR-0003 NautilusTrader bridge validation/decision.
+7. Card 18 — only then start Research implementation.
 
 ## First commands after restart
 
