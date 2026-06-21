@@ -1,132 +1,106 @@
 # SHRap Restart Handoff
 
-Last updated: 2026-05-30T00:45:00-07:00
+Last updated: 2026-06-21T15:47:43-07:00
 
 ## Current repo state
 
-- Repo path: `/tmp/shrap_firm`
-- Branch: `main`
-- Latest completed commit before this handoff: `7dc1792 feat: add operations audit logger`
-- Working tree at handoff update time: may include the in-progress `shrap.events`/runbook milestone until committed.
-- Remote push status: do not assume latest local commits are pushed. Push only when Mike explicitly authorizes.
+- Repo path used by Hermes: `/tmp/shrap-start/shrap_firm`
+- Remote: `github.com/mdwhite365-ops/shrap_firm`
+- Main branch currently includes PR #14: paper order-event persistence consumer core.
+- Current docs/status update branch: `phase1/status-audit-roadmap`.
 
-## Hermes/runtime state
+## Operating priority
 
-- Active Hermes profile: `default`
-- Hermes config path: `/home/shraptasmaner/.hermes/config.yaml`
-- Context config was previously updated:
-  - `model.context_length: 1000000`
-  - `model.ollama_num_ctx: 1000000`
-- Note: actual usable context is still capped by provider/model backend and may require a fresh Hermes session to fully take effect.
+Mike explicitly wants to finish the paper-trading spine before switching to Research agents.
+
+Hard boundary:
+
+- Paper only.
+- No real-money trading.
+- Alpaca credentials stay local in ignored `infra/.env`.
+- Never print, commit, or paste secrets.
+
+## Current paper spine state
+
+Merged on `main`:
+
+1. Audit Logger and ADR-0006 event substrate.
+2. Decision Maker paper stub.
+3. Pre-Trade Checker risk gate and reliability fixes.
+4. Pre-Trade Checker deployable service.
+5. Paper Execution Agent core and deployable service.
+6. Alpaca paper order submit/status/fill polling.
+7. Full local paper-spine smoke harness.
+8. Paper order/fill persistence schema and sink.
+
+Open:
+
+- Paper order-event persistence consumer core.
+
+Not yet done:
+
+- Package Paper Order Store consumer as service.
+- Reconciliation Agent against Alpaca paper.
+- Full Docker Compose paper-spine smoke.
+- Live market-hours fill smoke that observes `execution.order.filled`.
+- ADR-0003 NautilusTrader bridge validation/decision.
+- Research agent implementation.
 
 ## Local environment
 
-- Host: WSL Ubuntu 22.04.5 with systemd
-- Docker path: `/usr/bin/docker`
-- Docker verified:
-  - Docker Engine: `29.5.2`
-  - Docker Compose: `v5.1.4`
-- Docker service is active.
-- User `shraptasmaner` is in the Docker group.
-- Existing long-lived sessions may still need `sg docker -c 'docker ...'`, `newgrp docker`, or WSL restart before plain Docker socket access works.
+- Host: WSL Ubuntu 22.04.5 with systemd.
+- Docker path: `/usr/bin/docker`.
+- Docker Engine previously verified: `29.5.2`.
+- Docker Compose previously verified: `v5.1.4`.
+- Docker service active in this environment.
 
 ## Local secrets/config state
 
-- Alpaca paper credentials were copied from the Windows Downloads file into `/tmp/shrap_firm/infra/.env`.
-- The source Windows path was `/mnt/c/Users/Mdwhi/Downloads/.env/New Text Document.env.txt`.
-- The local `infra/.env` file is git-ignored and must not be committed.
-- Values were not printed in chat. Use presence/length checks only.
+- Alpaca paper credentials are in `/tmp/shrap-start/shrap_firm/infra/.env`.
+- `infra/.env` is gitignored.
+- Old Alpaca key was rotated after appearing in chat.
+- Use presence/length checks only; do not print values.
 
-## Completed operations substrate
+## Project state files
 
-SHRap Operations substrate now has two working deterministic agents:
+Current state files live under:
 
-1. Health Monitor
-   - Prometheus polling implemented
-   - Redis stream event publishing added for health ticks, degraded/recovered transitions, startup/shutdown, and alert delivery failures
-   - Dockerfile and Compose service added
-   - Runtime smoke-tested with Redis + Prometheus
-
-2. Audit Logger
-   - Consumes configured Redis Streams
-   - Validates ADR-0006 envelopes
-   - Writes append-only rows to PostgreSQL `ops.audit_events`
-   - Dockerfile and Compose service added
-   - Runtime smoke-tested with Redis + Postgres
-
-Current local smoke stack observed running:
-
-- `redis`
-- `postgres`
-- `prometheus`
-- `health-monitor`
-- `audit-logger`
-
-## In-progress next milestone
-
-Focus: formalize the ADR-0006 shared event library as `shrap.events`, then commit it with runbook updates.
-
-Expected completed unit:
-
-- `src/shrap/events/__init__.py`
-  - public `Envelope` export
-  - `EventPublisher`
-  - `EventSubscriber`
-  - normalized Redis field parsing for bytes/string clients
-- tests under `tests/events/test_events.py`
-- Audit Logger uses `shrap.events` for Redis read/validate path
-- `docs/runbooks/dell-bootstrap.md` documents Health Monitor -> Redis Streams -> Audit Logger -> Postgres verification
-
-## Verification commands for the current milestone
-
-Run from `/tmp/shrap_firm`:
-
-```bash
-.venv/bin/pytest -q
-.venv/bin/ruff check .
-.venv/bin/ruff format --check .
-.venv/bin/mypy src/
-sg docker -c 'docker compose -f infra/docker-compose.yml config --quiet'
-sg docker -c 'docker compose -f infra/docker-compose.yml up -d --build audit-logger'
-sg docker -c 'docker inspect -f "audit={{.State.Status}} restarts={{.RestartCount}}" shrap_audit_logger'
-sg docker -c 'docker exec shrap_postgres psql -U shrap -d shrap -tAc "SELECT count(*) FROM ops.audit_events;"'
+```text
+docs/status/current-sprint.md
+docs/status/decision-queue.md
+docs/status/known-issues.md
+docs/status/recent-changes.md
 ```
 
-## Recommended sequence after this milestone
+Audit and roadmap files:
 
-1. Commit `shrap.events` + runbook updates.
-2. Start the inner-loop paper path:
-   - add Alpaca env placeholders to `.env.example`
-   - add deterministic Alpaca paper config/client smoke module
-   - implement Pre-Trade Checker skeleton
-   - implement hand-crafted signal event -> audit trail path
-   - only then wire an order submission path
-3. Maintain hard boundary: paper-only, no real-money endpoints.
+```text
+docs/audits/2026-06-21-paper-spine-audit.md
+docs/roadmap/paper-spine-tree.md
+```
+
+## Next recommended sequence
+
+1. Card 12 — package Paper Order Store service.
+2. Card 13 — Reconciliation Agent core against Alpaca paper.
+3. Card 14 — Reconciliation deployability.
+4. Card 15 — full Docker Compose paper-spine smoke.
+5. Card 16 — live market-hours fill smoke and persistence verification.
+6. Card 17 — ADR-0003 NautilusTrader bridge validation/decision.
+7. Card 18 — only then start Research implementation.
 
 ## First commands after restart
 
 ```bash
-cd /tmp/shrap_firm
-git status --short
-git log -1 --oneline
-.venv/bin/pytest -q
-sg docker -c 'docker compose -f infra/docker-compose.yml ps'
+cd /tmp/shrap-start/shrap_firm
+git fetch origin main --prune
+git status --short --branch
+gh pr view 14 --repo mdwhite365-ops/shrap_firm --json state,mergedAt,baseRefName,headRefName,mergeable,url
+uv run --python 3.12 --extra dev --extra health-monitor --extra audit-logger --extra pre-trade-checker --extra execution-agent pytest -q
 ```
 
-If Docker socket permission fails in the fresh session, try:
+If continuing status/audit docs work, checkout:
 
 ```bash
-sg docker -c 'docker run --rm hello-world'
-```
-
-or ask Mike to run:
-
-```bash
-newgrp docker
-```
-
-or restart WSL from PowerShell:
-
-```powershell
-wsl --shutdown
+git checkout phase1/status-audit-roadmap
 ```
