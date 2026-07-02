@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-06-21T15:47:43-07:00
+**Last updated:** 2026-07-02
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -34,11 +34,7 @@ Unit tests cover `execution.order.filled`; live Alpaca smoke observed `execution
 
 ## KI-004 — Paper order persistence consumer is not packaged yet
 
-**Status:** Consumer core merged in PR #14; service packaging still missing.
-
-`PostgresPaperOrderSink` and the paper order-event consumer core exist on `main`, but there is no Docker/Compose service yet.
-
-**Mitigation:** Card 12 should package `shrap-paper-order-store` as a service.
+**Status:** Resolved 2026-07-02. Card 12 packaged `shrap-paper-order-store` as a deployable service (PR #16): console script, `PAPER_ORDER_STORE_*` settings, Dockerfile, and Compose service are on `main`.
 
 ## KI-005 — Current position state and reconciliation do not exist yet
 

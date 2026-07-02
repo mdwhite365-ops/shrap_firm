@@ -1,13 +1,13 @@
 # SHRap Restart Handoff
 
-Last updated: 2026-06-21T15:47:43-07:00
+Last updated: 2026-07-02
 
 ## Current repo state
 
 - Repo path used by Hermes: `/tmp/shrap-start/shrap_firm`
+- Mike's dev checkout: `/Users/michaelwhite/Projects/shrap_firm` (MacBook)
 - Remote: `github.com/mdwhite365-ops/shrap_firm`
-- Main branch currently includes PR #14: paper order-event persistence consumer core.
-- Current docs/status update branch: `phase1/status-audit-roadmap`.
+- Main branch currently includes PR #16: Paper Order Store deployable service (Card 12).
 
 ## Operating priority
 
@@ -32,14 +32,11 @@ Merged on `main`:
 6. Alpaca paper order submit/status/fill polling.
 7. Full local paper-spine smoke harness.
 8. Paper order/fill persistence schema and sink.
-
-Open:
-
-- Paper order-event persistence consumer core.
+9. Paper order-event persistence consumer core.
+10. Paper Order Store deployable service.
 
 Not yet done:
 
-- Package Paper Order Store consumer as service.
 - Reconciliation Agent against Alpaca paper.
 - Full Docker Compose paper-spine smoke.
 - Live market-hours fill smoke that observes `execution.order.filled`.
@@ -81,13 +78,12 @@ docs/roadmap/paper-spine-tree.md
 
 ## Next recommended sequence
 
-1. Card 12 — package Paper Order Store service.
-2. Card 13 — Reconciliation Agent core against Alpaca paper.
-3. Card 14 — Reconciliation deployability.
-4. Card 15 — full Docker Compose paper-spine smoke.
-5. Card 16 — live market-hours fill smoke and persistence verification.
-6. Card 17 — ADR-0003 NautilusTrader bridge validation/decision.
-7. Card 18 — only then start Research implementation.
+1. Card 13 — Reconciliation Agent core against Alpaca paper.
+2. Card 14 — Reconciliation deployability.
+3. Card 15 — full Docker Compose paper-spine smoke.
+4. Card 16 — live market-hours fill smoke and persistence verification.
+5. Card 17 — ADR-0003 NautilusTrader bridge validation/decision.
+6. Card 18 — only then start Research implementation.
 
 ## First commands after restart
 
