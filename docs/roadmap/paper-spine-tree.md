@@ -1,6 +1,6 @@
 # Paper spine roadmap tree
 
-**Last updated:** 2026-06-21T15:47:43-07:00
+**Last updated:** 2026-07-02
 **Principle:** Finish the paper-trading spine before Research implementation.
 
 ## Tree outline
@@ -26,11 +26,11 @@ Shrap paper-trading spine
 │   ├── Alpaca paper status/fill polling [done]
 │   └── Live paper smoke [partial: accepted/status observed, fill not live-observed]
 │
-├── 3. Persistence path [in progress]
+├── 3. Persistence path [mostly done]
 │   ├── Paper order event schema/sink [done, PR #13]
 │   ├── Paper order event consumer core [done, PR #14]
-│   ├── Paper Order Store deployable service [next]
-│   └── Full service-stack persistence smoke [next+1]
+│   ├── Paper Order Store deployable service [done, PR #16]
+│   └── Full service-stack persistence smoke [pending Card 15]
 │
 ├── 4. Reconciliation path [not started]
 │   ├── Alpaca paper account/order snapshot client
@@ -62,18 +62,7 @@ Shrap paper-trading spine
 
 ## One-card sequence from here
 
-### Card 12 — Package Paper Order Store service
-
-**Depends on:** PR #14 merged. [done]
-
-**Acceptance:**
-
-- `shrap-paper-order-store` console script.
-- `PAPER_ORDER_STORE_*` settings.
-- Dockerfile.
-- Compose service.
-- Config/deployability tests.
-- No reconciliation or position derivation.
+### Card 12 — Package Paper Order Store service [done, PR #16]
 
 ### Card 13 — Reconciliation Agent core
 

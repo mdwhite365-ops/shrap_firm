@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-06-21T15:47:43-07:00
+**Last updated:** 2026-07-02
 
 ## Merged since the inner-loop paper spine push began
 
@@ -10,10 +10,13 @@
 - PR #11 — Alpaca paper order status/fill polling recovery onto `main`.
 - PR #12 — Full local paper-spine smoke harness.
 - PR #13 — Paper order/fill persistence schema and sink.
+- PR #14 — Paper order-event persistence consumer core.
+- PR #15 — Status/audit/roadmap reconciliation after PR #14.
+- PR #16 — Paper Order Store deployable service (Card 12).
 
 ## Open
 
-- PR #14 — Paper order-event persistence consumer core.
+- No open implementation PRs. Card 13 (Reconciliation Agent core) is next.
 
 ## Live smoke notes
 
