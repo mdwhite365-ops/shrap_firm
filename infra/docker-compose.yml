@@ -434,3 +434,33 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Reconciliation Agent - compares Alpaca paper account/orders against the
+  # persisted trading.paper_order_events trail on a simple interval and
+  # publishes operations.reconciliation-completed / -discrepancy events.
+  # -------------------------------------------------------------------------
+  reconciliation-agent:
+    build:
+      context: ../
+      dockerfile: infra/reconciliation-agent.Dockerfile
+    container_name: shrap_reconciliation_agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RECONCILIATION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      RECONCILIATION_AGENT_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      RECONCILIATION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY}"
+      RECONCILIATION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      RECONCILIATION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      RECONCILIATION_AGENT_INTERVAL_SECONDS: "300"
+      RECONCILIATION_AGENT_RETRY_DELAY_SECONDS: "30"
+      RECONCILIATION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
