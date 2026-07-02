@@ -101,3 +101,45 @@ async def test_get_account_does_not_duplicate_v2_when_endpoint_includes_api_pref
     await AlpacaPaperClient(settings).get_account(http_client)  # type: ignore[arg-type]
 
     assert http_client.urls == ["https://paper-api.alpaca.markets/v2/account"]
+
+
+@pytest.mark.asyncio
+async def test_list_orders_queries_all_statuses_and_validates_shape() -> None:
+    from shrap.trading_floor.alpaca import AlpacaPaperClient, AlpacaPaperSettings
+
+    class FakeResponse:
+        def __init__(self, body: Any) -> None:
+            self._body = body
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> Any:
+            return self._body
+
+    class FakeHttpClient:
+        def __init__(self, body: Any) -> None:
+            self._body = body
+            self.urls: list[str] = []
+
+        async def get(self, url: str, headers: dict[str, str]) -> FakeResponse:
+            self.urls.append(url)
+            return FakeResponse(self._body)
+
+    settings = AlpacaPaperSettings(
+        api_key="paper-key",
+        secret_key="paper-secret",
+        endpoint="https://paper-api.alpaca.markets",
+    )
+    http_client = FakeHttpClient([{"id": "order-1", "status": "filled"}])
+
+    orders = await AlpacaPaperClient(settings).list_orders(http_client)  # type: ignore[arg-type]
+
+    assert http_client.urls == [
+        "https://paper-api.alpaca.markets/v2/orders?status=all&limit=500&direction=desc"
+    ]
+    assert orders == [{"id": "order-1", "status": "filled"}]
+
+    non_list = FakeHttpClient({"id": "order-1"})
+    with pytest.raises(ValueError, match="JSON array"):
+        await AlpacaPaperClient(settings).list_orders(non_list)  # type: ignore[arg-type]

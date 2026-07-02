@@ -16,7 +16,7 @@ PAPER_HOST = "paper-api.alpaca.markets"
 class HttpResponse(Protocol):
     def raise_for_status(self) -> None: ...
 
-    def json(self) -> dict[str, Any]: ...
+    def json(self) -> Any: ...
 
 
 class AsyncHttpClient(Protocol):
@@ -91,7 +91,32 @@ class AlpacaPaperClient:
             headers=self.auth_headers(),
         )
         response.raise_for_status()
-        return response.json()
+        return _json_object(response.json(), "Alpaca account response")
+
+    async def list_orders(
+        self,
+        http_client: AsyncHttpClient,
+        status: str = "all",
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """List Alpaca paper orders, most recent first.
+
+        Defaults to ``status=all`` so reconciliation sees open, filled, and
+        canceled orders in one snapshot. Alpaca caps ``limit`` at 500.
+        """
+
+        response = await http_client.get(
+            f"{self._api_base()}/orders?status={status}&limit={limit}&direction=desc",
+            headers=self.auth_headers(),
+        )
+        response.raise_for_status()
+        orders = response.json()
+        if not isinstance(orders, list):
+            raise ValueError("Alpaca orders response must be a JSON array")
+        for order in orders:
+            if not isinstance(order, dict):
+                raise ValueError("Alpaca orders response must contain JSON objects")
+        return orders
 
     async def submit_order(
         self,
@@ -110,7 +135,7 @@ class AlpacaPaperClient:
             json=order,
         )
         response.raise_for_status()
-        return response.json()
+        return _json_object(response.json(), "Alpaca order response")
 
     async def get_order(
         self,
@@ -124,4 +149,10 @@ class AlpacaPaperClient:
             headers=self.auth_headers(),
         )
         response.raise_for_status()
-        return response.json()
+        return _json_object(response.json(), "Alpaca order response")
+
+
+def _json_object(value: Any, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{context} must be a JSON object")
+    return value
