@@ -42,12 +42,9 @@ The sprint target is a fully autonomous paper-trading system running on the Dell
 
 These are the architectural questions that remain unresolved as of this draft. Each has downstream consequences for what gets built and in what order. They are listed here rather than embedded in later sections so they cannot be overlooked.
 
-**1. NautilusTrader-to-Redis event bridge coverage (ADR-0003).**
-The broker credential isolation model in section 11 holds only if NautilusTrader's Redis bridge is comprehensive enough that no other department has a legitimate reason to need direct broker API access. The completeness of fill, account, and position event coverage against NautilusTrader's actual adapter capabilities has not been verified. Decision needed before: Trading Floor spec.
+All open questions from this document's earlier drafts are now resolved: monitoring stack (ADR-0004), alerting channel (ADR-0005), Redis Streams event envelope (ADR-0006), and NautilusTrader bridge coverage (ADR-0003, decided 2026-07-06).
 
-**Current implementation note, 2026-06-21.** The Month 1 paper spine currently uses a direct Alpaca paper client inside the Execution Agent for order submission/status smoke. Treat this as a Month 1 implementation shortcut until ADR-0003 is explicitly resolved; do not let it silently become the long-term broker isolation architecture.
-
-The three previously-listed open questions — monitoring stack, alerting channel, and Redis Streams event envelope — have been resolved in ADR-0004, ADR-0005, and ADR-0006 respectively.
+**On the broker interface (ADR-0003):** direct Alpaca paper access is the accepted broker interface for the paper phase. Broker credentials live only in the two broker-facing agent containers (Execution Agent, Reconciliation Agent); every other department consumes trading data via Redis Streams events or PostgreSQL records. NautilusTrader adoption is a gate triggered by live capital or by strategy execution needs beyond market/day orders — see ADR-0003 for the invariants any migration must preserve.
 
 ---
 

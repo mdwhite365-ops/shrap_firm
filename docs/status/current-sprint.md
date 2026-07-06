@@ -1,45 +1,45 @@
 # Current sprint status
 
-**Last updated:** 2026-07-02
-**Phase:** Month 2 / paper-trading spine
+**Last updated:** 2026-07-06
+**Phase:** Month 2 / paper spine closure → Research unlock
 **Operating mode:** Paper only. No real-money execution.
 
 ## Current focus
 
-Finish the paper-trading spine before switching to Research agents.
+Close out the paper spine (live fill smoke) and start Research implementation
+(Card 18: Regime Classifier).
 
-The spine target is:
-
-```text
-strategy signal
-  -> Decision Maker stub
-  -> Pre-Trade Checker
-  -> Execution Agent
-  -> Alpaca paper order
-  -> Alpaca paper status/fill
-  -> PostgreSQL order event trail
-  -> Reconciliation Agent
-```
+The spine passed its full-stack compose smoke on the Dell on 2026-07-06
+(6/6 checks: intent → risk approval → submission → status → persistence →
+audit trail). Card 15 is done.
 
 ## Main branch state
 
-Merged on `main` through PR #16:
+Merged on `main` through PR #21:
 
 1. Audit Logger and ADR-0006 event substrate.
 2. Decision Maker wire stub.
-3. Pre-Trade Checker risk gate and reliability fixes.
-4. Pre-Trade Checker deployable service.
-5. Paper Execution Agent core.
-6. Execution Agent deployable service.
-7. Alpaca paper order status/fill polling.
-8. Full local paper-spine smoke harness.
-9. Paper order/fill persistence schema and sink.
-10. Paper order-event persistence consumer core.
-11. Paper Order Store deployable service (Card 12, PR #16).
+3. Pre-Trade Checker risk gate, reliability fixes, deployable service.
+4. Paper Execution Agent core and deployable service.
+5. Alpaca paper order submit/status/fill polling.
+6. Full local paper-spine smoke harness.
+7. Paper order/fill persistence schema, sink, consumer, deployable service.
+8. Reconciliation Agent core (Card 13, PR #18) and deployable service
+   (Card 14, PR #20 — recovered after PR #19 hit the KI-001 stacking trap).
+9. Live compose-stack smoke tool `shrap-spine-smoke` + runbook
+   (Card 15, PR #21). **Passed on the Dell 2026-07-06.**
 
 ## Open work
 
-Card 13 (Reconciliation Agent core) is the active card.
+- **Card 16 (PR #22):** Execution Agent pending-order re-polling — fixes the
+  root cause of KI-003 (status was checked exactly once per order). After
+  merge, run during market hours:
+  `docker compose exec paper-order-store shrap-spine-smoke --wait-fill --wait-reconciliation`
+- **Card 17:** ADR-0003 resolution (this PR) — direct Alpaca paper accepted
+  for the paper phase; NautilusTrader re-scoped as a live-capital /
+  advanced-execution gate.
+- **Card 18:** Research implementation begins — deterministic Regime
+  Classifier first.
 
 ## Local credentials policy
 
@@ -52,13 +52,5 @@ Alpaca paper credentials live only in local ignored `infra/.env`.
 
 ## Next recommended card
 
-Card 13 — Reconciliation Agent core.
-
-Acceptance shape:
-
-- Read Alpaca paper account/orders through the paper-only client.
-- Read persisted `trading.paper_order_events` through a narrow repository interface.
-- Compare expected broker order IDs/statuses.
-- Publish reconciliation completed/discrepancy events through ADR-0006.
-- Unit tests with fake broker and fake order repository.
-- No service packaging yet (that is Card 14).
+Card 18 — Regime Classifier, minimal statistical implementation
+(deterministic, no LLM), per `docs/agents/intelligence/regime-classifier.md`.

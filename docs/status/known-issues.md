@@ -1,12 +1,12 @@
 # Known issues
 
-**Last updated:** 2026-07-02
+**Last updated:** 2026-07-06
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
-**Status:** Known workflow hazard.
+**Status:** Known workflow hazard. Recurred with PR #19 (Card 14), recovered by PR #20.
 
-PR #10 was marked merged while its changes landed in the stacked base branch rather than `main`. PR #11 recovered the Card 8 changes onto `main`.
+PR #10 was marked merged while its changes landed in the stacked base branch rather than `main`. PR #11 recovered the Card 8 changes onto `main`. The same failure repeated with PR #19, recovered by PR #20. Prefer independent branches off `main` over stacking.
 
 **Mitigation:** After stacked PRs merge, verify main inclusion with:
 
@@ -18,19 +18,17 @@ Do not run live/deploy smoke until the feature commit is actually on `origin/mai
 
 ## KI-002 — NautilusTrader bridge is still unresolved
 
-**Status:** Open architectural decision.
+**Status:** Resolved 2026-07-06 by ADR-0003 (Accepted).
 
-The current Month 1 paper spine uses direct Alpaca paper order submission. Architecture docs still expect NautilusTrader as the execution interface. ADR-0003 remains the place to resolve bridge coverage.
-
-**Mitigation:** Add a focused ADR-0003 validation card after the paper service stack is running.
+Direct Alpaca paper access is the accepted broker interface for the paper phase. Broker credentials live only in the Execution Agent and Reconciliation Agent containers. NautilusTrader adoption is a gate triggered by live capital or by execution needs beyond market/day orders — see `docs/decisions/0003-nautilus-redis-bridge-coverage.md`.
 
 ## KI-003 — Fill event live path is not yet observed with a real fill
 
-**Status:** Partially verified.
+**Status:** Fix merged, live verification pending.
 
-Unit tests cover `execution.order.filled`; live Alpaca smoke observed `execution.order.status-updated` for an accepted order with `filled_qty=0`.
+Root cause found during Card 16: the Execution Agent checked order status exactly once, immediately after submission, so a fill landing later was never published. Pending-order re-polling (5s interval, publish on change) shipped in the Card 16 PR.
 
-**Mitigation:** Run a live paper fill during market hours or with an instrument/order type likely to fill in paper, then verify `execution.order.filled` and persistence.
+**Mitigation:** Run the Card 16 smoke during market hours: `docker compose exec paper-order-store shrap-spine-smoke --wait-fill --wait-reconciliation`. Close this issue when `order-filled`, `fill-persisted`, and `reconciliation` all pass.
 
 ## KI-004 — Paper order persistence consumer is not packaged yet
 
@@ -38,8 +36,8 @@ Unit tests cover `execution.order.filled`; live Alpaca smoke observed `execution
 
 ## KI-005 — Current position state and reconciliation do not exist yet
 
-**Status:** Not implemented.
+**Status:** Order-level reconciliation shipped (Cards 13–14); position state still deferred.
 
-`trading.paper_order_events` is an append-only order event trail, not current portfolio state.
+The Reconciliation Agent compares Alpaca paper orders against `trading.paper_order_events` on a 300s interval and publishes `operations.reconciliation-completed` / `-discrepancy`. Current-position derivation remains unimplemented; the order trail is still append-only history.
 
-**Mitigation:** Reconciliation Agent should compare Alpaca paper account/orders against persisted order events and produce discrepancy events before Research is started.
+**Mitigation:** Position-state derivation becomes its own card when the first Research strategy needs portfolio state, or before live capital — whichever comes first.
