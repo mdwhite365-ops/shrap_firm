@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 import httpx
@@ -158,6 +159,30 @@ def _order_status_stream(status: object) -> str:
     return STREAM_EXECUTION_ORDER_STATUS_UPDATED
 
 
+TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "cancelled", "expired", "rejected"})
+
+
+def is_terminal_order_status(status: object) -> bool:
+    """True when the broker will never change this order's status again."""
+
+    return str(status).lower() in TERMINAL_ORDER_STATUSES
+
+
+@dataclass(slots=True)
+class PendingOrder:
+    """A submitted order whose status is not yet terminal.
+
+    Kept in memory only. On restart the loop replays the submitted stream from
+    ``start_id`` and pending orders re-enter the watch set on their first
+    status check.
+    """
+
+    submitted_event: ReceivedEvent
+    broker_order_id: str
+    last_status: str
+    next_check_at: float
+
+
 async def process_order_status_event(
     redis: RedisStreamClient,
     broker: PaperBroker,
@@ -245,6 +270,88 @@ async def poll_once(
     return processed
 
 
+def _track_if_pending(
+    pending: dict[str, PendingOrder] | None,
+    event: ReceivedEvent,
+    status_event: PublishedEvent,
+    now: float,
+    poll_interval_seconds: float,
+) -> None:
+    """Add a non-terminal order to the pending watch set; drop a terminal one."""
+
+    if pending is None:
+        return
+    payload = status_event.envelope.payload or {}
+    broker_order_id = str(payload.get("broker_order_id", ""))
+    if not broker_order_id:
+        return
+    status = str(payload.get("status", ""))
+    if is_terminal_order_status(status):
+        pending.pop(broker_order_id, None)
+        return
+    pending[broker_order_id] = PendingOrder(
+        submitted_event=event,
+        broker_order_id=broker_order_id,
+        last_status=status,
+        next_check_at=now + poll_interval_seconds,
+    )
+
+
+async def repoll_pending_once(
+    redis: RedisStreamClient,
+    broker: PaperBroker,
+    pending: dict[str, PendingOrder],
+    now: float,
+    poll_interval_seconds: float,
+    produced_by: str = PRODUCED_BY,
+) -> int:
+    """Re-check pending orders that are due; publish only on status change.
+
+    This is what closes KI-003: without it a fill that lands after the single
+    post-submission status check is never observed. Publishing only on change
+    keeps the status stream and the order-event table free of no-op rows.
+    """
+
+    checked = 0
+    for broker_order_id, entry in list(pending.items()):
+        if entry.next_check_at > now:
+            continue
+        try:
+            broker_response = await broker.get_order(broker_order_id)
+        except Exception:
+            log.exception(
+                "execution_agent.repoll_failed",
+                broker_order_id=broker_order_id,
+            )
+            entry.next_check_at = now + poll_interval_seconds
+            continue
+        checked += 1
+        status = str(broker_response.get("status", ""))
+        if status.lower() != entry.last_status.lower():
+            payload = build_order_status_payload(entry.submitted_event, broker_response)
+            result = await EventPublisher(redis).publish(
+                stream=_order_status_stream(status),
+                produced_by=produced_by,
+                schema_version=SCHEMA_VERSION,
+                payload=payload,
+                correlation_id=entry.submitted_event.envelope.event_id,
+            )
+            log.info(
+                "execution_agent.pending_status_changed",
+                broker_order_id=broker_order_id,
+                previous_status=entry.last_status,
+                status=status,
+                status_event_id=result.envelope.event_id,
+                stream=result.stream,
+            )
+        if is_terminal_order_status(status):
+            del pending[broker_order_id]
+        else:
+            entry.last_status = status
+            entry.next_check_at = now + poll_interval_seconds
+    return checked
+
+
 async def poll_order_status_once(
     redis: RedisStreamClient,
     broker: PaperBroker,
@@ -252,6 +359,9 @@ async def poll_order_status_once(
     start_id: str,
     count: int,
     block_ms: int,
+    pending: dict[str, PendingOrder] | None = None,
+    poll_interval_seconds: float = 5.0,
+    now: float = 0.0,
 ) -> int:
     """Read submitted paper orders and publish current broker status/fill events."""
 
@@ -269,6 +379,7 @@ async def poll_order_status_once(
             result = await process_order_status_event(redis, broker, event)
             last_ids[event.stream] = event.redis_stream_id
             processed += 1
+            _track_if_pending(pending, event, result, now, poll_interval_seconds)
             log.info(
                 "execution_agent.order_status_published",
                 submitted_event_id=event.envelope.event_id,
@@ -294,11 +405,14 @@ async def run_loop(
     count: int = 100,
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
+    status_poll_interval_seconds: float = 5.0,
 ) -> None:
     """Run the paper Execution Agent loop until ``stop`` is set."""
 
+    loop = asyncio.get_running_loop()
     risk_last_ids: dict[str, str] = {}
     status_last_ids: dict[str, str] = {}
+    pending: dict[str, PendingOrder] = {}
     while not stop.is_set():
         try:
             submitted = await poll_once(
@@ -316,13 +430,25 @@ async def run_loop(
                 start_id=start_id,
                 count=count,
                 block_ms=block_ms,
+                pending=pending,
+                poll_interval_seconds=status_poll_interval_seconds,
+                now=loop.time(),
             )
-            processed = submitted + status_checked
+            repolled = await repoll_pending_once(
+                redis=redis,
+                broker=broker,
+                pending=pending,
+                now=loop.time(),
+                poll_interval_seconds=status_poll_interval_seconds,
+            )
+            processed = submitted + status_checked + repolled
             if processed:
                 log.info(
                     "execution_agent.batch",
                     submitted=submitted,
                     status_checked=status_checked,
+                    repolled=repolled,
+                    pending=len(pending),
                     risk_last_ids=dict(risk_last_ids),
                     status_last_ids=dict(status_last_ids),
                 )
@@ -342,6 +468,7 @@ async def run(
     count: int = 100,
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
+    status_poll_interval_seconds: float = 5.0,
 ) -> None:
     """Run the paper Execution Agent service until SIGINT/SIGTERM."""
 
@@ -372,6 +499,7 @@ async def run(
                 count=count,
                 block_ms=block_ms,
                 retry_delay_seconds=retry_delay_seconds,
+                status_poll_interval_seconds=status_poll_interval_seconds,
             )
         finally:
             await redis.aclose()
@@ -385,14 +513,18 @@ __all__ = [
     "STREAM_EXECUTION_ORDER_STATUS_UPDATED",
     "STREAM_EXECUTION_ORDER_SUBMITTED",
     "STREAM_RISK_APPROVED",
+    "TERMINAL_ORDER_STATUSES",
     "AlpacaPaperBroker",
+    "PendingOrder",
     "build_order_status_payload",
     "build_order_submitted_payload",
     "build_paper_order",
+    "is_terminal_order_status",
     "poll_once",
     "poll_order_status_once",
     "process_order_status_event",
     "process_risk_event",
+    "repoll_pending_once",
     "run",
     "run_loop",
 ]

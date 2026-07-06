@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     count: int = 100
     block_ms: int = 5000
     retry_delay_seconds: float = 1.0
+    status_poll_interval_seconds: float = 5.0
     log_level: str = "INFO"
 
     def alpaca_settings(self) -> AlpacaPaperSettings:
@@ -56,5 +57,6 @@ class Settings(BaseSettings):
             "count": self.count,
             "block_ms": self.block_ms,
             "retry_delay_seconds": self.retry_delay_seconds,
+            "status_poll_interval_seconds": self.status_poll_interval_seconds,
             "log_level": self.log_level,
         }
