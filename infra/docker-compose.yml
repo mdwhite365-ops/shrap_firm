@@ -12,11 +12,8 @@
 # stack goes via Tailscale + SSH tunnel (see docs/runbooks/dell-bootstrap.md).
 # Inter-container traffic uses the shrap_net bridge with service DNS names.
 #
-# This is substrate only. No agent code runs here. The first consumer will be
-# the Health Monitor agent (docs/agents/operations/health-monitor.md), which
-# ships in a separate compose file in a future commit.
-
-version: "3.8"
+# Substrate plus the deployed agent services (Operations, Risk and Compliance,
+# Trading Floor, Intelligence). Per-agent specs live in docs/agents/.
 
 networks:
   shrap_net:
@@ -137,7 +134,7 @@ services:
   # specifics; Prometheus+Grafana covers everything else.
   # -------------------------------------------------------------------------
   langfuse:
-    image: langfuse/langfuse:2-latest
+    image: langfuse/langfuse:2
     container_name: shrap_langfuse
     restart: unless-stopped
     depends_on:
