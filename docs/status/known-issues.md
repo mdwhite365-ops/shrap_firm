@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-07-06
+**Last updated:** 2026-07-06 (evening)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -41,3 +41,13 @@ Root cause found during Card 16: the Execution Agent checked order status exactl
 The Reconciliation Agent compares Alpaca paper orders against `trading.paper_order_events` on a 300s interval and publishes `operations.reconciliation-completed` / `-discrepancy`. Current-position derivation remains unimplemented; the order trail is still append-only history.
 
 **Mitigation:** Position-state derivation becomes its own card when the first Research strategy needs portfolio state, or before live capital — whichever comes first.
+
+## KI-006 — Agents replay full stream history on every restart
+
+**Status:** Made safe (PR #27); proper fix pending.
+
+Stream consumers (Execution Agent, Paper Order Store, Audit Logger) hold their offsets in memory and read from `start_id=0-0` on restart, replaying the entire history. This caused the 2026-07-06 incident: a container rebuild replayed an approved intent, Alpaca rejected the duplicate `client_order_id` (422), and the loop stalled forever on the poisoned event — blocking all subsequent orders until PR #27 taught it to skip duplicates and malformed events.
+
+Replay is now safe (duplicates dedupe broker-side, sinks dedupe on event ID) but wasteful, and the poison-skip pattern exists only in the Execution Agent — the other consumers still `break` without advancing on a failing event.
+
+**Mitigation:** Redis consumer groups with acknowledged, persisted offsets — the deferred Month-1 decision from the decision queue, now due as its own card. Apply the poison-skip pattern to the other consumers in the same card.
