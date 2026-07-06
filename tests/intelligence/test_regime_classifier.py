@@ -89,6 +89,33 @@ def test_default_profiles_classify_canonical_vectors() -> None:
     assert wartime.label == "wartime"
 
 
+def test_first_live_reading_2026_07_06_classifies_as_melt_up() -> None:
+    """Regression: the first live Dell reading (intel.regime_history).
+
+    An elevated-but-compressing-vol uptrend: vol_20d 0.180 fell in the crack
+    between the original melt-up ceiling (0.16) and crisis-recovery floor
+    (0.18) despite 4/4 melt-up soft conditions passing. Calibration v0.1
+    moved the melt-up ceiling to 0.18 for the IEX proxy's hot vol reads and
+    the crisis-recovery floor to 0.20 to keep the bands disjoint.
+    """
+
+    live = _features(
+        vol_20d=0.1797160628600809,
+        vol_trend=0.87467631803015,
+        trend_50_200=0.06563858893263386,
+        dispersion_20d=0.0398007999097633,
+        pct_above_200dma=0.08459915253962036,
+        credit_hyg_tlt_20d=0.002881922923068214,
+        breadth_above_200dma=0.5555555555555556,
+    )
+    result = classify(live, DEFAULT_PROFILES, ClassifierState(), debounce_m=1)
+    assert result.label == "late-cycle-melt-up"
+    assert result.confidence == 1.0  # 4/4 soft conditions
+    assert result.sizing_band == (0.75, 1.0)
+    # Exactly one profile qualifies — no boundary fight with crisis-recovery.
+    assert [score.name for score in result.scores if score.qualifies] == ["late-cycle-melt-up"]
+
+
 def test_all_features_missing_yields_unknown_with_conservative_band() -> None:
     result = classify(_features(), DEFAULT_PROFILES, ClassifierState(label="wartime"))
     # Unknown challenges the prior label but must survive the debounce window.

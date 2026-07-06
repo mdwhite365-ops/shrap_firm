@@ -5,10 +5,15 @@ conditions pass and at least ``min_soft`` soft conditions pass (per spec:
 rule-based, not learned). A condition whose feature is missing does not pass
 — conservative by construction.
 
-CALIBRATION STATUS: the numeric thresholds and sizing bands below are v0
-placeholders derived from the regime cards' stated ranges, translated onto
-the proxy feature set (see features.py). Mike owns calibration; changing a
-threshold is a PR against this file referencing the regime card.
+CALIBRATION STATUS: v0.1. Thresholds were first derived from the regime
+cards' stated ranges, then adjusted once against the first live reading
+(2026-07-06, persisted in intel.regime_history and encoded as a regression
+test in tests/intelligence/test_regime_classifier.py). Known systematic
+bias: the vol features come from Alpaca's free IEX feed, which is thinner
+than SIP and reads realized vol above the SPX figures the cards were
+written against — vol thresholds here sit higher than the cards' bands to
+compensate. Mike owns calibration; changing a threshold is a PR against
+this file referencing the regime card and the observed feature evidence.
 """
 
 from __future__ import annotations
@@ -100,10 +105,12 @@ def score_profiles(
 DEFAULT_PROFILES: tuple[RegimeProfile, ...] = (
     RegimeProfile(
         # docs/regimes/late-cycle-melt-up.md: suppressed vol, positive trend,
-        # narrowing breadth carried by few names.
+        # narrowing breadth carried by few names. Card band is 8-14% SPX
+        # realized; the IEX proxy reads hot (2026-07-06 live: 0.180 in an
+        # otherwise textbook melt-up vector), so the ceiling sits at 0.18.
         name="late-cycle-melt-up",
         hard=(
-            Condition("vol_20d", hi=0.16),
+            Condition("vol_20d", hi=0.18),
             Condition("trend_50_200", lo=0.0),
         ),
         soft=(
@@ -117,10 +124,12 @@ DEFAULT_PROFILES: tuple[RegimeProfile, ...] = (
     ),
     RegimeProfile(
         # docs/regimes/crisis-recovery.md: elevated but compressing vol,
-        # trend repairing off a low base, breadth recovering.
+        # trend repairing off a low base, breadth recovering. Floor raised to
+        # 0.20 so the melt-up ceiling (0.18) and this floor do not overlap
+        # and fight at the boundary.
         name="crisis-recovery",
         hard=(
-            Condition("vol_20d", lo=0.18),
+            Condition("vol_20d", lo=0.20),
             Condition("vol_trend", hi=1.0),
         ),
         soft=(
