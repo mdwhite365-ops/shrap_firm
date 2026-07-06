@@ -464,3 +464,34 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Regime Classifier - Intelligence Department, statistical layer only.
+  # Syncs daily bars (Alpaca data API, IEX feed) into market_data.ohlcv_1d
+  # and publishes intel.regime.tick / .changed / .sizing-modifier events.
+  # The LLM historical-analog layer is deferred (Month 3, feature flag).
+  # -------------------------------------------------------------------------
+  regime-classifier:
+    build:
+      context: ../
+      dockerfile: infra/regime-classifier.Dockerfile
+    container_name: shrap_regime_classifier
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REGIME_CLASSIFIER_REDIS_URL: "redis://redis:6379/0"
+      REGIME_CLASSIFIER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      REGIME_CLASSIFIER_ALPACA_API_KEY: "${ALPACA_API_KEY}"
+      REGIME_CLASSIFIER_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      REGIME_CLASSIFIER_SYMBOLS: "${REGIME_CLASSIFIER_SYMBOLS:-SPY,QQQ,IWM,HYG,TLT,AAPL,NVDA,TSLA,LMT}"
+      REGIME_CLASSIFIER_INTERVAL_SECONDS: "300"
+      REGIME_CLASSIFIER_DEBOUNCE_M: "3"
+      REGIME_CLASSIFIER_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
