@@ -147,7 +147,14 @@ async def test_poll_once_submits_approved_paper_order_and_publishes_submitted_ev
 
 
 @pytest.mark.asyncio
-async def test_poll_once_refuses_non_paper_approved_intent_without_advancing_offset() -> None:
+async def test_poll_once_refuses_non_paper_approved_intent_and_skips_past_it() -> None:
+    """A non-paper intent is refused and never reaches the broker.
+
+    The refusal must SKIP the event (advance the offset), not retry it: under
+    the pre-2026-07-06 behavior one refused event stalled the loop forever and
+    blocked every subsequent legitimate paper intent (poison-event stall).
+    """
+
     from shrap.trading_floor.execution_agent import STREAM_RISK_APPROVED, poll_once
 
     redis = FakeRedis()
@@ -178,7 +185,8 @@ async def test_poll_once_refuses_non_paper_approved_intent_without_advancing_off
 
     assert processed == 0
     assert broker.orders == []
-    assert last_ids == {STREAM_RISK_APPROVED: "0-0"}
+    # Refused AND skipped: offset advanced past the poison event.
+    assert last_ids == {STREAM_RISK_APPROVED: "1780128300001-0"}
     assert [stream for stream, _ in redis.calls] == [STREAM_RISK_APPROVED]
 
 

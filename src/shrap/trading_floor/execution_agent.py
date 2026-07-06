@@ -70,6 +70,29 @@ def _install_signal_handlers(stop: asyncio.Event) -> None:
             pass
 
 
+def is_duplicate_order_error(exc: Exception) -> bool:
+    """True when Alpaca rejected the order because client_order_id already exists.
+
+    Alpaca returns 422 with a message like 'client order id must be unique'.
+    Because client_order_id is the risk event ID, this only happens when the
+    same approved intent is replayed (e.g. restart with start_id 0-0) — the
+    order was already submitted, so the replay is safely skippable.
+    """
+
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return False
+    if exc.response.status_code != 422:
+        return False
+    try:
+        body = exc.response.json()
+    except Exception:
+        return False
+    if not isinstance(body, dict):
+        return False
+    message = str(body.get("message", "")).lower().replace("_", " ")
+    return "client order id" in message
+
+
 def build_paper_order(event: ReceivedEvent) -> dict[str, Any]:
     """Build the broker order payload from an approved risk event."""
 
@@ -259,7 +282,33 @@ async def poll_once(
                 execution_event_id=result.envelope.event_id,
                 stream=result.stream,
             )
-        except Exception:
+        except ValueError:
+            # Malformed event: permanent for this event. Skip it or the loop
+            # stalls forever on a poison message and never reaches new intents.
+            log.exception(
+                "execution_agent.risk_event_invalid_skipped",
+                stream=event.stream,
+                redis_stream_id=event.redis_stream_id,
+                risk_event_id=event.envelope.event_id,
+            )
+            last_ids[event.stream] = event.redis_stream_id
+            continue
+        except Exception as exc:
+            if is_duplicate_order_error(exc):
+                # Restart replay: this intent's order already exists at the
+                # broker (client_order_id is the risk event ID, so replays are
+                # deduplicated broker-side). Reconciliation covers any order
+                # whose submitted event never persisted.
+                log.warning(
+                    "execution_agent.duplicate_order_skipped",
+                    stream=event.stream,
+                    redis_stream_id=event.redis_stream_id,
+                    risk_event_id=event.envelope.event_id,
+                )
+                last_ids[event.stream] = event.redis_stream_id
+                continue
+            # Systemic error (broker down, bad credentials, network): stop the
+            # batch WITHOUT advancing so the same event retries next cycle.
             log.exception(
                 "execution_agent.risk_event_failed",
                 stream=event.stream,
@@ -386,6 +435,17 @@ async def poll_order_status_once(
                 status_event_id=result.envelope.event_id,
                 stream=result.stream,
             )
+        except ValueError:
+            # Malformed submitted event: permanent for this event; skip it so
+            # the status loop cannot stall on a poison message.
+            log.exception(
+                "execution_agent.order_status_invalid_skipped",
+                stream=event.stream,
+                redis_stream_id=event.redis_stream_id,
+                submitted_event_id=event.envelope.event_id,
+            )
+            last_ids[event.stream] = event.redis_stream_id
+            continue
         except Exception:
             log.exception(
                 "execution_agent.order_status_failed",
@@ -519,6 +579,7 @@ __all__ = [
     "build_order_status_payload",
     "build_order_submitted_payload",
     "build_paper_order",
+    "is_duplicate_order_error",
     "is_terminal_order_status",
     "poll_once",
     "poll_order_status_once",
