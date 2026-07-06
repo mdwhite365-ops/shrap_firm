@@ -58,6 +58,7 @@ def test_settings_redacted_output_is_log_safe() -> None:
         "count": 100,
         "block_ms": 5000,
         "retry_delay_seconds": 1.0,
+        "status_poll_interval_seconds": 5.0,
         "log_level": "INFO",
     }
 
