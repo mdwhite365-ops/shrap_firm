@@ -66,9 +66,13 @@ closes KI-003), `fill-persisted` (the fill row in
 `operations.reconciliation-completed` pass reports `clean=true`; default
 timeout 420s covers the agent's 300s interval).
 
-**Note:** the fill check requires the Execution Agent's pending-order
-re-polling (Card 16 PR). Without it, a fill that lands after the agent's
-single status check is never published.
+**Notes:**
+
+- The fill check depends on the Execution Agent's pending-order re-polling
+  (merged in PR #22) — deployed images must include it.
+- The reconciliation wait can run up to 7 minutes. Run the smoke inside
+  `tmux` (`sudo tmux new -s smoke`) so an SSH disconnect does not kill it —
+  this has happened twice.
 
 ## Options
 

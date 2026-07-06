@@ -59,37 +59,31 @@ ssh mike@shrap-research           # Ryzen (WSL2 Ubuntu)
 
 ## 3. Dell Precision 5820 — Production Operations
 
-The Dell runs TrueNAS SCALE. Shrap's production services run as Docker containers managed by a custom Docker Compose file — not via the TrueNAS Apps catalog. The Apps catalog uses Kubernetes under the hood and introduces abstraction layers that complicate operational control and git integration. The Compose file lives under `/mnt/Archive/<dataset>/compose/` where it remains under git control and is directly editable without going through the TrueNAS UI.
+The Dell runs TrueNAS SCALE. Shrap's production services run as Docker containers managed by the repo's Docker Compose file — not via the TrueNAS Apps catalog. The Apps catalog uses Kubernetes under the hood and introduces abstraction layers that complicate operational control and git integration.
+
+**As deployed (updated 2026-07-06 after first production deployment):** the production checkout is a full clone of the repo at `/mnt/Archive/shrap/shrap_firm`, and the Compose file is `infra/docker-compose.yml` inside it. Deploys are `git pull` + `docker compose up -d --build` from `infra/` — the repo is the deployment spec.
 
 **Host OS and access**
 - TrueNAS SCALE (Linux-based, Docker-native)
 - SSH: `truenas_admin@shrap-prod` (Tailscale) or `truenas_admin@192.168.1.168` (local network)
-- Docker is available directly in the TrueNAS SCALE shell
-- Compose file: `/mnt/Archive/<dataset>/compose/docker-compose.yml` — the canonical production deployment descriptor
+- Docker is available directly in the TrueNAS SCALE shell (`sudo docker compose ...`)
+- Compose file: `/mnt/Archive/shrap/shrap_firm/infra/docker-compose.yml` — the canonical production deployment descriptor
+- Secrets: `/mnt/Archive/shrap/shrap_firm/infra/.env` (gitignored; never printed or committed)
 
 **Volume layout**
 
-Each major service has its own TrueNAS dataset to allow independent snapshot and backup policies:
-
-| Dataset | Contents |
-|---|---|
-| `Archive/postgres` | PostgreSQL data directory |
-| `Archive/redis` | Redis AOF and RDB files |
-| `Archive/qdrant` | Qdrant storage |
-| `Archive/langfuse` | Langfuse data |
-| `Archive/ollama` | Ollama model cache |
-| `Archive/compose` | Docker Compose file and supporting config |
-| `Archive/backups` | Logical backups (separate from live data) |
+As deployed, service data lives in **Docker named volumes** (`redis_data`, `pg_data`, `qdrant_storage`, `langfuse_pg_data`, `prom_data`, `grafana_data`, `ollama_models`) on the `Archive` pool, not in per-service ZFS datasets as this document originally planned. Consequence: the per-dataset snapshot policies described in section 5 do not apply as written — snapshots must cover the dataset holding Docker's volume storage, and the PostgreSQL logical dump (section 5) is currently the primary point-in-time backup. Revisit before real-money operation; tracked as an open item.
 
 **Container startup sequence**
 
-The Compose file encodes dependency order via `depends_on`, but on manual restart, verify services come up in this sequence:
+The Compose file encodes dependency order via `depends_on` health checks:
 
 1. PostgreSQL and Redis — state backends; everything else depends on them
-2. Qdrant and Langfuse — secondary data services
+2. Qdrant, Langfuse (+ its dedicated `langfuse-db`), Prometheus, Grafana, exporters
 3. Ollama — LLM serving
-4. NautilusTrader — broker connection; must be up before departments begin trading
-5. Department agent containers — consume from Redis Streams once all upstreams are ready
+4. Agent services — Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent (broker-facing), Paper Order Store, Reconciliation Agent (broker-facing), Regime Classifier
+
+(NautilusTrader is not deployed during the paper phase — direct Alpaca paper access per ADR-0003.)
 
 **Ollama on Dell**
 
