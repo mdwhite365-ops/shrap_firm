@@ -1,13 +1,13 @@
 # Paper spine roadmap tree
 
-**Last updated:** 2026-07-02
+**Last updated:** 2026-07-06
 **Principle:** Finish the paper-trading spine before Research implementation.
 
 ## Tree outline
 
 ```text
 Shrap paper-trading spine
-├── 0. Foundations [mostly done]
+├── 0. Foundations [done]
 │   ├── ADR-0006 event envelope [done]
 │   ├── Redis Streams helpers [done]
 │   ├── Audit Logger -> ops.audit_events [done]
@@ -24,36 +24,37 @@ Shrap paper-trading spine
 │   ├── Execution Agent deployable service [done]
 │   ├── Alpaca paper order submit [done]
 │   ├── Alpaca paper status/fill polling [done]
-│   └── Live paper smoke [partial: accepted/status observed, fill not live-observed]
+│   ├── Pending-order re-polling until terminal [Card 16, PR #22]
+│   └── Live fill observed [pending market-hours Card 16 smoke]
 │
-├── 3. Persistence path [mostly done]
+├── 3. Persistence path [done]
 │   ├── Paper order event schema/sink [done, PR #13]
 │   ├── Paper order event consumer core [done, PR #14]
 │   ├── Paper Order Store deployable service [done, PR #16]
-│   └── Full service-stack persistence smoke [pending Card 15]
+│   └── Full service-stack persistence smoke [done, Card 15 passed 2026-07-06]
 │
-├── 4. Reconciliation path [not started]
-│   ├── Alpaca paper account/order snapshot client
-│   ├── Compare broker orders vs trading.paper_order_events
-│   ├── Emit operations.reconciliation-completed
-│   ├── Emit operations.reconciliation-discrepancy
-│   └── Later: derive/check current positions
+├── 4. Reconciliation path [done at order level]
+│   ├── Alpaca paper account/order snapshot client [done, PR #18]
+│   ├── Compare broker orders vs trading.paper_order_events [done, PR #18]
+│   ├── Emit operations.reconciliation-completed [done, PR #18]
+│   ├── Emit operations.reconciliation-discrepancy [done, PR #18]
+│   ├── Deployable service [done, PR #20]
+│   └── Later: derive/check current positions [deferred, see KI-005]
 │
-├── 5. Operational closure [not started]
-│   ├── Full Docker Compose paper-spine smoke
-│   ├── Market-hours live fill smoke
-│   ├── Audit trail verification across all streams
-│   ├── State Manager status files from events
-│   └── Daily briefing input readiness
+├── 5. Operational closure [mostly done]
+│   ├── Full Docker Compose paper-spine smoke [done, Card 15 passed 2026-07-06]
+│   ├── Market-hours live fill smoke [pending: Card 16 merge + market hours]
+│   ├── Audit trail verification across all streams [done, part of Card 15 smoke]
+│   ├── State Manager status files from events [deferred to post-Research]
+│   └── Daily briefing input readiness [deferred to Reporting implementation]
 │
-├── 6. Architecture decision closure [not started]
-│   ├── ADR-0003 NautilusTrader bridge coverage validation
-│   ├── Decide direct-Alpaca Month 1 exception vs immediate Nautilus bridge
-│   ├── Document broker isolation implications
-│   └── Schedule bridge implementation if required
+├── 6. Architecture decision closure [done]
+│   ├── ADR-0003 decided: direct Alpaca accepted for paper phase [Card 17]
+│   ├── Broker isolation restated: credentials only in broker-facing agents [ADR-0003]
+│   └── NautilusTrader re-scoped as live-capital / advanced-execution gate [ADR-0003]
 │
-└── 7. Research unlock [blocked until 3-6 are acceptable]
-    ├── Regime Classifier minimal statistical implementation
+└── 7. Research unlock [OPEN — Mike accepted spine status 2026-07-06]
+    ├── Regime Classifier minimal statistical implementation [Card 18, in progress]
     ├── Strategy registry / librarian schema
     ├── Hypothesis Generator seed path
     ├── Strategy Evaluator minimal backtest harness
