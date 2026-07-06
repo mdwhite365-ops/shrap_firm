@@ -5,36 +5,27 @@ This is **Shrap**, a self-developing multi-agent trading firm. The repo name is 
 **Read `docs/00-vision.md` first.** Everything in this project flows from that document. Do not propose changes that conflict with the vision without flagging the conflict explicitly.
 
 ## Current phase
-**Phase 0 → Phase 1 transition: foundational docs complete; substrate code landing.** The foundational doc set is drafted and awaiting Mike's review. First code now lives at `src/shrap/` (Python package `shrap`). Health Monitor is the first agent slated for implementation under `src/shrap/agents/operations/health_monitor/`.
+**Phase 1: implementation.** The paper-trading spine is deployed on the Dell and verified end to end via `shrap-spine-smoke` (Card 15 passed 2026-07-06). Deployed services: Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent, Paper Order Store, Reconciliation Agent, and the Regime Classifier (first Research-unlock agent, statistical layer only). Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike reviews and merges; never stack PRs — see KI-001). Ground truth for what's next: `docs/status/current-sprint.md` and `docs/roadmap/paper-spine-tree.md`.
 
 ### Python project conventions
 Standard PEP 621 / hatchling layout, single `src/shrap/` package. Tooling: **ruff** (lint + format, line length 100, py312 target), **pytest** + **pytest-asyncio** (auto mode), **mypy --strict** scoped to `src/shrap/`, **pre-commit** wiring all three plus YAML/whitespace hygiene. Runtime deps: `redis`, `httpx`, `structlog`, `pydantic`, `python-ulid`. Boring beats clever — no exotic tooling. See `pyproject.toml` and `Makefile` (`make all` = install + lint + typecheck + test).
 
-## Foundational doc set (all v0.1 drafts, awaiting Mike's review)
-1. `docs/00-vision.md` — DONE
-2. `docs/02-architecture.md` — DONE (three open questions resolved into ADRs 0004–0006; one remaining: ADR-0003 Nautilus-Redis bridge)
-3. `docs/03-hardware.md` — DONE
-4. `docs/agents/README.md` + `docs/agents/_template.md` — DONE
-5. `docs/regimes/README.md` + `_template.md` + seed profiles (wartime, stagflation, crisis-recovery, late-cycle-melt-up) — DONE
-6. `docs/universe/README.md` + `_template.md` + seed profiles (SPY, QQQ, TSLA, NVDA, AAPL, LMT) — DONE; **50-name list is a draft proposal requiring Mike's lock-in**
-7. `docs/01-roadmap.md` — DONE
-8. `docs/infrastructure/llm-routing.md` — DONE
-9. Seed agent specs — DONE (regime-classifier, hypothesis-generator, strategy-evaluator, decision-maker, risk-officer, implementation-agent, health-monitor)
-10. `docs/post-launch.md` — DONE
+## Foundational doc set (v0.1, complete)
+All ten foundational docs are drafted: vision, architecture (all open questions resolved into ADRs 0001–0006; ADR-0003 decided 2026-07-06), hardware, agents catalog + seed specs, regimes, universe, roadmap, LLM routing, post-launch. Living status lives in `docs/status/`; decisions in `docs/decisions/`.
 
-## Mike's review queue (before Phase 1 begins)
+## Mike's review queue (still open)
 - Universe lock-in: confirm or revise the proposed 50-name list in `docs/universe/README.md`
-- Resolve open agent-boundary questions surfaced during spec drafting (see "Open Questions" sections in each agent spec)
-- Resolve ADR-0003 (Nautilus-Redis bridge coverage) during Trading Floor spec deep-dive
-- Approve `docs/01-roadmap.md` month-by-month milestones
+- Regime Classifier calibration ownership: thresholds/sizing bands in `src/shrap/intelligence/regime/profiles.py` are v0.1 single-day calibrations; the spec's open questions (debounce M, epsilon, band derivation) are implemented as defaults pending Mike's ruling
+- Open agent-boundary questions in the remaining unimplemented agent specs
 
 ## How to work with me
-- **Read existing docs before proposing changes.** Especially `docs/00-vision.md`.
+- **Read existing docs before proposing changes.** Especially `docs/00-vision.md` and `docs/status/current-sprint.md`.
 - **Match the style of existing docs.** Vision doc sets the tone: clear prose, honest probability framing, principled reasoning, no marketing language.
 - **Surface uncertainty.** Ask before making architectural decisions. Don't guess on direction.
-- **Don't write code yet.** We're in docs phase.
+- **One card per PR.** Branch `phase1/<card-name>` off `main`; Mike merges. Decision-carrying PRs (ADRs, calibrations) must say "merging this = accepting X" in the body. Never stack PRs (KI-001).
 - **Drift requires updating the spec, not the code.** When implementation reveals a spec is wrong, update the spec first.
-- **Commit messages:** `docs: ...` for doc work, `chore: ...` for setup, `feat: ...` later for code.
+- **Paper only. No real-money execution.** Broker credentials live only in `infra/.env` (gitignored) and only in broker-facing agent containers (ADR-0003). Never print, commit, or paste them.
+- **Commit messages:** `docs: ...` for doc work, `chore: ...` for setup, `feat: ...`/`fix: ...`/`test: ...` for code.
 
 ## Key project constraints
 - 4-month sprint (May–Aug 2026), classes start after
@@ -44,15 +35,10 @@ Standard PEP 621 / hatchling layout, single `src/shrap/` package. Tooling: **ruf
 - Local-first long-term, cloud LLMs as scaffolding
 - Hardware: Dell 5820 (TrueNAS, prod), Ryzen 7800X + 4070 Super (heavy inference), MacBook M4 24GB (dev/mobile)
 
-## Tooling stack (planned)
-- LangGraph for agent orchestration
-- OpenHands SDK for development department
-- NautilusTrader for execution
-- VectorBT PRO for backtesting
-- Mem0 for agent memory
-- Qdrant for semantic search
-- Langfuse for observability
-- Ollama for local LLMs
+## Tooling stack
+**In production now:** Redis Streams (ADR-0001/0006 event bus), PostgreSQL + TimescaleDB, Prometheus + Grafana (ADR-0004), Langfuse, Qdrant, Ollama, Docker Compose on TrueNAS SCALE, direct Alpaca paper client (ADR-0003 — paper phase). Agents are plain asyncio service loops, not LangGraph, so far.
+
+**Planned / gated:** NautilusTrader (gate: live capital or execution needs beyond market/day orders, per ADR-0003), LangGraph (when an agent actually needs multi-node orchestration), OpenHands SDK (Development Department), VectorBT PRO (Strategy Evaluator), Mem0 (agent memory).
 
 ## Operating principles (from vision)
 1. Honest accounting first, optimization later

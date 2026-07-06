@@ -3,10 +3,49 @@
 **Department:** Intelligence (moved from Research per ADR-0007)
 **LLM tier:** Hybrid — statistical layer is `no-llm` (deterministic); historical-analog layer is `cloud-default` with planned migration to `local-classification`. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
-**Status:** Draft
-**Date:** 2026-05-29
+**Status:** Statistical layer implemented (2026-07-06); analog layer deferred
+**Date:** 2026-05-29 (spec) / 2026-07-06 (implementation status)
 **Author:** Mike White
 **Version:** 0.1 (draft)
+
+## Implementation status (2026-07-06)
+
+The statistical layer shipped in PRs #24–26 (`src/shrap/intelligence/regime/`)
+and is deployed on the Dell as `shrap-regime-classifier`. It produced its
+first debounced transition (`unknown → crisis-recovery`) the same day. The
+implementation deviates from this spec in the following ways — per operating
+principle 7, recorded here rather than silently drifting:
+
+- **No LangGraph.** The agent is a plain asyncio service loop like the other
+  deployed agents. The node structure below remains the target shape if/when
+  multi-node orchestration is actually needed.
+- **Interval trigger, not a market-hours schedule.** Runs every
+  `REGIME_CLASSIFIER_INTERVAL_SECONDS` (default 300s) around the clock. No
+  18:00 ET snapshot slot, no `intel.macro.updated` / `ops.health.degraded` /
+  `intel.regime.classify.request` subscriptions yet.
+- **Proxy feature set.** The spec's inputs (`market_data.breadth`,
+  `market_data.term_structure`, VIX/MOVE/DXY) do not exist; Alpaca's free IEX
+  feed has no index data. The implemented 7-feature vector uses realized-vol
+  and ETF-ratio proxies, documented in `docs/regimes/_features.md` with
+  formulas in `src/shrap/intelligence/regime/features.py`. Market data is
+  self-ingested into `market_data.ohlcv_1d` each run.
+- **Profiles in code, not parsed from cards.** Thresholds and sizing bands
+  live in `src/shrap/intelligence/regime/profiles.py` (calibration v0.1,
+  single-day live evidence, Mike-owned). Regime-card checksum reload is not
+  implemented.
+- **State from PostgreSQL, not Redis.** No `regime:current` Redis hash; the
+  restart state (label, leader, streak) is re-derived from the latest
+  `intel.regime_history` row. Tables documented in
+  `docs/data/market-data-and-regime-schema.md`.
+- **Streams implemented:** `intel.regime.tick`, `intel.regime.changed`,
+  `intel.regime.sizing-modifier` (with `analogs: []`). Not yet:
+  `intel.regime.analog` and the legacy `research.regime.*` aliases (no
+  consumer ever existed for the aliases; they are dropped rather than aliased).
+- **Analog LLM layer absent** (Month 3 per sprint scope). Confidence is the
+  soft-condition hit ratio, exactly as the spec's honest framing intends.
+- **Open questions implemented as defaults** pending Mike's ruling:
+  debounce M=3, tie epsilon=0.05, hand-authored per-regime bands with
+  unknown → `[0.25, 0.5]`.
 
 ## Purpose
 
