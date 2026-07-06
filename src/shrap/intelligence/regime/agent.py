@@ -225,6 +225,12 @@ async def run_once(
         streak=result.streak,
         missing_features=result.missing_features,
         bars_synced=synced,
+        features=features_payload,
+        profile_scores={
+            score.name: ("PASS" if score.qualifies else "fail")
+            + f" {score.soft_hits}/{score.soft_total} soft"
+            for score in result.scores
+        },
     )
     return result
 
