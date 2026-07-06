@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from shrap.intelligence.regime.classifier import ClassifierState, classify
 from shrap.intelligence.regime.features import FeatureVector
 from shrap.intelligence.regime.profiles import (
@@ -89,31 +91,58 @@ def test_default_profiles_classify_canonical_vectors() -> None:
     assert wartime.label == "wartime"
 
 
-def test_first_live_reading_2026_07_06_classifies_as_melt_up() -> None:
-    """Regression: the first live Dell reading (intel.regime_history).
+LIVE_2026_07_06_MORNING = _features(
+    # First live Dell reading, intel.regime_history 18:44 UTC.
+    vol_20d=0.1797160628600809,
+    vol_trend=0.87467631803015,
+    trend_50_200=0.06563858893263386,
+    dispersion_20d=0.0398007999097633,
+    pct_above_200dma=0.08459915253962036,
+    credit_hyg_tlt_20d=0.002881922923068214,
+    breadth_above_200dma=0.5555555555555556,
+)
 
-    An elevated-but-compressing-vol uptrend: vol_20d 0.180 fell in the crack
-    between the original melt-up ceiling (0.16) and crisis-recovery floor
-    (0.18) despite 4/4 melt-up soft conditions passing. Calibration v0.1
-    moved the melt-up ceiling to 0.18 for the IEX proxy's hot vol reads and
-    the crisis-recovery floor to 0.20 to keep the bands disjoint.
+
+def test_live_reading_2026_07_06_below_boundary_classifies_as_melt_up() -> None:
+    """Regression: vol_20d 0.180 in an otherwise textbook melt-up vector.
+
+    Under the original ceiling (0.16) this fell in a threshold crack and
+    produced unknown despite 4/4 melt-up soft conditions. Calibration v0.1
+    moved the melt-up ceiling to 0.18 for the IEX proxy's hot vol reads.
     """
 
-    live = _features(
-        vol_20d=0.1797160628600809,
-        vol_trend=0.87467631803015,
-        trend_50_200=0.06563858893263386,
-        dispersion_20d=0.0398007999097633,
-        pct_above_200dma=0.08459915253962036,
-        credit_hyg_tlt_20d=0.002881922923068214,
-        breadth_above_200dma=0.5555555555555556,
-    )
-    result = classify(live, DEFAULT_PROFILES, ClassifierState(), debounce_m=1)
+    result = classify(LIVE_2026_07_06_MORNING, DEFAULT_PROFILES, ClassifierState(), debounce_m=1)
     assert result.label == "late-cycle-melt-up"
     assert result.confidence == 1.0  # 4/4 soft conditions
     assert result.sizing_band == (0.75, 1.0)
-    # Exactly one profile qualifies — no boundary fight with crisis-recovery.
+    # Below the boundary, exactly one profile qualifies.
     assert [score.name for score in result.scores if score.qualifies] == ["late-cycle-melt-up"]
+
+
+def test_live_boundary_crossing_2026_07_06_classifies_as_crisis_recovery() -> None:
+    """Regression: the first live regime.changed event (19:04 UTC).
+
+    Intraday, vol_20d drifted just above 0.18 and the deployed classifier
+    debounced unknown -> crisis-recovery (2/3 soft, confidence 0.67). The
+    melt-up ceiling and crisis-recovery floor adjoin at 0.18 so the market
+    trading at that boundary always has a label; flapping is damped by the
+    debounce window and hysteresis, not by threshold spacing.
+    """
+
+    crossed = _features(
+        vol_20d=0.181,  # just above the boundary
+        vol_trend=0.88,
+        trend_50_200=0.066,
+        dispersion_20d=0.040,
+        pct_above_200dma=0.085,  # fails crisis soft (<= 0.05) -> 2/3 soft
+        credit_hyg_tlt_20d=0.003,
+        breadth_above_200dma=0.556,
+    )
+    result = classify(crossed, DEFAULT_PROFILES, ClassifierState(), debounce_m=1)
+    assert result.label == "crisis-recovery"
+    assert result.confidence == pytest.approx(2 / 3)
+    # Above the boundary, melt-up's hard ceiling fails — one qualifier again.
+    assert [score.name for score in result.scores if score.qualifies] == ["crisis-recovery"]
 
 
 def test_all_features_missing_yields_unknown_with_conservative_band() -> None:

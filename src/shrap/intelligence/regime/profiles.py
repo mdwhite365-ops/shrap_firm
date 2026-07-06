@@ -124,12 +124,15 @@ DEFAULT_PROFILES: tuple[RegimeProfile, ...] = (
     ),
     RegimeProfile(
         # docs/regimes/crisis-recovery.md: elevated but compressing vol,
-        # trend repairing off a low base, breadth recovering. Floor raised to
-        # 0.20 so the melt-up ceiling (0.18) and this floor do not overlap
-        # and fight at the boundary.
+        # trend repairing off a low base, breadth recovering. The floor
+        # adjoins the melt-up ceiling at 0.18 deliberately: live evidence
+        # (2026-07-06, the first regime.changed event) showed the market
+        # trading exactly at that boundary, so a gap there would yield
+        # unknown in a market both cards nearly describe. Boundary flapping
+        # is damped by the debounce window and hysteresis, not by spacing.
         name="crisis-recovery",
         hard=(
-            Condition("vol_20d", lo=0.20),
+            Condition("vol_20d", lo=0.18),
             Condition("vol_trend", hi=1.0),
         ),
         soft=(
