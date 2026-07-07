@@ -35,6 +35,10 @@ class OrderStateRepository(Protocol):
     async def latest_order_states(self, broker: str) -> Sequence[StoredOrderState]: ...
 
 
+class AccountSnapshotSink(Protocol):
+    async def record(self, event_id: str, broker: str, account: dict[str, Any]) -> None: ...
+
+
 class Publisher(Protocol):
     async def publish(
         self,
@@ -53,6 +57,7 @@ async def reconcile_once(
     produced_by: str = DEFAULT_PRODUCED_BY,
     broker: str = DEFAULT_BROKER,
     correlation_id: str | None = None,
+    snapshot_sink: AccountSnapshotSink | None = None,
 ) -> ReconciliationReport:
     """Run one reconciliation pass and publish its outcome.
 
@@ -94,6 +99,16 @@ async def reconcile_once(
             broker_status=discrepancy.broker_status,
         )
 
+    account_summary = {
+        "status": _optional_str(account.get("status")),
+        "currency": _optional_str(account.get("currency")),
+        "cash": _optional_str(account.get("cash")),
+        "equity": _optional_str(account.get("equity")),
+        "buying_power": _optional_str(account.get("buying_power")),
+        "portfolio_value": _optional_str(account.get("portfolio_value")),
+    }
+    if snapshot_sink is not None:
+        await snapshot_sink.record(run_id, broker, account)
     await publisher.publish(
         stream=STREAM_RECONCILIATION_COMPLETED,
         produced_by=produced_by,
@@ -101,6 +116,7 @@ async def reconcile_once(
         payload={
             "broker": broker,
             "account_status": str(account.get("status", "")),
+            "account": account_summary,
             "stored_orders": report.stored_orders,
             "broker_orders": report.broker_orders,
             "matched": report.matched,
@@ -119,6 +135,12 @@ async def reconcile_once(
         clean=report.is_clean,
     )
     return report
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 __all__ = [

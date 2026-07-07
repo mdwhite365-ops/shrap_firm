@@ -25,6 +25,8 @@ ORDER BY broker_order_id, occurred_at DESC, recorded_at DESC
 
 
 class AsyncConnection(Protocol):
+    async def execute(self, sql: str, *args: object) -> object: ...
+
     async def fetch(self, sql: str, *args: object) -> list[Any]: ...
 
 
@@ -63,3 +65,68 @@ def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+CREATE_OPS_SCHEMA_SQL = "CREATE SCHEMA IF NOT EXISTS ops"
+
+CREATE_ACCOUNT_SNAPSHOTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ops.account_snapshots (
+    event_id TEXT PRIMARY KEY,
+    at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    broker TEXT NOT NULL,
+    account_status TEXT,
+    currency TEXT,
+    cash DOUBLE PRECISION,
+    equity DOUBLE PRECISION,
+    buying_power DOUBLE PRECISION,
+    portfolio_value DOUBLE PRECISION
+)
+""".strip()
+
+CREATE_ACCOUNT_SNAPSHOTS_AT_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS account_snapshots_at_idx ON ops.account_snapshots (at DESC)
+""".strip()
+
+INSERT_ACCOUNT_SNAPSHOT_SQL = """
+INSERT INTO ops.account_snapshots (
+    event_id, broker, account_status, currency, cash, equity, buying_power, portfolio_value
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (event_id) DO NOTHING
+""".strip()
+
+
+def _float_or_none(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+class PostgresAccountSnapshotStore:
+    """Append-only store: one broker account snapshot per reconciliation pass."""
+
+    def __init__(self, pool: AsyncPool) -> None:
+        self._pool = pool
+
+    async def ensure_schema(self) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(CREATE_OPS_SCHEMA_SQL)
+            await conn.execute(CREATE_ACCOUNT_SNAPSHOTS_TABLE_SQL)
+            await conn.execute(CREATE_ACCOUNT_SNAPSHOTS_AT_INDEX_SQL)
+
+    async def record(self, event_id: str, broker: str, account: dict[str, Any]) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                INSERT_ACCOUNT_SNAPSHOT_SQL,
+                event_id,
+                broker,
+                str(account.get("status")) if account.get("status") is not None else None,
+                str(account.get("currency")) if account.get("currency") is not None else None,
+                _float_or_none(account.get("cash")),
+                _float_or_none(account.get("equity")),
+                _float_or_none(account.get("buying_power")),
+                _float_or_none(account.get("portfolio_value")),
+            )
