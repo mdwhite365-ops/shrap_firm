@@ -88,7 +88,20 @@ async def poll_once(
                 redis_stream_id=event.redis_stream_id,
                 event_id=event.envelope.event_id,
             )
+        except ValueError:
+            # Malformed event: permanent for this event. Skip it or the
+            # consumer stalls forever on a poison message (same pattern as
+            # the Execution Agent fix, 2026-07-06).
+            log.exception(
+                "paper_order_store.event_invalid_skipped",
+                stream=event.stream,
+                redis_stream_id=event.redis_stream_id,
+                event_id=event.envelope.event_id,
+            )
+            last_ids[event.stream] = event.redis_stream_id
+            continue
         except Exception:
+            # Systemic error (database down): retry the same event next cycle.
             log.exception(
                 "paper_order_store.event_failed",
                 stream=event.stream,

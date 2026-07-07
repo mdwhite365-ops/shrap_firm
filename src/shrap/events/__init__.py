@@ -11,7 +11,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
+import structlog
+
 from shrap.common.envelope import MAX_INLINE_PAYLOAD_BYTES, Envelope, must_use_ref
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,11 +111,24 @@ class EventSubscriber:
         for stream, entries in response:
             for redis_stream_id, fields in entries:
                 normalized = normalize_redis_fields(cast(dict[str | bytes, str | bytes], fields))
+                try:
+                    envelope = Envelope.from_redis_fields(normalized)
+                except Exception:
+                    # A malformed entry must not brick every consumer of the
+                    # stream. Skip it loudly; ADR-0006 validation still holds
+                    # for everything downstream.
+                    log.warning(
+                        "events.invalid_envelope_skipped",
+                        stream=stream,
+                        redis_stream_id=redis_stream_id,
+                        fields=sorted(normalized),
+                    )
+                    continue
                 events.append(
                     ReceivedEvent(
                         stream=stream,
                         redis_stream_id=redis_stream_id,
-                        envelope=Envelope.from_redis_fields(normalized),
+                        envelope=envelope,
                     )
                 )
         return events
