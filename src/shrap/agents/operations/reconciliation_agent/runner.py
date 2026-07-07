@@ -18,6 +18,7 @@ from redis.asyncio import Redis
 from shrap.agents.operations.reconciliation_agent.agent import (
     DEFAULT_BROKER,
     DEFAULT_PRODUCED_BY,
+    AccountSnapshotSink,
     OrderStateRepository,
     Publisher,
     reconcile_once,
@@ -26,7 +27,10 @@ from shrap.agents.operations.reconciliation_agent.broker import (
     AlpacaPaperSnapshotReader,
     BrokerSnapshotReader,
 )
-from shrap.agents.operations.reconciliation_agent.db import PostgresOrderEventRepository
+from shrap.agents.operations.reconciliation_agent.db import (
+    PostgresAccountSnapshotStore,
+    PostgresOrderEventRepository,
+)
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher, RedisPublisher
@@ -62,6 +66,7 @@ async def run_loop(
     broker: str = DEFAULT_BROKER,
     interval_seconds: float = 300.0,
     retry_delay_seconds: float = 30.0,
+    snapshot_sink: AccountSnapshotSink | None = None,
 ) -> None:
     """Run reconciliation passes until ``stop`` is set."""
 
@@ -73,6 +78,7 @@ async def run_loop(
                 publisher=publisher,
                 produced_by=produced_by,
                 broker=broker,
+                snapshot_sink=snapshot_sink,
             )
             delay = interval_seconds
         except Exception:
@@ -113,6 +119,8 @@ async def run(
     )
     pool = await create_asyncpg_pool(postgres_dsn)
     repository = PostgresOrderEventRepository(pool)
+    snapshot_store = PostgresAccountSnapshotStore(pool)
+    await snapshot_store.ensure_schema()
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as http_client:
         broker_reader = AlpacaPaperSnapshotReader(
             AlpacaPaperClient(alpaca_settings),
@@ -129,6 +137,7 @@ async def run(
                 broker=broker,
                 interval_seconds=interval_seconds,
                 retry_delay_seconds=retry_delay_seconds,
+                snapshot_sink=snapshot_store,
             )
         finally:
             await redis.aclose()
