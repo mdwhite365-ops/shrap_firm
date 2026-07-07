@@ -464,6 +464,58 @@ services:
       - shrap_net
 
   # -------------------------------------------------------------------------
+  # Decision Maker (Card 2 wire stub) - converts trading.strategy.signal into
+  # trading.decision.intent above a confidence threshold. start_id=$ so a
+  # restart never re-trades historical signals.
+  # -------------------------------------------------------------------------
+  decision-maker:
+    build:
+      context: ../
+      dockerfile: infra/decision-maker.Dockerfile
+    container_name: shrap_decision_maker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DECISION_MAKER_REDIS_URL: "redis://redis:6379/0"
+      DECISION_MAKER_START_ID: "$$"
+      DECISION_MAKER_CONFIDENCE_THRESHOLD: "0.7"
+      DECISION_MAKER_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Strategy Fixture - deterministic pipeline-exercise signal source.
+  # DISABLED BY DEFAULT: set STRATEGY_FIXTURE_ENABLED=true in infra/.env to
+  # arm it. At most max_signals_per_day regime-gated signals per UTC day;
+  # the pre-trade rate guardrails still apply downstream.
+  # -------------------------------------------------------------------------
+  strategy-fixture:
+    build:
+      context: ../
+      dockerfile: infra/strategy-fixture.Dockerfile
+    container_name: shrap_strategy_fixture
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      STRATEGY_FIXTURE_REDIS_URL: "redis://redis:6379/0"
+      STRATEGY_FIXTURE_ENABLED: "${STRATEGY_FIXTURE_ENABLED:-false}"
+      STRATEGY_FIXTURE_TICKER: "${STRATEGY_FIXTURE_TICKER:-SPY}"
+      STRATEGY_FIXTURE_ALLOWED_REGIME_LABELS: "${STRATEGY_FIXTURE_ALLOWED_REGIME_LABELS:-crisis-recovery,late-cycle-melt-up}"
+      STRATEGY_FIXTURE_MAX_SIGNALS_PER_DAY: "${STRATEGY_FIXTURE_MAX_SIGNALS_PER_DAY:-1}"
+      STRATEGY_FIXTURE_INTERVAL_SECONDS: "600"
+      STRATEGY_FIXTURE_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
   # Regime Classifier - Intelligence Department, statistical layer only.
   # Syncs daily bars (Alpaca data API, IEX feed) into market_data.ohlcv_1d
   # and publishes intel.regime.tick / .changed / .sizing-modifier events.
