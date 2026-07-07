@@ -94,3 +94,45 @@ def test_to_redis_fields_with_payload_ref_omits_inline() -> None:
     restored = Envelope.from_redis_fields(fields)
     assert restored.payload is None
     assert restored.payload_ref == env.payload_ref
+
+
+@pytest.mark.asyncio
+async def test_subscriber_skips_malformed_entries_and_returns_valid_ones() -> None:
+    """A garbage stream entry must not brick every consumer of the stream."""
+
+    from shrap.events import EventPublisher, EventSubscriber
+
+    class FakeRedis:
+        def __init__(self) -> None:
+            self.entries: list[tuple[str, dict[str, str]]] = []
+
+        async def xadd(self, stream: str, fields: dict[str, str]) -> str:
+            self.entries.append((stream, fields))
+            return f"17801286000{len(self.entries):02d}-0"
+
+        async def xread(self, streams, count=None, block=None):
+            return [
+                (
+                    "some.stream",
+                    [
+                        (f"17801286000{i + 1:02d}-0", fields)
+                        for i, (_, fields) in enumerate(self.entries)
+                    ],
+                )
+            ]
+
+    redis = FakeRedis()
+    # One malformed raw entry (not an ADR-0006 envelope), then one valid event.
+    redis.entries.append(("some.stream", {"garbage": "true"}))
+    await EventPublisher(redis).publish(
+        stream="some.stream",
+        produced_by="test",
+        schema_version="1.0.0",
+        payload={"ok": True},
+    )
+
+    events = await EventSubscriber(redis).read(streams={"some.stream": "0-0"}, block_ms=1)
+
+    assert len(events) == 1
+    assert events[0].envelope.payload == {"ok": True}
+    assert events[0].redis_stream_id == "1780128600002-0"
