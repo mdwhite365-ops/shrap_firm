@@ -35,6 +35,8 @@ def test_settings_redacted_output_is_log_safe() -> None:
         "allowed_universe": ["AAPL", "SPY"],
         "max_quantity_per_order": 1,
         "kill_switch_active": False,
+        "max_orders_per_day": 10,
+        "symbol_cooldown_seconds": 300,
         "start_id": "0-0",
         "count": 100,
         "block_ms": 5000,

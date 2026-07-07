@@ -9,6 +9,7 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shrap.risk_compliance.pre_trade import RiskPolicy
+from shrap.risk_compliance.rate_limit import RateLimitConfig
 
 _DEFAULT_REDIS_URL = "redis" + "://" + "redis" + ":6379/0"
 _DEFAULT_ALLOWED_UNIVERSE = "AAPL,NVDA,QQQ,SPY,TSLA,LMT"
@@ -30,6 +31,8 @@ class Settings(BaseSettings):
     allowed_universe: str | list[str] = _DEFAULT_ALLOWED_UNIVERSE
     max_quantity_per_order: int = 1
     kill_switch_active: bool = False
+    max_orders_per_day: int = 10
+    symbol_cooldown_seconds: int = 300
     start_id: str = "0-0"
     count: int = 100
     block_ms: int = 5000
@@ -63,6 +66,14 @@ class Settings(BaseSettings):
             kill_switch_active=self.kill_switch_active,
         )
 
+    def rate_limit_config(self) -> RateLimitConfig:
+        """Build the Redis-backed order-rate guardrail config."""
+
+        return RateLimitConfig(
+            max_orders_per_day=self.max_orders_per_day,
+            symbol_cooldown_seconds=self.symbol_cooldown_seconds,
+        )
+
     def redacted(self) -> dict[str, object]:
         """Return a log-safe settings snapshot."""
 
@@ -73,6 +84,8 @@ class Settings(BaseSettings):
             "allowed_universe": sorted(self.allowed_universe_set()),
             "max_quantity_per_order": self.max_quantity_per_order,
             "kill_switch_active": self.kill_switch_active,
+            "max_orders_per_day": self.max_orders_per_day,
+            "symbol_cooldown_seconds": self.symbol_cooldown_seconds,
             "start_id": self.start_id,
             "count": self.count,
             "block_ms": self.block_ms,

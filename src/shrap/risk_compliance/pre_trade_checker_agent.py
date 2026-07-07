@@ -17,6 +17,7 @@ from redis.asyncio import Redis
 from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher, EventSubscriber, PublishedEvent, ReceivedEvent
 from shrap.risk_compliance.pre_trade import PreTradeChecker, RiskPolicy
+from shrap.risk_compliance.rate_limit import RateLimitConfig, RateLimitRedis, RedisRateLimiter
 
 log = structlog.get_logger(__name__)
 
@@ -74,10 +75,33 @@ async def process_intent_event(
     event: ReceivedEvent,
     policy: RiskPolicy,
     produced_by: str = PRODUCED_BY,
+    rate_limiter: RedisRateLimiter | None = None,
 ) -> PublishedEvent:
-    """Run the pure pre-trade check and publish the risk result event."""
+    """Run the pure pre-trade check (plus rate guardrails) and publish the result.
+
+    Rate limits apply after the deterministic policy check and only to
+    already-approved intents: an intent the policy would veto never consumes
+    a rate slot.
+    """
 
     decision_payload = build_risk_decision_payload(event, policy)
+    if decision_payload["approved"] and rate_limiter is not None:
+        rate_veto = await rate_limiter.acquire(str(decision_payload.get("ticker", "")))
+        if rate_veto is not None:
+            decision_payload["approved"] = False
+            decision_payload["reason_code"] = rate_veto
+            decision_payload["reason"] = rate_veto
+            decision_payload["approved_quantity"] = 0
+            decision_payload.pop("approved_intent_payload", None)
+            reasons = decision_payload.get("reasons")
+            if isinstance(reasons, list):
+                reasons.append(f"rate guardrail: {rate_veto}")
+            log.warning(
+                "pre_trade_checker.rate_vetoed",
+                intent_event_id=event.envelope.event_id,
+                ticker=decision_payload.get("ticker"),
+                reason=rate_veto,
+            )
     stream = STREAM_RISK_APPROVED if decision_payload["approved"] else STREAM_RISK_VETOED
     return await EventPublisher(redis).publish(
         stream=stream,
@@ -95,6 +119,7 @@ async def poll_once(
     start_id: str,
     count: int,
     block_ms: int,
+    rate_limiter: RedisRateLimiter | None = None,
 ) -> int:
     """Read one batch of decision intents and publish risk decisions."""
 
@@ -108,7 +133,7 @@ async def poll_once(
     processed = 0
     for event in events:
         try:
-            result = await process_intent_event(redis, event, policy)
+            result = await process_intent_event(redis, event, policy, rate_limiter=rate_limiter)
             last_ids[event.stream] = event.redis_stream_id
             processed += 1
             log.info(
@@ -136,12 +161,15 @@ async def run_loop(
     count: int = 100,
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
+    rate_limiter: RedisRateLimiter | None = None,
 ) -> None:
     """Run the pre-trade checker loop until ``stop`` is set.
 
     The Month 1 default ``start_id='0-0'`` intentionally replays queued
     intents on startup; Redis consumer groups with explicit acknowledgments are
-    deferred to a future card.
+    deferred to a future card. The Redis-backed rate limiter is the guard that
+    makes that replay safe: already-approved intents hit the cooldown/daily
+    cap instead of minting fresh orders.
     """
 
     last_ids: dict[str, str] = {}
@@ -154,6 +182,7 @@ async def run_loop(
                 start_id=start_id,
                 count=count,
                 block_ms=block_ms,
+                rate_limiter=rate_limiter,
             )
             if processed:
                 log.info("pre_trade_checker.batch", processed=processed, last_ids=dict(last_ids))
@@ -173,6 +202,7 @@ async def run(
     count: int = 100,
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
+    rate_limit_config: RateLimitConfig | None = None,
 ) -> None:
     """Run the Pre-Trade Checker service until SIGINT/SIGTERM."""
 
@@ -183,6 +213,14 @@ async def run(
         start_id=start_id,
         count=count,
         block_ms=block_ms,
+        rate_limit=(
+            {
+                "max_orders_per_day": rate_limit_config.max_orders_per_day,
+                "symbol_cooldown_seconds": rate_limit_config.symbol_cooldown_seconds,
+            }
+            if rate_limit_config
+            else None
+        ),
     )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
@@ -190,6 +228,11 @@ async def run(
         redis_url,
         decode_responses=True,
         socket_timeout=(block_ms / 1000) + 10,
+    )
+    rate_limiter = (
+        RedisRateLimiter(cast(RateLimitRedis, redis), rate_limit_config)
+        if rate_limit_config
+        else None
     )
     try:
         await run_loop(
@@ -200,6 +243,7 @@ async def run(
             count=count,
             block_ms=block_ms,
             retry_delay_seconds=retry_delay_seconds,
+            rate_limiter=rate_limiter,
         )
     finally:
         await redis.aclose()
