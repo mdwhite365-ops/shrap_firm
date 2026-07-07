@@ -22,6 +22,7 @@ def main() -> None:
             count=settings.count,
             block_ms=settings.block_ms,
             retry_delay_seconds=settings.retry_delay_seconds,
+            rate_limit_config=settings.rate_limit_config(),
         )
     )
 
