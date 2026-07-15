@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-07-06 (evening)
+**Last updated:** 2026-07-15
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -24,11 +24,9 @@ Direct Alpaca paper access is the accepted broker interface for the paper phase.
 
 ## KI-003 — Fill event live path is not yet observed with a real fill
 
-**Status:** Fix merged, live verification pending.
+**Status:** Resolved 2026-07-15. Market-hours smoke passed 9/9 on the Dell.
 
-Root cause found during Card 16: the Execution Agent checked order status exactly once, immediately after submission, so a fill landing later was never published. Pending-order re-polling (5s interval, publish on change) shipped in the Card 16 PR.
-
-**Mitigation:** Run the Card 16 smoke during market hours: `docker compose exec paper-order-store shrap-spine-smoke --wait-fill --wait-reconciliation`. Close this issue when `order-filled`, `fill-persisted`, and `reconciliation` all pass.
+Root cause found during Card 16: the Execution Agent checked order status exactly once, immediately after submission, so a fill landing later was never published. Pending-order re-polling (5s interval, publish on change) shipped in PR #22. The first live fill was observed 2026-07-08 (AAPL x1 @ 313.33); the full 9/9 close — `order-filled`, `fill-persisted`, and `reconciliation: clean=True` — landed 2026-07-15 after the lookback fixes (PR #34–35).
 
 ## KI-004 — Paper order persistence consumer is not packaged yet
 
@@ -48,6 +46,6 @@ The Reconciliation Agent compares Alpaca paper orders against `trading.paper_ord
 
 Stream consumers (Execution Agent, Paper Order Store, Audit Logger) hold their offsets in memory and read from `start_id=0-0` on restart, replaying the entire history. This caused the 2026-07-06 incident: a container rebuild replayed an approved intent, Alpaca rejected the duplicate `client_order_id` (422), and the loop stalled forever on the poisoned event — blocking all subsequent orders until PR #27 taught it to skip duplicates and malformed events.
 
-Replay is now safe (duplicates dedupe broker-side, sinks dedupe on event ID) but wasteful, and the poison-skip pattern exists only in the Execution Agent — the other consumers still `break` without advancing on a failing event.
+Replay is now safe everywhere but wasteful: PR #32 extended the poison-skip pattern to the Paper Order Store, Audit Logger, and the shared `EventSubscriber`, and PR #30's Redis-persisted rate guardrails (daily cap + per-symbol cooldown) blunt the replay-reapproval hazard at the risk gate.
 
-**Mitigation:** Redis consumer groups with acknowledged, persisted offsets — the deferred Month-1 decision from the decision queue, now due as its own card. Apply the poison-skip pattern to the other consumers in the same card.
+**Mitigation:** Redis consumer groups with acknowledged, persisted offsets — the deferred Month-1 decision from the decision queue, now the top infrastructure card. Include retry-backoff for systemic errors (broker/DB down) in the same card.
