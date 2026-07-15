@@ -148,4 +148,5 @@ async def test_list_orders_queries_all_statuses_and_validates_shape() -> None:
     await AlpacaPaperClient(settings).list_orders(  # type: ignore[arg-type]
         with_after, after="2026-06-30T00:00:00+00:00"
     )
-    assert "after=2026-06-30T00:00:00+00:00" in with_after.urls[0]
+    assert "after=2026-06-30T00%3A00%3A00%2B00%3A00" in with_after.urls[0]
+    assert "+" not in with_after.urls[0].split("after=")[1]

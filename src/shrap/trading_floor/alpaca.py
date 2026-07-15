@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Protocol
+from urllib.parse import quote
 
 from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
 
@@ -109,7 +110,9 @@ class AlpacaPaperClient:
 
         url = f"{self._api_base()}/orders?status={status}&limit={limit}&direction=desc"
         if after:
-            url += f"&after={after}"
+            # RFC3339 offsets contain "+", which a raw query string decodes to a
+            # space; the timestamp must be percent-encoded to survive the trip.
+            url += f"&after={quote(after, safe='')}"
         response = await http_client.get(
             url,
             headers=self.auth_headers(),
