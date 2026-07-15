@@ -11,7 +11,8 @@ from redis.asyncio import Redis
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
-from shrap.events import EventSubscriber, ReceivedEvent
+from shrap.events import ReceivedEvent
+from shrap.events.groups import GroupEventSubscriber
 from shrap.trading_floor.order_store import (
     PaperOrderRecord,
     PostgresPaperOrderSink,
@@ -25,15 +26,28 @@ EXECUTION_STREAMS = (
     "execution.order.status-updated",
     "execution.order.filled",
 )
+CONSUMER_GROUP = "paper-order-store"
 
 
 class RedisStreamClient(Protocol):
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any: ...
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
     ) -> Any: ...
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any: ...
 
 
 class PaperOrderSink(Protocol):
@@ -57,30 +71,28 @@ async def process_received_event(sink: PaperOrderSink, event: ReceivedEvent) -> 
 
 
 async def poll_once(
-    redis: RedisStreamClient,
     sink: PaperOrderSink,
-    last_ids: dict[str, str],
-    start_id: str,
+    subscriber: GroupEventSubscriber,
     count: int,
     block_ms: int,
+    retry_delay_seconds: float = 0.0,
 ) -> int:
     """Read execution order streams and persist one batch of events."""
 
-    for stream in EXECUTION_STREAMS:
-        last_ids.setdefault(stream, start_id)
-
-    subscriber = EventSubscriber(redis)
     try:
-        events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+        events = await subscriber.read(
+            streams=list(EXECUTION_STREAMS), count=count, block_ms=block_ms
+        )
     except Exception:
-        log.exception("paper_order_store.read_failed", streams=dict(last_ids))
+        log.exception("paper_order_store.read_failed", group=subscriber.group)
+        await asyncio.sleep(retry_delay_seconds)
         return 0
 
     written = 0
     for event in events:
         try:
             await process_received_event(sink, event)
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
             written += 1
             log.info(
                 "paper_order_store.event_persisted",
@@ -89,25 +101,27 @@ async def poll_once(
                 event_id=event.envelope.event_id,
             )
         except ValueError:
-            # Malformed event: permanent for this event. Skip it or the
-            # consumer stalls forever on a poison message (same pattern as
-            # the Execution Agent fix, 2026-07-06).
+            # Malformed event: permanent for this event. Ack and skip it or
+            # the consumer stalls forever on a poison message (same pattern
+            # as the Execution Agent fix, 2026-07-06).
             log.exception(
                 "paper_order_store.event_invalid_skipped",
                 stream=event.stream,
                 redis_stream_id=event.redis_stream_id,
                 event_id=event.envelope.event_id,
             )
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
             continue
         except Exception:
-            # Systemic error (database down): retry the same event next cycle.
+            # Systemic error (database down): no ack, so the same event is
+            # redelivered next cycle.
             log.exception(
                 "paper_order_store.event_failed",
                 stream=event.stream,
                 redis_stream_id=event.redis_stream_id,
                 event_id=event.envelope.event_id,
             )
+            await asyncio.sleep(retry_delay_seconds)
             break
     return written
 
@@ -120,22 +134,32 @@ async def run_loop(
     count: int = 100,
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
+    group: str = CONSUMER_GROUP,
+    consumer: str | None = None,
 ) -> None:
-    """Run the order-store consumer loop until ``stop`` is set."""
+    """Run the order-store consumer loop until ``stop`` is set.
 
-    last_ids: dict[str, str] = {}
+    Offsets persist in the ``group`` consumer group (KI-006); ``start_id``
+    only positions the group the first time it is created on each stream.
+    """
+
+    subscriber = GroupEventSubscriber(
+        redis,
+        group=group,
+        consumer=consumer,
+        start_id=start_id,
+    )
     while not stop.is_set():
         try:
             written = await poll_once(
-                redis=redis,
                 sink=sink,
-                last_ids=last_ids,
-                start_id=start_id,
+                subscriber=subscriber,
                 count=count,
                 block_ms=block_ms,
+                retry_delay_seconds=retry_delay_seconds,
             )
             if written:
-                log.info("paper_order_store.batch", written=written, last_ids=dict(last_ids))
+                log.info("paper_order_store.batch", written=written, group=group)
             else:
                 await asyncio.sleep(0)
         except Exception:
@@ -152,11 +176,19 @@ async def run(
     count: int = 100,
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
+    group: str = CONSUMER_GROUP,
+    consumer: str | None = None,
 ) -> None:
     """Run the paper order-store consumer service until SIGINT/SIGTERM."""
 
     configure_logging(service_name, log_level)
-    log.info("paper_order_store.starting", redis_url=redis_url, postgres_dsn="***")
+    log.info(
+        "paper_order_store.starting",
+        redis_url=redis_url,
+        postgres_dsn="***",
+        group=group,
+        consumer=consumer or group,
+    )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
     redis: Redis = Redis.from_url(
@@ -176,6 +208,8 @@ async def run(
             count=count,
             block_ms=block_ms,
             retry_delay_seconds=retry_delay_seconds,
+            group=group,
+            consumer=consumer,
         )
     finally:
         await redis.aclose()
@@ -184,6 +218,7 @@ async def run(
 
 
 __all__ = [
+    "CONSUMER_GROUP",
     "EXECUTION_STREAMS",
     "poll_once",
     "process_received_event",

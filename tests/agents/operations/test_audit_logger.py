@@ -60,8 +60,11 @@ def test_insert_sql_is_append_only_and_idempotent_on_event_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_poll_once_discovers_matching_streams_and_advances_offsets() -> None:
+async def test_poll_once_discovers_matching_streams_and_acks() -> None:
+    import fakeredis.aioredis
+
     from shrap.agents.operations.audit_logger.agent import poll_once
+    from shrap.events.groups import GroupEventSubscriber
 
     env = Envelope(
         event_id="01KSVW33333333333333333333",
@@ -71,23 +74,9 @@ async def test_poll_once_discovers_matching_streams_and_advances_offsets() -> No
         payload={"summary": {"ok": 1}},
     )
 
-    class FakeRedis:
-        async def scan_iter(self, match: str) -> object:
-            assert match == "ops.*"
-            for stream in ["ops.health-tick"]:
-                yield stream
-
-        async def type(self, key: str) -> str:
-            assert key == "ops.health-tick"
-            return "stream"
-
-        async def xread(
-            self, streams: dict[str, str], count: int, block: int
-        ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
-            assert streams == {"ops.health-tick": "0-0"}
-            assert count == 10
-            assert block == 1
-            return [("ops.health-tick", [("1780125900000-0", env.to_redis_fields())])]
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    await redis.xadd("ops.health-tick", env.to_redis_fields())
+    await redis.set("ops.not-a-stream", "plain-value")
 
     class FakeSink:
         def __init__(self) -> None:
@@ -97,21 +86,23 @@ async def test_poll_once_discovers_matching_streams_and_advances_offsets() -> No
             self.records.append(record)
 
     sink = FakeSink()
-    last_ids: dict[str, str] = {}
+
+    def subscriber() -> GroupEventSubscriber:
+        return GroupEventSubscriber(redis, group="audit-logger", start_id="0")
 
     written = await poll_once(
-        FakeRedis(),  # type: ignore[arg-type]
+        redis,  # type: ignore[arg-type]
         sink,  # type: ignore[arg-type]
-        last_ids,
+        subscriber(),
         stream_pattern="ops.*",
-        start_id="0-0",
         count=10,
         block_ms=1,
     )
 
     assert written == 1
-    assert last_ids == {"ops.health-tick": "1780125900000-0"}
     assert len(sink.records) == 1
+    # Acked: a restarted logger does not re-persist the same event (KI-006).
+    assert await subscriber().read(["ops.health-tick"], block_ms=1) == []
 
 
 @pytest.mark.asyncio

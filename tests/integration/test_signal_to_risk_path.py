@@ -2,46 +2,61 @@ from __future__ import annotations
 
 from typing import Any
 
+import fakeredis.aioredis
 import pytest
 
 from shrap.events import EventPublisher
+from shrap.events.groups import GroupEventSubscriber
 from shrap.risk_compliance.pre_trade import RiskPolicy
 
 
 class FakeRedis:
+    """fakeredis transport with recorded ``xadd`` calls for assertions.
+
+    Serves both consumption styles on the signal→risk path: the legacy
+    decision-maker stub reads with plain XREAD, the risk gate through a
+    consumer group.
+    """
+
     def __init__(self) -> None:
+        self._real = fakeredis.aioredis.FakeRedis(decode_responses=True)
         self.calls: list[tuple[str, dict[str, str]]] = []
-        self.reads: list[dict[str, str]] = []
 
     async def xadd(self, stream: str, fields: dict[str, str]) -> str:
         self.calls.append((stream, fields))
-        return f"178012820000{len(self.calls)}-0"
+        return await self._real.xadd(stream, fields)
 
     async def xread(
         self,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
-    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
-        self.reads.append({str(key): str(value) for key, value in streams.items()})
-        response: list[tuple[str, list[tuple[str, dict[str, str]]]]] = []
-        for stream, last_id in streams.items():
-            entries: list[tuple[str, dict[str, str]]] = []
-            for index, (written_stream, fields) in enumerate(self.calls, start=1):
-                redis_id = f"178012820000{index}-0"
-                if written_stream == stream and self._after(redis_id, str(last_id)):
-                    entries.append((redis_id, fields))
-            if entries:
-                response.append((str(stream), entries[: count or len(entries)]))
-        return response
+    ) -> Any:
+        return await self._real.xread(streams, count=count, block=block)
 
-    @staticmethod
-    def _after(redis_id: str, last_id: str) -> bool:
-        if last_id == "$":
-            return False
-        if last_id == "0" or last_id == "0-0":
-            return True
-        return redis_id > last_id
+    async def xgroup_create(
+        self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any:
+        return await self._real.xgroup_create(name, groupname, id=id, mkstream=mkstream)
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
+        streams: dict[Any, Any],
+        count: int | None = None,
+        block: int | None = None,
+    ) -> Any:
+        return await self._real.xreadgroup(
+            groupname, consumername, streams, count=count, block=block
+        )
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any:
+        return await self._real.xack(name, groupname, *ids)
 
 
 def signal_payload(**overrides: object) -> dict[str, Any]:
@@ -104,8 +119,7 @@ async def test_signal_to_approved_intent() -> None:
     processed = await risk_poll_once(
         redis,  # type: ignore[arg-type]
         RiskPolicy(allowed_universe={"AAPL"}, max_quantity_per_order=2),
-        {},
-        start_id="0-0",
+        GroupEventSubscriber(redis, group="pre-trade-checker", start_id="0"),  # type: ignore[arg-type]
         count=10,
         block_ms=1,
     )
@@ -140,8 +154,7 @@ async def test_signal_to_vetoed_intent() -> None:
     processed = await risk_poll_once(
         redis,  # type: ignore[arg-type]
         RiskPolicy(allowed_universe={"AAPL"}, max_quantity_per_order=2),
-        {},
-        start_id="0-0",
+        GroupEventSubscriber(redis, group="pre-trade-checker", start_id="0"),  # type: ignore[arg-type]
         count=10,
         block_ms=1,
     )

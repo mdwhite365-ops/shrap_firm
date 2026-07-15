@@ -29,6 +29,8 @@ def main() -> None:
             count=settings.count,
             block_ms=settings.block_ms,
             retry_delay_seconds=settings.retry_delay_seconds,
+            group=settings.service_name,
+            consumer=settings.instance_id,
         )
     )
 

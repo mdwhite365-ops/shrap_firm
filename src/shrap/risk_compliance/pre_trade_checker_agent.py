@@ -1,8 +1,9 @@
 """Event-loop wrapper for the deterministic pre-trade checker.
 
-Month 1 deliberately starts from ``0-0`` so the risk gate replays queued
-``trading.decision.intent`` events after startup/recovery. Consumer groups with
-explicit XACKs are the post-sprint upgrade.
+Reads ``trading.decision.intent`` through a Redis consumer group (KI-006):
+offsets persist in Redis, so a restart resumes where the group left off
+instead of replaying stream history. ``start_id`` only positions the group
+the first time it is created.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ import structlog
 from redis.asyncio import Redis
 
 from shrap.common.logging import configure_logging
-from shrap.events import EventPublisher, EventSubscriber, PublishedEvent, ReceivedEvent
+from shrap.events import EventPublisher, PublishedEvent, ReceivedEvent
+from shrap.events.groups import GroupEventSubscriber, RedisGroupClient
 from shrap.risk_compliance.pre_trade import PreTradeChecker, RiskPolicy
 from shrap.risk_compliance.rate_limit import RateLimitConfig, RateLimitRedis, RedisRateLimiter
 
@@ -26,17 +28,30 @@ STREAM_RISK_APPROVED = "risk.intent.approved"
 STREAM_RISK_VETOED = "risk.intent.vetoed"
 PRODUCED_BY = "risk/pre-trade-checker"
 SCHEMA_VERSION = "1.0.0"
+CONSUMER_GROUP = "pre-trade-checker"
 
 
 class RedisStreamClient(Protocol):
     async def xadd(self, stream: str, fields: dict[str, str]) -> str: ...
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any: ...
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
     ) -> Any: ...
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any: ...
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
@@ -115,26 +130,32 @@ async def process_intent_event(
 async def poll_once(
     redis: RedisStreamClient,
     policy: RiskPolicy,
-    last_ids: dict[str, str],
-    start_id: str,
+    subscriber: GroupEventSubscriber,
     count: int,
     block_ms: int,
     rate_limiter: RedisRateLimiter | None = None,
+    retry_delay_seconds: float = 0.0,
 ) -> int:
-    """Read one batch of decision intents and publish risk decisions."""
+    """Read one batch of decision intents and publish risk decisions.
 
-    last_ids.setdefault(STREAM_DECISION_INTENT, start_id)
-    subscriber = EventSubscriber(redis)
+    Successful and permanently-invalid events are acknowledged; a systemic
+    failure leaves the event pending so the group redelivers it first on the
+    next cycle, after ``retry_delay_seconds``.
+    """
+
     try:
-        events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+        events = await subscriber.read(
+            streams=[STREAM_DECISION_INTENT], count=count, block_ms=block_ms
+        )
     except Exception:
-        log.exception("pre_trade_checker.read_failed", streams=dict(last_ids))
+        log.exception("pre_trade_checker.read_failed", group=subscriber.group)
+        await asyncio.sleep(retry_delay_seconds)
         return 0
     processed = 0
     for event in events:
         try:
             result = await process_intent_event(redis, event, policy, rate_limiter=rate_limiter)
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
             processed += 1
             log.info(
                 "pre_trade_checker.decision_published",
@@ -142,13 +163,26 @@ async def poll_once(
                 stream=result.stream,
                 risk_event_id=result.envelope.event_id,
             )
+        except ValueError:
+            # Malformed intent: permanent for this event. Ack and skip it or
+            # the gate stalls forever on a poison message.
+            log.exception(
+                "pre_trade_checker.intent_invalid_skipped",
+                stream=event.stream,
+                redis_stream_id=event.redis_stream_id,
+                intent_event_id=event.envelope.event_id,
+            )
+            await subscriber.ack(event)
+            continue
         except Exception:
+            # Systemic error: do NOT ack, so the same event retries next cycle.
             log.exception(
                 "pre_trade_checker.intent_failed",
                 stream=event.stream,
                 redis_stream_id=event.redis_stream_id,
                 intent_event_id=event.envelope.event_id,
             )
+            await asyncio.sleep(retry_delay_seconds)
             break
     return processed
 
@@ -162,30 +196,37 @@ async def run_loop(
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
     rate_limiter: RedisRateLimiter | None = None,
+    group: str = CONSUMER_GROUP,
+    consumer: str | None = None,
 ) -> None:
     """Run the pre-trade checker loop until ``stop`` is set.
 
-    The Month 1 default ``start_id='0-0'`` intentionally replays queued
-    intents on startup; Redis consumer groups with explicit acknowledgments are
-    deferred to a future card. The Redis-backed rate limiter is the guard that
-    makes that replay safe: already-approved intents hit the cooldown/daily
+    Offsets persist in the ``group`` consumer group (KI-006); ``start_id``
+    only positions the group the first time it is created on the stream. The
+    Redis-backed rate limiter remains the guard against re-approving intents
+    if the group is ever recreated: replayed approvals hit the cooldown/daily
     cap instead of minting fresh orders.
     """
 
-    last_ids: dict[str, str] = {}
+    subscriber = GroupEventSubscriber(
+        cast(RedisGroupClient, redis),
+        group=group,
+        consumer=consumer,
+        start_id=start_id,
+    )
     while not stop.is_set():
         try:
             processed = await poll_once(
                 redis=redis,
                 policy=policy,
-                last_ids=last_ids,
-                start_id=start_id,
+                subscriber=subscriber,
                 count=count,
                 block_ms=block_ms,
                 rate_limiter=rate_limiter,
+                retry_delay_seconds=retry_delay_seconds,
             )
             if processed:
-                log.info("pre_trade_checker.batch", processed=processed, last_ids=dict(last_ids))
+                log.info("pre_trade_checker.batch", processed=processed, group=group)
             else:
                 await asyncio.sleep(0)
         except Exception:
@@ -203,6 +244,8 @@ async def run(
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
     rate_limit_config: RateLimitConfig | None = None,
+    group: str = CONSUMER_GROUP,
+    consumer: str | None = None,
 ) -> None:
     """Run the Pre-Trade Checker service until SIGINT/SIGTERM."""
 
@@ -213,6 +256,8 @@ async def run(
         start_id=start_id,
         count=count,
         block_ms=block_ms,
+        group=group,
+        consumer=consumer or group,
         rate_limit=(
             {
                 "max_orders_per_day": rate_limit_config.max_orders_per_day,
@@ -244,6 +289,8 @@ async def run(
             block_ms=block_ms,
             retry_delay_seconds=retry_delay_seconds,
             rate_limiter=rate_limiter,
+            group=group,
+            consumer=consumer,
         )
     finally:
         await redis.aclose()
@@ -251,6 +298,7 @@ async def run(
 
 
 __all__ = [
+    "CONSUMER_GROUP",
     "PRODUCED_BY",
     "SCHEMA_VERSION",
     "STREAM_DECISION_INTENT",

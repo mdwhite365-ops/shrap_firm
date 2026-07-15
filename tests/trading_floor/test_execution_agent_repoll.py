@@ -5,9 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+import fakeredis.aioredis
 import pytest
 
 from shrap.events import Envelope, ReceivedEvent
+from shrap.events.groups import GroupEventSubscriber
 from shrap.trading_floor.execution_agent import (
     PendingOrder,
     is_terminal_order_status,
@@ -17,29 +19,47 @@ from shrap.trading_floor.execution_agent import (
 
 
 class FakeRedis:
+    """fakeredis transport with recorded ``xadd`` calls for assertions."""
+
     def __init__(self) -> None:
+        self._real = fakeredis.aioredis.FakeRedis(decode_responses=True)
         self.calls: list[tuple[str, dict[str, str]]] = []
 
     async def xadd(self, stream: str, fields: dict[str, str]) -> str:
         self.calls.append((stream, fields))
-        return f"178012860000{len(self.calls)}-0"
+        return await self._real.xadd(stream, fields)
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any:
+        return await self._real.xgroup_create(name, groupname, id=id, mkstream=mkstream)
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
-    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
-        response: list[tuple[str, list[tuple[str, dict[str, str]]]]] = []
-        for stream, last_id in streams.items():
-            entries = [
-                (f"178012860000{index}-0", fields)
-                for index, (written_stream, fields) in enumerate(self.calls, start=1)
-                if written_stream == stream and f"178012860000{index}-0" > str(last_id)
-            ]
-            if entries:
-                response.append((str(stream), entries[: count or len(entries)]))
-        return response
+    ) -> Any:
+        return await self._real.xreadgroup(
+            groupname, consumername, streams, count=count, block=block
+        )
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any:
+        return await self._real.xack(name, groupname, *ids)
+
+
+def subscriber_for(redis: FakeRedis) -> GroupEventSubscriber:
+    return GroupEventSubscriber(
+        redis,  # type: ignore[arg-type]
+        group="execution-agent",
+        start_id="0",
+    )
 
 
 class SequencedBroker:
@@ -208,13 +228,11 @@ async def test_poll_order_status_once_tracks_non_terminal_orders_as_pending() ->
     )
     broker = SequencedBroker([{"id": "order-1", "status": "accepted"}])
     pending: dict[str, PendingOrder] = {}
-    last_ids: dict[str, str] = {}
 
     processed = await poll_order_status_once(
         redis=redis,  # type: ignore[arg-type]
         broker=broker,
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
         pending=pending,
@@ -249,8 +267,7 @@ async def test_poll_order_status_once_does_not_track_immediately_filled_orders()
     await poll_order_status_once(
         redis=redis,  # type: ignore[arg-type]
         broker=broker,
-        last_ids={},
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
         pending=pending,

@@ -11,10 +11,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import fakeredis.aioredis
 import httpx
 import pytest
 
 from shrap.events import EventPublisher
+from shrap.events.groups import GroupEventSubscriber
 from shrap.trading_floor.execution_agent import is_duplicate_order_error, poll_once
 
 
@@ -51,29 +53,47 @@ def test_duplicate_order_error_detection() -> None:
 
 
 class FakeRedis:
+    """fakeredis transport with recorded ``xadd`` calls for assertions."""
+
     def __init__(self) -> None:
+        self._real = fakeredis.aioredis.FakeRedis(decode_responses=True)
         self.calls: list[tuple[str, dict[str, str]]] = []
 
     async def xadd(self, stream: str, fields: dict[str, str]) -> str:
         self.calls.append((stream, fields))
-        return f"178012860000{len(self.calls)}-0"
+        return await self._real.xadd(stream, fields)
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any:
+        return await self._real.xgroup_create(name, groupname, id=id, mkstream=mkstream)
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
-    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
-        response: list[tuple[str, list[tuple[str, dict[str, str]]]]] = []
-        for stream, last_id in streams.items():
-            entries = [
-                (f"178012860000{index}-0", fields)
-                for index, (written_stream, fields) in enumerate(self.calls, start=1)
-                if written_stream == stream and f"178012860000{index}-0" > str(last_id)
-            ]
-            if entries:
-                response.append((str(stream), entries[: count or len(entries)]))
-        return response
+    ) -> Any:
+        return await self._real.xreadgroup(
+            groupname, consumername, streams, count=count, block=block
+        )
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any:
+        return await self._real.xack(name, groupname, *ids)
+
+
+def subscriber_for(redis: FakeRedis) -> GroupEventSubscriber:
+    return GroupEventSubscriber(
+        redis,  # type: ignore[arg-type]
+        group="execution-agent",
+        start_id="0",
+    )
 
 
 class ScriptedBroker:
@@ -128,13 +148,11 @@ async def test_duplicate_replay_is_skipped_and_new_intent_still_submits() -> Non
             {"id": "order-new", "status": "accepted"},
         ]
     )
-    last_ids: dict[str, str] = {}
 
     processed = await poll_once(
         redis=redis,  # type: ignore[arg-type]
         broker=broker,
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
@@ -143,8 +161,8 @@ async def test_duplicate_replay_is_skipped_and_new_intent_still_submits() -> Non
     assert len(broker.submissions) == 2
     submitted_streams = [stream for stream, _ in redis.calls if stream.startswith("execution.")]
     assert submitted_streams == ["execution.order.submitted"]
-    # The poisoned event was skipped: offsets are past BOTH events.
-    assert last_ids["risk.intent.approved"] == "1780128600002-0"
+    # The poisoned event was skipped: both events acked, nothing redelivered.
+    assert await subscriber_for(redis).read(["risk.intent.approved"], block_ms=1) == []
 
 
 @pytest.mark.asyncio
@@ -159,20 +177,18 @@ async def test_malformed_approved_event_is_skipped() -> None:
     await _publish_approved(redis, "intent-good")
 
     broker = ScriptedBroker([{"id": "order-good", "status": "accepted"}])
-    last_ids: dict[str, str] = {}
 
     processed = await poll_once(
         redis=redis,  # type: ignore[arg-type]
         broker=broker,
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert processed == 1
     assert len(broker.submissions) == 1  # malformed event never reached the broker
-    assert last_ids["risk.intent.approved"] == "1780128600002-0"
+    assert await subscriber_for(redis).read(["risk.intent.approved"], block_ms=1) == []
 
 
 @pytest.mark.asyncio
@@ -181,17 +197,16 @@ async def test_systemic_broker_error_still_retries_same_event() -> None:
     await _publish_approved(redis, "intent-1")
 
     broker = ScriptedBroker([RuntimeError("broker unreachable")])
-    last_ids: dict[str, str] = {}
 
     processed = await poll_once(
         redis=redis,  # type: ignore[arg-type]
         broker=broker,
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert processed == 0
-    # Offset NOT advanced: the event must retry next cycle, not be dropped.
-    assert last_ids["risk.intent.approved"] == "0-0"
+    # NOT acked: the event must be redelivered next cycle, not dropped.
+    redelivered = await subscriber_for(redis).read(["risk.intent.approved"], block_ms=1)
+    assert len(redelivered) == 1

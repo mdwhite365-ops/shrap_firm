@@ -3,46 +3,50 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import fakeredis.aioredis
 import pytest
 
 from shrap.events import EventPublisher, PublishedEvent
+from shrap.events.groups import GroupEventSubscriber
 from shrap.risk_compliance.pre_trade import RiskPolicy
+
+STREAM_INTENT = "trading.decision.intent"
 
 
 class FakeRedis:
+    """fakeredis transport with recorded ``xadd`` calls for assertions."""
+
     def __init__(self) -> None:
+        self._real = fakeredis.aioredis.FakeRedis(decode_responses=True)
         self.calls: list[tuple[str, dict[str, str]]] = []
-        self.reads: list[dict[str, str]] = []
 
     async def xadd(self, stream: str, fields: dict[str, str]) -> str:
         self.calls.append((stream, fields))
-        return f"178012810000{len(self.calls)}-0"
+        return await self._real.xadd(stream, fields)
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any:
+        return await self._real.xgroup_create(name, groupname, id=id, mkstream=mkstream)
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
-    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
-        self.reads.append({str(key): str(value) for key, value in streams.items()})
-        response: list[tuple[str, list[tuple[str, dict[str, str]]]]] = []
-        for stream, last_id in streams.items():
-            entries: list[tuple[str, dict[str, str]]] = []
-            for index, (written_stream, fields) in enumerate(self.calls, start=1):
-                redis_id = f"178012810000{index}-0"
-                if written_stream == stream and self._after(redis_id, str(last_id)):
-                    entries.append((redis_id, fields))
-            if entries:
-                response.append((str(stream), entries[: count or len(entries)]))
-        return response
+    ) -> Any:
+        return await self._real.xreadgroup(
+            groupname, consumername, streams, count=count, block=block
+        )
 
-    @staticmethod
-    def _after(redis_id: str, last_id: str) -> bool:
-        if last_id == "$":
-            return False
-        if last_id == "0" or last_id == "0-0":
-            return True
-        return redis_id > last_id
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any:
+        return await self._real.xack(name, groupname, *ids)
 
 
 class FailRiskPublishRedis(FakeRedis):
@@ -79,9 +83,17 @@ class StopAfterRiskDecisionsRedis(FakeRedis):
         return redis_id
 
 
+def subscriber_for(redis: FakeRedis) -> GroupEventSubscriber:
+    return GroupEventSubscriber(
+        redis,  # type: ignore[arg-type]
+        group="pre-trade-checker",
+        start_id="0",
+    )
+
+
 async def publish_intent(redis: FakeRedis, payload: dict[str, Any]) -> PublishedEvent:
     return await EventPublisher(redis).publish(
-        stream="trading.decision.intent",
+        stream=STREAM_INTENT,
         produced_by="trading-floor/decision-maker-card-2-stub",
         schema_version="1.0.0",
         payload=payload,
@@ -115,19 +127,16 @@ async def test_poll_once_approves_intent_with_correlation_and_scaled_quantity() 
 
     redis = FakeRedis()
     intent = await publish_intent(redis, paper_intent(quantity=3, size_hint=3))
-    last_ids: dict[str, str] = {}
 
     processed = await poll_once(
         redis,  # type: ignore[arg-type]
         RiskPolicy(allowed_universe={"AAPL"}, max_quantity_per_order=2),
-        last_ids,
-        start_id="0-0",
+        subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert processed == 1
-    assert last_ids == {"trading.decision.intent": "1780128100001-0"}
     assert redis.calls[-1][0] == STREAM_RISK_APPROVED
     risk = redis.calls[-1][1]
     assert risk["h_correlation_id"] == intent.envelope.event_id
@@ -135,6 +144,9 @@ async def test_poll_once_approves_intent_with_correlation_and_scaled_quantity() 
     assert '"approved_quantity":2' in risk["payload"]
     assert '"requested_quantity":3' in risk["payload"]
     assert '"intent_payload"' in risk["payload"]
+
+    # The intent was acknowledged: a restarted consumer sees nothing pending.
+    assert await subscriber_for(redis).read([STREAM_INTENT], block_ms=1) == []
 
 
 @pytest.mark.asyncio
@@ -148,8 +160,7 @@ async def test_poll_once_vetoes_non_paper_mode_with_reason() -> None:
     processed = await poll_once(
         redis,  # type: ignore[arg-type]
         RiskPolicy(allowed_universe={"AAPL"}),
-        {},
-        start_id="0-0",
+        subscriber_for(redis),
         count=10,
         block_ms=1,
     )
@@ -169,8 +180,7 @@ async def test_poll_once_vetoes_universe_ineligible_with_reason() -> None:
     processed = await poll_once(
         redis,  # type: ignore[arg-type]
         RiskPolicy(allowed_universe={"AAPL"}),
-        {},
-        start_id="0-0",
+        subscriber_for(redis),
         count=10,
         block_ms=1,
     )
@@ -190,8 +200,7 @@ async def test_poll_once_vetoes_non_positive_quantity_with_reason() -> None:
     processed = await poll_once(
         redis,  # type: ignore[arg-type]
         RiskPolicy(allowed_universe={"AAPL"}),
-        {},
-        start_id="0-0",
+        subscriber_for(redis),
         count=10,
         block_ms=1,
     )
@@ -203,37 +212,26 @@ async def test_poll_once_vetoes_non_positive_quantity_with_reason() -> None:
 
 @pytest.mark.asyncio
 async def test_reprocessing_same_intent_event_emits_same_decision_payload() -> None:
-    from shrap.events import Envelope
-    from shrap.risk_compliance.pre_trade_checker_agent import poll_once
+    from shrap.events import Envelope, ReceivedEvent
+    from shrap.risk_compliance.pre_trade_checker_agent import process_intent_event
 
     redis = FakeRedis()
     await publish_intent(redis, paper_intent(quantity=1))
-
-    await poll_once(
-        redis,  # type: ignore[arg-type]
-        RiskPolicy(allowed_universe={"AAPL"}),
-        {},
-        start_id="0-0",
-        count=10,
-        block_ms=1,
+    received = ReceivedEvent(
+        stream=STREAM_INTENT,
+        redis_stream_id="1-0",
+        envelope=Envelope.from_redis_fields(redis.calls[0][1]),
     )
-    first_payload = Envelope.from_redis_fields(redis.calls[-1][1]).payload
+    policy = RiskPolicy(allowed_universe={"AAPL"})
 
-    await poll_once(
-        redis,  # type: ignore[arg-type]
-        RiskPolicy(allowed_universe={"AAPL"}),
-        {},
-        start_id="0-0",
-        count=10,
-        block_ms=1,
-    )
-    second_payload = Envelope.from_redis_fields(redis.calls[-1][1]).payload
+    first = await process_intent_event(redis, received, policy)  # type: ignore[arg-type]
+    second = await process_intent_event(redis, received, policy)  # type: ignore[arg-type]
 
-    assert first_payload == second_payload
+    assert first.envelope.payload == second.envelope.payload
 
 
 @pytest.mark.asyncio
-async def test_agent_replays_queued_intents_on_startup() -> None:
+async def test_agent_processes_queued_intents_when_group_is_first_created() -> None:
     from shrap.risk_compliance.pre_trade_checker_agent import run_loop
 
     stop = asyncio.Event()
@@ -246,6 +244,7 @@ async def test_agent_replays_queued_intents_on_startup() -> None:
             redis,  # type: ignore[arg-type]
             RiskPolicy(allowed_universe={"AAPL"}, max_quantity_per_order=5),
             stop=stop,
+            start_id="0",
             count=10,
             block_ms=1,
             retry_delay_seconds=0,
@@ -254,99 +253,110 @@ async def test_agent_replays_queued_intents_on_startup() -> None:
     )
 
     assert [stream for stream, _ in redis.calls].count("risk.intent.approved") == 3
-    assert redis.reads[0] == {"trading.decision.intent": "0-0"}
 
 
 @pytest.mark.asyncio
-async def test_poll_once_does_not_advance_offset_on_publish_failure() -> None:
+async def test_processed_intents_do_not_replay_after_restart() -> None:
+    from shrap.risk_compliance.pre_trade_checker_agent import poll_once
+
+    redis = FakeRedis()
+    await publish_intent(redis, paper_intent(quantity=1))
+    policy = RiskPolicy(allowed_universe={"AAPL"})
+
+    assert await poll_once(redis, policy, subscriber_for(redis), count=10, block_ms=1) == 1  # type: ignore[arg-type]
+
+    # Restart: fresh subscriber object, same group. The intent must not be
+    # re-approved — this is the KI-006 fix.
+    assert await poll_once(redis, policy, subscriber_for(redis), count=10, block_ms=1) == 0  # type: ignore[arg-type]
+    assert [stream for stream, _ in redis.calls].count("risk.intent.approved") == 1
+
+
+@pytest.mark.asyncio
+async def test_publish_failure_leaves_intent_pending_for_retry() -> None:
     from shrap.risk_compliance.pre_trade_checker_agent import poll_once
 
     redis = FailRiskPublishRedis()
     await publish_intent(redis, paper_intent(quantity=1))
-    last_ids: dict[str, str] = {}
 
     processed = await poll_once(
         redis,  # type: ignore[arg-type]
         RiskPolicy(allowed_universe={"AAPL"}),
-        last_ids,
-        start_id="0-0",
+        subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert processed == 0
-    assert last_ids == {"trading.decision.intent": "0-0"}
+    # Not acked: a restarted consumer is redelivered the same intent.
+    redelivered = await subscriber_for(redis).read([STREAM_INTENT], block_ms=1)
+    assert len(redelivered) == 1
 
 
 @pytest.mark.asyncio
-async def test_poll_once_does_not_advance_offset_on_processing_exception() -> None:
-    from shrap.risk_compliance.pre_trade_checker_agent import STREAM_DECISION_INTENT, poll_once
+async def test_invalid_payload_is_acked_and_skipped_without_blocking_later_intents() -> None:
+    from shrap.events import Envelope
+    from shrap.risk_compliance.pre_trade_checker_agent import poll_once
 
     redis = FakeRedis()
-    redis.calls.append((STREAM_DECISION_INTENT, {"payload": "{not-json"}))
-    last_ids: dict[str, str] = {}
+    # Valid envelope the checker cannot process: payload_ref instead of the
+    # inline payload the risk gate requires.
+    poison = Envelope.new(
+        produced_by="test",
+        schema_version="1.0.0",
+        payload={"placeholder": True},
+    )
+    fields = poison.to_redis_fields()
+    fields.pop("payload")
+    fields["payload_ref"] = "qdrant://poison"
+    await redis.xadd(STREAM_INTENT, fields)
+    await publish_intent(redis, paper_intent(quantity=1))
 
     processed = await poll_once(
         redis,  # type: ignore[arg-type]
         RiskPolicy(allowed_universe={"AAPL"}),
-        last_ids,
-        start_id="0-0",
+        subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
-    assert processed == 0
-    assert last_ids == {"trading.decision.intent": "0-0"}
+    # The poison intent is skipped; the valid one behind it is still processed.
+    assert processed == 1
+    assert [stream for stream, _ in redis.calls].count("risk.intent.approved") == 1
+    assert await subscriber_for(redis).read([STREAM_INTENT], block_ms=1) == []
 
 
 @pytest.mark.asyncio
-async def test_poll_once_advances_offset_only_after_successful_publish() -> None:
+async def test_retry_succeeds_after_transient_publish_failure() -> None:
     from shrap.risk_compliance.pre_trade_checker_agent import poll_once
 
     redis = ToggleFailRiskPublishRedis()
     await publish_intent(redis, paper_intent(quantity=1))
-    last_ids: dict[str, str] = {}
+    policy = RiskPolicy(allowed_universe={"AAPL"})
+    subscriber = subscriber_for(redis)
 
-    processed = await poll_once(
-        redis,  # type: ignore[arg-type]
-        RiskPolicy(allowed_universe={"AAPL"}),
-        last_ids,
-        start_id="0-0",
-        count=1,
-        block_ms=1,
-    )
-
-    assert processed == 1
-    assert last_ids == {"trading.decision.intent": "1780128100001-0"}
+    assert await poll_once(redis, policy, subscriber, count=1, block_ms=1) == 1  # type: ignore[arg-type]
 
     await publish_intent(redis, paper_intent(quantity=2, size_hint=2))
     redis.fail_risk_publish = True
+    assert await poll_once(redis, policy, subscriber, count=1, block_ms=1) == 0  # type: ignore[arg-type]
 
-    processed = await poll_once(
-        redis,  # type: ignore[arg-type]
-        RiskPolicy(allowed_universe={"AAPL"}),
-        last_ids,
-        start_id="0-0",
-        count=1,
-        block_ms=1,
-    )
-
-    assert processed == 0
-    assert last_ids == {"trading.decision.intent": "1780128100001-0"}
+    # Outage over: the pending intent is redelivered and processed exactly once.
+    redis.fail_risk_publish = False
+    assert await poll_once(redis, policy, subscriber, count=1, block_ms=1) == 1  # type: ignore[arg-type]
+    assert [stream for stream, _ in redis.calls].count("risk.intent.approved") == 2
 
 
 @pytest.mark.asyncio
 async def test_process_intent_event_preserves_original_intent_payload() -> None:
-    from shrap.events import Envelope
+    from shrap.events import Envelope, ReceivedEvent
     from shrap.risk_compliance.pre_trade_checker_agent import process_intent_event
 
     redis = FakeRedis()
     intent = await publish_intent(redis, paper_intent(quantity=3, size_hint=3))
-    event_fields = redis.calls[0][1]
-    received = __import__("shrap.events", fromlist=["ReceivedEvent"]).ReceivedEvent(
-        stream="trading.decision.intent",
-        redis_stream_id="1780128100001-0",
-        envelope=Envelope.from_redis_fields(event_fields),
+    received = ReceivedEvent(
+        stream=STREAM_INTENT,
+        redis_stream_id="1-0",
+        envelope=Envelope.from_redis_fields(redis.calls[0][1]),
     )
 
     published = await process_intent_event(
@@ -377,7 +387,7 @@ async def test_run_loop_exits_cleanly_when_stop_signal_is_set() -> None:
             redis,  # type: ignore[arg-type]
             RiskPolicy(allowed_universe={"AAPL"}),
             stop=stop,
-            start_id="0-0",
+            start_id="0",
             count=10,
             block_ms=1,
             retry_delay_seconds=0,

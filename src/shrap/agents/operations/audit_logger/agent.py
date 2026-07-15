@@ -15,7 +15,8 @@ from shrap.agents.operations.audit_logger.db import PostgresAuditSink
 from shrap.agents.operations.audit_logger.records import record_from_envelope
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
-from shrap.events import EventSubscriber, ReceivedEvent, RedisSubscriber
+from shrap.events import ReceivedEvent
+from shrap.events.groups import GroupEventSubscriber, RedisGroupClient
 
 log = structlog.get_logger(__name__)
 
@@ -25,12 +26,24 @@ class StreamRedis(Protocol):
 
     async def type(self, key: str) -> str | bytes: ...
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any: ...
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
     ) -> Any: ...
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any: ...
 
 
 def _decode(value: str | bytes) -> str:
@@ -69,21 +82,23 @@ async def process_received_event(sink: PostgresAuditSink, event: ReceivedEvent) 
 async def poll_once(
     redis: StreamRedis,
     sink: PostgresAuditSink,
-    last_ids: dict[str, str],
+    subscriber: GroupEventSubscriber,
     stream_pattern: str,
-    start_id: str,
     count: int,
     block_ms: int,
 ) -> int:
-    """Discover streams, read one batch, and persist validated envelopes."""
+    """Discover streams, read one batch, and persist validated envelopes.
 
-    for stream in await discover_streams(redis, stream_pattern):
-        last_ids.setdefault(stream, start_id)
-    if not last_ids:
+    The audit trail must never stall the bus: every event is acknowledged,
+    processed or not. A failed insert is logged and dropped, exactly as the
+    pre-group logger advanced its offset regardless of outcome.
+    """
+
+    streams = await discover_streams(redis, stream_pattern)
+    if not streams:
         return 0
 
-    subscriber = EventSubscriber(cast(RedisSubscriber, redis))
-    events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+    events = await subscriber.read(streams=streams, count=count, block_ms=block_ms)
     if not events:
         return 0
 
@@ -99,7 +114,7 @@ async def poll_once(
                 redis_stream_id=event.redis_stream_id,
             )
         finally:
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
     return written
 
 
@@ -119,21 +134,25 @@ async def run(settings: Settings) -> None:
     sink = PostgresAuditSink(pool)
     await sink.ensure_schema()
 
-    last_ids: dict[str, str] = {}
+    subscriber = GroupEventSubscriber(
+        cast(RedisGroupClient, redis),
+        group=settings.service_name,
+        consumer=settings.instance_id,
+        start_id=settings.start_id,
+    )
     try:
         while not stop.is_set():
             try:
                 written = await poll_once(
                     cast(StreamRedis, redis),
                     sink,
-                    last_ids,
+                    subscriber,
                     stream_pattern=settings.stream_pattern,
-                    start_id=settings.start_id,
                     count=settings.read_count,
                     block_ms=settings.block_ms,
                 )
                 if written:
-                    log.info("audit_logger.batch", written=written, last_ids=dict(last_ids))
+                    log.info("audit_logger.batch", written=written, group=subscriber.group)
             except Exception:
                 log.exception("audit_logger.poll_failed")
                 await asyncio.sleep(settings.retry_delay_seconds)

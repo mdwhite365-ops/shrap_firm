@@ -4,45 +4,55 @@ from __future__ import annotations
 
 from typing import Any
 
+import fakeredis.aioredis
 import pytest
 
 from shrap.events import EventPublisher
+from shrap.events.groups import GroupEventSubscriber
 
 
 class FakeRedis:
+    """fakeredis transport with recorded ``xadd`` calls for assertions."""
+
     def __init__(self) -> None:
+        self._real = fakeredis.aioredis.FakeRedis(decode_responses=True)
         self.calls: list[tuple[str, dict[str, str]]] = []
-        self.reads: list[dict[str, str]] = []
 
     async def xadd(self, stream: str, fields: dict[str, str]) -> str:
         self.calls.append((stream, fields))
-        return f"178012830000{len(self.calls)}-0"
+        return await self._real.xadd(stream, fields)
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any:
+        return await self._real.xgroup_create(name, groupname, id=id, mkstream=mkstream)
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
-    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
-        self.reads.append({str(key): str(value) for key, value in streams.items()})
-        response: list[tuple[str, list[tuple[str, dict[str, str]]]]] = []
-        for stream, last_id in streams.items():
-            entries: list[tuple[str, dict[str, str]]] = []
-            for index, (written_stream, fields) in enumerate(self.calls, start=1):
-                redis_id = f"178012830000{index}-0"
-                if written_stream == stream and self._after(redis_id, str(last_id)):
-                    entries.append((redis_id, fields))
-            if entries:
-                response.append((str(stream), entries[: count or len(entries)]))
-        return response
+    ) -> Any:
+        return await self._real.xreadgroup(
+            groupname, consumername, streams, count=count, block=block
+        )
 
-    @staticmethod
-    def _after(redis_id: str, last_id: str) -> bool:
-        if last_id == "$":
-            return False
-        if last_id == "0" or last_id == "0-0":
-            return True
-        return redis_id > last_id
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any:
+        return await self._real.xack(name, groupname, *ids)
+
+
+def subscriber_for(redis: FakeRedis) -> GroupEventSubscriber:
+    return GroupEventSubscriber(
+        redis,  # type: ignore[arg-type]
+        group="execution-agent",
+        start_id="0",
+    )
 
 
 class FakeBroker:
@@ -116,19 +126,18 @@ async def test_poll_once_submits_approved_paper_order_and_publishes_submitted_ev
         correlation_id="01KINTENT000000000000000",
     )
     broker = FakeBroker()
-    last_ids: dict[str, str] = {}
 
     processed = await poll_once(
         redis=redis,  # type: ignore[arg-type]
         broker=broker,
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert processed == 1
-    assert last_ids == {STREAM_RISK_APPROVED: "1780128300001-0"}
+    # Acked: a restarted consumer must not resubmit the order.
+    assert await subscriber_for(redis).read([STREAM_RISK_APPROVED], block_ms=1) == []
     assert broker.orders == [
         {
             "symbol": "AAPL",
@@ -172,21 +181,19 @@ async def test_poll_once_refuses_non_paper_approved_intent_and_skips_past_it() -
         ),
     )
     broker = FakeBroker()
-    last_ids: dict[str, str] = {}
 
     processed = await poll_once(
         redis=redis,  # type: ignore[arg-type]
         broker=broker,
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert processed == 0
     assert broker.orders == []
-    # Refused AND skipped: offset advanced past the poison event.
-    assert last_ids == {STREAM_RISK_APPROVED: "1780128300001-0"}
+    # Refused AND skipped: acked, so it is never redelivered.
+    assert await subscriber_for(redis).read([STREAM_RISK_APPROVED], block_ms=1) == []
     assert [stream for stream, _ in redis.calls] == [STREAM_RISK_APPROVED]
 
 
@@ -220,20 +227,18 @@ async def test_poll_order_status_once_publishes_status_update_for_open_order() -
         "side": "buy",
         "status": "accepted",
     }
-    last_ids: dict[str, str] = {}
 
     processed = await poll_order_status_once(
         redis=redis,  # type: ignore[arg-type]
         broker=broker,
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert processed == 1
     assert broker.status_requests == ["paper-order-123"]
-    assert last_ids == {STREAM_EXECUTION_ORDER_SUBMITTED: "1780128300001-0"}
+    assert await subscriber_for(redis).read([STREAM_EXECUTION_ORDER_SUBMITTED], block_ms=1) == []
     assert redis.calls[-1][0] == STREAM_EXECUTION_ORDER_STATUS_UPDATED
     status_event = redis.calls[-1][1]
     assert status_event["h_correlation_id"] == submitted_event.envelope.event_id
@@ -273,19 +278,17 @@ async def test_poll_order_status_once_publishes_filled_event_for_filled_order() 
         "filled_avg_price": "185.25",
         "filled_at": "2026-06-17T18:45:00Z",
     }
-    last_ids: dict[str, str] = {}
 
     processed = await poll_order_status_once(
         redis=redis,  # type: ignore[arg-type]
         broker=broker,
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert processed == 1
-    assert last_ids == {STREAM_EXECUTION_ORDER_SUBMITTED: "1780128300001-0"}
+    assert await subscriber_for(redis).read([STREAM_EXECUTION_ORDER_SUBMITTED], block_ms=1) == []
     assert redis.calls[-1][0] == STREAM_EXECUTION_ORDER_FILLED
     filled_event = redis.calls[-1][1]
     assert filled_event["h_correlation_id"] == submitted_event.envelope.event_id

@@ -29,6 +29,8 @@ def main() -> None:
             block_ms=settings.block_ms,
             retry_delay_seconds=settings.retry_delay_seconds,
             threshold=settings.confidence_threshold,
+            group=settings.service_name,
+            consumer=settings.instance_id,
         )
     )
 

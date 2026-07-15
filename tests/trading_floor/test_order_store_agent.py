@@ -5,46 +5,56 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import fakeredis.aioredis
 import pytest
 
 from shrap.events import EventPublisher
+from shrap.events.groups import GroupEventSubscriber
 from shrap.trading_floor.order_store import PaperOrderRecord
 
 
 class FakeRedis:
+    """fakeredis transport with recorded ``xadd`` calls for assertions."""
+
     def __init__(self) -> None:
+        self._real = fakeredis.aioredis.FakeRedis(decode_responses=True)
         self.calls: list[tuple[str, dict[str, str]]] = []
-        self.reads: list[dict[str, str]] = []
 
     async def xadd(self, stream: str, fields: dict[str, str]) -> str:
         self.calls.append((stream, fields))
-        return f"178012860000{len(self.calls)}-0"
+        return await self._real.xadd(stream, fields)
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any:
+        return await self._real.xgroup_create(name, groupname, id=id, mkstream=mkstream)
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
-    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
-        self.reads.append({str(key): str(value) for key, value in streams.items()})
-        response: list[tuple[str, list[tuple[str, dict[str, str]]]]] = []
-        for stream, last_id in streams.items():
-            entries: list[tuple[str, dict[str, str]]] = []
-            for index, (written_stream, fields) in enumerate(self.calls, start=1):
-                redis_id = f"178012860000{index}-0"
-                if written_stream == stream and self._after(redis_id, str(last_id)):
-                    entries.append((redis_id, fields))
-            if entries:
-                response.append((str(stream), entries[: count or len(entries)]))
-        return response
+    ) -> Any:
+        return await self._real.xreadgroup(
+            groupname, consumername, streams, count=count, block=block
+        )
 
-    @staticmethod
-    def _after(redis_id: str, last_id: str) -> bool:
-        if last_id == "$":
-            return False
-        if last_id == "0" or last_id == "0-0":
-            return True
-        return redis_id > last_id
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any:
+        return await self._real.xack(name, groupname, *ids)
+
+
+def subscriber_for(redis: FakeRedis) -> GroupEventSubscriber:
+    return GroupEventSubscriber(
+        redis,  # type: ignore[arg-type]
+        group="paper-order-store",
+        start_id="0",
+    )
 
 
 class FakeSink:
@@ -56,7 +66,7 @@ class FakeSink:
 
 
 @pytest.mark.asyncio
-async def test_poll_once_persists_execution_order_streams_and_advances_offsets() -> None:
+async def test_poll_once_persists_execution_order_streams_and_acks() -> None:
     from shrap.trading_floor.order_store_agent import EXECUTION_STREAMS, poll_once
 
     redis = FakeRedis()
@@ -105,29 +115,18 @@ async def test_poll_once_persists_execution_order_streams_and_advances_offsets()
         },
     )
     sink = FakeSink()
-    last_ids: dict[str, str] = {}
 
     written = await poll_once(
-        redis=redis,  # type: ignore[arg-type]
         sink=sink,  # type: ignore[arg-type]
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert written == 3
-    assert sorted(last_ids) == sorted(EXECUTION_STREAMS)
-    assert last_ids == {
-        "execution.order.submitted": "1780128600001-0",
-        "execution.order.status-updated": "1780128600002-0",
-        "execution.order.filled": "1780128600003-0",
-    }
-    assert [record.event_topic for record in sink.records] == [  # type: ignore[attr-defined]
-        "execution.order.submitted",
-        "execution.order.status-updated",
-        "execution.order.filled",
-    ]
+    assert sorted({record.event_topic for record in sink.records}) == sorted(EXECUTION_STREAMS)  # type: ignore[attr-defined]
+    # All three acked: a restarted consumer re-persists nothing (KI-006).
+    assert await subscriber_for(redis).read(list(EXECUTION_STREAMS), block_ms=1) == []
 
 
 @pytest.mark.asyncio
@@ -147,7 +146,7 @@ async def test_run_loop_exits_cleanly_when_stop_signal_is_set() -> None:
             redis,  # type: ignore[arg-type]
             sink,  # type: ignore[arg-type]
             stop=stop,
-            start_id="0-0",
+            start_id="0",
             count=10,
             block_ms=1,
             retry_delay_seconds=0,
@@ -177,25 +176,22 @@ async def test_poll_once_skips_malformed_event_and_persists_the_rest() -> None:
         payload={"broker": "alpaca-paper", "broker_order_id": "order-2", "status": "accepted"},
     )
     sink = FakeSink()
-    last_ids: dict[str, str] = {}
 
     written = await poll_once(
-        redis=redis,  # type: ignore[arg-type]
         sink=sink,  # type: ignore[arg-type]
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert written == 1
     assert [record.broker_order_id for record in sink.records] == ["order-2"]
-    # Offset advanced past BOTH events - the poison one was skipped, not retried.
-    assert last_ids["execution.order.submitted"] == "1780128600002-0"
+    # Both acked — the poison one was skipped, not left pending for retry.
+    assert await subscriber_for(redis).read(["execution.order.submitted"], block_ms=1) == []
 
 
 @pytest.mark.asyncio
-async def test_poll_once_retries_on_sink_failure_without_advancing() -> None:
+async def test_poll_once_retries_on_sink_failure_without_acking() -> None:
     from shrap.trading_floor.order_store_agent import poll_once
 
     redis = FakeRedis()
@@ -210,15 +206,14 @@ async def test_poll_once_retries_on_sink_failure_without_advancing() -> None:
         async def upsert(self, record: PaperOrderRecord) -> None:
             raise RuntimeError("database unreachable")
 
-    last_ids: dict[str, str] = {}
     written = await poll_once(
-        redis=redis,  # type: ignore[arg-type]
         sink=FailingSink(),  # type: ignore[arg-type]
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert written == 0
-    assert last_ids["execution.order.submitted"] == "0-0"
+    # Not acked: redelivered next cycle so the outage loses nothing.
+    redelivered = await subscriber_for(redis).read(["execution.order.submitted"], block_ms=1)
+    assert len(redelivered) == 1

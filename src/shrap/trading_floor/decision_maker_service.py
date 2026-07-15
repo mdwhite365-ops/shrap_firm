@@ -5,10 +5,11 @@ Wraps the Card 2 wire-stub logic (``trading.strategy.signal`` →
 deployed consumers: malformed signals skip with the offset advanced,
 systemic errors retry, low-confidence signals are skipped explicitly.
 
-Default ``start_id='$'``: on (re)start the stub only converts NEW signals.
-Replaying historical signals into fresh intents would re-trade them; the
-rate guardrails would catch it, but not creating the duplicates at all is
-better.
+Reads through a Redis consumer group (KI-006), so offsets survive restarts.
+Default ``start_id='$'``: the first time the group is created it only sees
+NEW signals. Replaying historical signals into fresh intents would re-trade
+them; the rate guardrails would catch it, but not creating the duplicates at
+all is better.
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ import structlog
 from redis.asyncio import Redis
 
 from shrap.common.logging import configure_logging
-from shrap.events import EventPublisher, EventSubscriber
+from shrap.events import EventPublisher
+from shrap.events.groups import GroupEventSubscriber, RedisGroupClient
 from shrap.trading_floor.decision_maker_stub import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     PRODUCED_BY,
@@ -34,16 +36,30 @@ from shrap.trading_floor.decision_maker_stub import (
 
 log = structlog.get_logger(__name__)
 
+CONSUMER_GROUP = "decision-maker"
+
 
 class RedisStreamClient(Protocol):
     async def xadd(self, stream: str, fields: dict[str, str]) -> str: ...
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any: ...
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
     ) -> Any: ...
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any: ...
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
@@ -57,21 +73,22 @@ def _install_signal_handlers(stop: asyncio.Event) -> None:
 
 async def poll_once(
     redis: RedisStreamClient,
-    last_ids: dict[str, str],
-    start_id: str,
+    subscriber: GroupEventSubscriber,
     count: int,
     block_ms: int,
     threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
     produced_by: str = PRODUCED_BY,
+    retry_delay_seconds: float = 0.0,
 ) -> int:
     """Convert one batch of strategy signals into decision intents."""
 
-    last_ids.setdefault(STREAM_STRATEGY_SIGNAL, start_id)
-    subscriber = EventSubscriber(redis)
     try:
-        events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+        events = await subscriber.read(
+            streams=[STREAM_STRATEGY_SIGNAL], count=count, block_ms=block_ms
+        )
     except Exception:
-        log.exception("decision_maker.read_failed", streams=dict(last_ids))
+        log.exception("decision_maker.read_failed", group=subscriber.group)
+        await asyncio.sleep(retry_delay_seconds)
         return 0
 
     emitted = 0
@@ -84,7 +101,7 @@ async def poll_once(
                     signal_event_id=event.envelope.event_id,
                     reason="no payload" if signal_payload is None else "below threshold",
                 )
-                last_ids[event.stream] = event.redis_stream_id
+                await subscriber.ack(event)
                 continue
             intent_payload = build_stub_intent(signal_payload, threshold)
             result = await EventPublisher(redis).publish(
@@ -94,7 +111,7 @@ async def poll_once(
                 payload=intent_payload,
                 correlation_id=event.envelope.event_id,
             )
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
             emitted += 1
             log.info(
                 "decision_maker.intent_published",
@@ -108,15 +125,17 @@ async def poll_once(
                 redis_stream_id=event.redis_stream_id,
                 signal_event_id=event.envelope.event_id,
             )
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
             continue
         except Exception:
+            # Systemic error: no ack, so the same signal is redelivered next cycle.
             log.exception(
                 "decision_maker.signal_failed",
                 stream=event.stream,
                 redis_stream_id=event.redis_stream_id,
                 signal_event_id=event.envelope.event_id,
             )
+            await asyncio.sleep(retry_delay_seconds)
             break
     return emitted
 
@@ -129,22 +148,29 @@ async def run_loop(
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
     threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+    group: str = CONSUMER_GROUP,
+    consumer: str | None = None,
 ) -> None:
     """Run the Decision Maker stub loop until ``stop`` is set."""
 
-    last_ids: dict[str, str] = {}
+    subscriber = GroupEventSubscriber(
+        cast(RedisGroupClient, redis),
+        group=group,
+        consumer=consumer,
+        start_id=start_id,
+    )
     while not stop.is_set():
         try:
             emitted = await poll_once(
                 redis=redis,
-                last_ids=last_ids,
-                start_id=start_id,
+                subscriber=subscriber,
                 count=count,
                 block_ms=block_ms,
                 threshold=threshold,
+                retry_delay_seconds=retry_delay_seconds,
             )
             if emitted:
-                log.info("decision_maker.batch", emitted=emitted, last_ids=dict(last_ids))
+                log.info("decision_maker.batch", emitted=emitted, group=group)
             else:
                 await asyncio.sleep(0)
         except Exception:
@@ -161,6 +187,8 @@ async def run(
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
     threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
+    group: str = CONSUMER_GROUP,
+    consumer: str | None = None,
 ) -> None:
     """Run the Decision Maker stub service until SIGINT/SIGTERM."""
 
@@ -170,6 +198,8 @@ async def run(
         redis_url=redis_url,
         start_id=start_id,
         threshold=threshold,
+        group=group,
+        consumer=consumer or group,
     )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
@@ -187,10 +217,12 @@ async def run(
             block_ms=block_ms,
             retry_delay_seconds=retry_delay_seconds,
             threshold=threshold,
+            group=group,
+            consumer=consumer,
         )
     finally:
         await redis.aclose()
         log.info("decision_maker.stopped")
 
 
-__all__ = ["poll_once", "run", "run_loop"]
+__all__ = ["CONSUMER_GROUP", "poll_once", "run", "run_loop"]
