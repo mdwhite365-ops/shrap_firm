@@ -1,7 +1,8 @@
 # Paper spine roadmap tree
 
-**Last updated:** 2026-07-06
+**Last updated:** 2026-07-15
 **Principle:** Finish the paper-trading spine before Research implementation.
+**Spine status: CLOSED** — market-hours smoke passed 9/9 on the Dell 2026-07-15.
 
 ## Tree outline
 
@@ -19,13 +20,13 @@ Shrap paper-trading spine
 │   ├── Pre-Trade reliability fixes [done]
 │   └── Pre-Trade deployable service [done]
 │
-├── 2. Execution path [mostly done]
+├── 2. Execution path [done]
 │   ├── Execution Agent core [done]
 │   ├── Execution Agent deployable service [done]
 │   ├── Alpaca paper order submit [done]
 │   ├── Alpaca paper status/fill polling [done]
-│   ├── Pending-order re-polling until terminal [Card 16, PR #22]
-│   └── Live fill observed [pending market-hours Card 16 smoke]
+│   ├── Pending-order re-polling until terminal [done, Card 16, PR #22]
+│   └── Live fill observed [done, first fill 2026-07-08]
 │
 ├── 3. Persistence path [done]
 │   ├── Paper order event schema/sink [done, PR #13]
@@ -39,11 +40,13 @@ Shrap paper-trading spine
 │   ├── Emit operations.reconciliation-completed [done, PR #18]
 │   ├── Emit operations.reconciliation-discrepancy [done, PR #18]
 │   ├── Deployable service [done, PR #20]
+│   ├── Account snapshots on the bus + per-pass persistence [done, PR #31]
+│   ├── Lookback window for pre-spine broker history [done, PR #34–35]
 │   └── Later: derive/check current positions [deferred, see KI-005]
 │
-├── 5. Operational closure [mostly done]
+├── 5. Operational closure [done for paper spine]
 │   ├── Full Docker Compose paper-spine smoke [done, Card 15 passed 2026-07-06]
-│   ├── Market-hours live fill smoke [pending: Card 16 merge + market hours]
+│   ├── Market-hours live fill smoke [done, Card 16 passed 9/9 2026-07-15]
 │   ├── Audit trail verification across all streams [done, part of Card 15 smoke]
 │   ├── State Manager status files from events [deferred to post-Research]
 │   └── Daily briefing input readiness [deferred to Reporting implementation]
@@ -54,7 +57,8 @@ Shrap paper-trading spine
 │   └── NautilusTrader re-scoped as live-capital / advanced-execution gate [ADR-0003]
 │
 └── 7. Research unlock [OPEN — Mike accepted spine status 2026-07-06]
-    ├── Regime Classifier minimal statistical implementation [Card 18, in progress]
+    ├── Regime Classifier minimal statistical implementation [done, Card 18, PR #24–26]
+    ├── First autonomous signal path (fixture + decision maker) [done, PR #33 — disarmed by default]
     ├── Strategy registry / librarian schema
     ├── Hypothesis Generator seed path
     ├── Strategy Evaluator minimal backtest harness
@@ -95,7 +99,7 @@ Shrap paper-trading spine
 - Verify `ops.audit_events` rows.
 - Verify `trading.paper_order_events` rows.
 
-### Card 16 — Market-hours fill smoke
+### Card 16 — Market-hours fill smoke [done, 9/9 on the Dell 2026-07-15]
 
 **Acceptance:**
 

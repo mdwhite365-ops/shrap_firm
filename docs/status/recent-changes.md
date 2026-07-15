@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-06
+**Last updated:** 2026-07-15
 
 ## Merged since the inner-loop paper spine push began
 
@@ -24,6 +24,17 @@
 - PR #25 — Dell compose drift committed; per-tick feature/profile logging.
 - PR #26 — Regime vol-threshold calibration v0.1 (melt-up/crisis-recovery adjoin at 0.18).
 - PR #27 — Execution Agent poison-event handling (fixed the post-restart replay stall).
+- PR #28 — Status reconciliation after the poison fix (PRs #22–27).
+- PR #29 — Doc-drift audit against deployed reality.
+- PR #30 — Redis-backed order-rate guardrails in the pre-trade gate.
+- PR #31 — Account snapshots published per reconciliation pass.
+- PR #32 — Poison-skip hardening for Paper Order Store, Audit Logger, and
+  `EventSubscriber`.
+- PR #33 — First autonomous signal path: strategy fixture + decision maker
+  service (disarmed by default).
+- PR #34 — Reconciliation lookback window (default 7 days).
+- PR #35 — Percent-encode the lookback timestamp in Alpaca order queries
+  (found live 2026-07-15: the raw `+00:00` offset broke every pass).
 
 ## Open
 
@@ -42,8 +53,15 @@
 - **Regime Classifier live:** backfilled 2,466 daily bars, computed all 7
   features, and produced the firm's first debounced regime transition
   (`unknown → crisis-recovery`, 19:04 UTC, confidence 0.67).
-- The first live `execution.order.filled` event is still pending a
-  market-hours run: `shrap-spine-smoke --wait-fill --wait-reconciliation`.
+- **2026-07-08 (first live fill):** market-hours smoke reached 8/9 — first
+  live `execution.order.filled` observed (AAPL x1 @ 313.33, KI-003 mechanism
+  proven). Reconciliation flagged a June-era order predating persistence →
+  lookback window (PR #34).
+- **2026-07-15 (spine closed):** after merging PR #34 the smoke timed out on
+  reconciliation — the raw RFC3339 `+00:00` in the Alpaca `after` query
+  decoded to a space and every pass failed silently (PR #35). With the fix
+  deployed: **9/9 PASS**, fill AAPL x1 @ 326.28, `reconciliation: clean=True
+  discrepancies=0`. Card 16 closed; the paper spine is fully verified.
 
 ## Security notes
 
