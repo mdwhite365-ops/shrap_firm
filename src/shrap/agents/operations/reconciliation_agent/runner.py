@@ -67,6 +67,7 @@ async def run_loop(
     interval_seconds: float = 300.0,
     retry_delay_seconds: float = 30.0,
     snapshot_sink: AccountSnapshotSink | None = None,
+    lookback_days: float | None = 7.0,
 ) -> None:
     """Run reconciliation passes until ``stop`` is set."""
 
@@ -79,6 +80,7 @@ async def run_loop(
                 produced_by=produced_by,
                 broker=broker,
                 snapshot_sink=snapshot_sink,
+                lookback_days=lookback_days,
             )
             delay = interval_seconds
         except Exception:
@@ -98,6 +100,7 @@ async def run(
     order_limit: int = 500,
     interval_seconds: float = 300.0,
     retry_delay_seconds: float = 30.0,
+    lookback_days: float | None = 7.0,
 ) -> None:
     """Run the Reconciliation Agent service until SIGINT/SIGTERM."""
 
@@ -138,6 +141,7 @@ async def run(
                 interval_seconds=interval_seconds,
                 retry_delay_seconds=retry_delay_seconds,
                 snapshot_sink=snapshot_store,
+                lookback_days=lookback_days,
             )
         finally:
             await redis.aclose()

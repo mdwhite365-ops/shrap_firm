@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     order_limit: int = 500
     interval_seconds: float = 300.0
     retry_delay_seconds: float = 30.0
+    lookback_days: float = 7.0
     log_level: str = "INFO"
 
     def alpaca_settings(self) -> AlpacaPaperSettings:
@@ -69,5 +70,6 @@ class Settings(BaseSettings):
             "order_limit": self.order_limit,
             "interval_seconds": self.interval_seconds,
             "retry_delay_seconds": self.retry_delay_seconds,
+            "lookback_days": self.lookback_days,
             "log_level": self.log_level,
         }

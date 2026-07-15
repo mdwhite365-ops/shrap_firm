@@ -17,7 +17,7 @@ from shrap.trading_floor.alpaca import AlpacaPaperClient, AsyncHttpClient
 class BrokerSnapshotReader(Protocol):
     async def get_account(self) -> dict[str, Any]: ...
 
-    async def list_orders(self) -> list[BrokerOrderState]: ...
+    async def list_orders(self, since: str | None = None) -> list[BrokerOrderState]: ...
 
 
 class AlpacaPaperSnapshotReader:
@@ -38,11 +38,12 @@ class AlpacaPaperSnapshotReader:
     async def get_account(self) -> dict[str, Any]:
         return await self._client.get_account(self._http_client)
 
-    async def list_orders(self) -> list[BrokerOrderState]:
+    async def list_orders(self, since: str | None = None) -> list[BrokerOrderState]:
         raw_orders = await self._client.list_orders(
             self._http_client,
             status=self._order_status,
             limit=self._order_limit,
+            after=since,
         )
         orders: list[BrokerOrderState] = []
         for raw in raw_orders:

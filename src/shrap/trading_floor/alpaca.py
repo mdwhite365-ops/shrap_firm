@@ -98,15 +98,20 @@ class AlpacaPaperClient:
         http_client: AsyncHttpClient,
         status: str = "all",
         limit: int = 500,
+        after: str | None = None,
     ) -> list[dict[str, Any]]:
         """List Alpaca paper orders, most recent first.
 
         Defaults to ``status=all`` so reconciliation sees open, filled, and
         canceled orders in one snapshot. Alpaca caps ``limit`` at 500.
+        ``after`` (RFC3339) filters server-side by submitted_at.
         """
 
+        url = f"{self._api_base()}/orders?status={status}&limit={limit}&direction=desc"
+        if after:
+            url += f"&after={after}"
         response = await http_client.get(
-            f"{self._api_base()}/orders?status={status}&limit={limit}&direction=desc",
+            url,
             headers=self.auth_headers(),
         )
         response.raise_for_status()

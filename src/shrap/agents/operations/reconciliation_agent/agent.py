@@ -10,6 +10,7 @@ one pass share a correlation ID so consumers can group them.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 import structlog
@@ -32,7 +33,9 @@ DEFAULT_BROKER = "alpaca-paper"
 
 
 class OrderStateRepository(Protocol):
-    async def latest_order_states(self, broker: str) -> Sequence[StoredOrderState]: ...
+    async def latest_order_states(
+        self, broker: str, since: object | None = None
+    ) -> Sequence[StoredOrderState]: ...
 
 
 class AccountSnapshotSink(Protocol):
@@ -58,6 +61,7 @@ async def reconcile_once(
     broker: str = DEFAULT_BROKER,
     correlation_id: str | None = None,
     snapshot_sink: AccountSnapshotSink | None = None,
+    lookback_days: float | None = None,
 ) -> ReconciliationReport:
     """Run one reconciliation pass and publish its outcome.
 
@@ -68,10 +72,13 @@ async def reconcile_once(
     """
 
     run_id = correlation_id or str(ULID())
+    cutoff: datetime | None = None
+    if lookback_days is not None and lookback_days > 0:
+        cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
 
     account = await broker_reader.get_account()
-    broker_orders = await broker_reader.list_orders()
-    stored = await repository.latest_order_states(broker)
+    broker_orders = await broker_reader.list_orders(since=cutoff.isoformat() if cutoff else None)
+    stored = await repository.latest_order_states(broker, since=cutoff)
 
     report = compare_orders(stored=stored, broker_orders=broker_orders, broker=broker)
 
@@ -122,6 +129,7 @@ async def reconcile_once(
             "matched": report.matched,
             "discrepancies": len(report.discrepancies),
             "clean": report.is_clean,
+            "lookback_days": lookback_days,
         },
         correlation_id=run_id,
     )
