@@ -23,6 +23,25 @@ WHERE broker = $1
 ORDER BY broker_order_id, occurred_at DESC, recorded_at DESC
 """.strip()
 
+SELECT_LATEST_ORDER_STATES_SINCE_SQL = """
+SELECT DISTINCT ON (broker_order_id)
+    broker,
+    broker_order_id,
+    status,
+    symbol,
+    filled_quantity
+FROM trading.paper_order_events
+WHERE broker = $1
+  AND broker_order_id IN (
+    SELECT broker_order_id
+    FROM trading.paper_order_events
+    WHERE broker = $1
+    GROUP BY broker_order_id
+    HAVING min(occurred_at) >= $2
+  )
+ORDER BY broker_order_id, occurred_at DESC, recorded_at DESC
+""".strip()
+
 
 class AsyncConnection(Protocol):
     async def execute(self, sql: str, *args: object) -> object: ...
@@ -46,9 +65,14 @@ class PostgresOrderEventRepository:
     def __init__(self, pool: AsyncPool) -> None:
         self._pool = pool
 
-    async def latest_order_states(self, broker: str) -> list[StoredOrderState]:
+    async def latest_order_states(
+        self, broker: str, since: object | None = None
+    ) -> list[StoredOrderState]:
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(SELECT_LATEST_ORDER_STATES_SQL, broker)
+            if since is None:
+                rows = await conn.fetch(SELECT_LATEST_ORDER_STATES_SQL, broker)
+            else:
+                rows = await conn.fetch(SELECT_LATEST_ORDER_STATES_SINCE_SQL, broker, since)
         return [
             StoredOrderState(
                 broker=str(row["broker"]),

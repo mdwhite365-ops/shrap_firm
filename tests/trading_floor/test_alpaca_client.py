@@ -143,3 +143,9 @@ async def test_list_orders_queries_all_statuses_and_validates_shape() -> None:
     non_list = FakeHttpClient({"id": "order-1"})
     with pytest.raises(ValueError, match="JSON array"):
         await AlpacaPaperClient(settings).list_orders(non_list)  # type: ignore[arg-type]
+
+    with_after = FakeHttpClient([])
+    await AlpacaPaperClient(settings).list_orders(  # type: ignore[arg-type]
+        with_after, after="2026-06-30T00:00:00+00:00"
+    )
+    assert "after=2026-06-30T00:00:00+00:00" in with_after.urls[0]

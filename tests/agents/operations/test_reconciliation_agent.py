@@ -133,11 +133,13 @@ class FakeBrokerReader:
     ) -> None:
         self._account = account
         self._orders = orders
+        self.requested_since: list[str | None] = []
 
     async def get_account(self) -> dict[str, Any]:
         return self._account
 
-    async def list_orders(self) -> list[BrokerOrderState]:
+    async def list_orders(self, since: str | None = None) -> list[BrokerOrderState]:
+        self.requested_since.append(since)
         return self._orders
 
 
@@ -145,9 +147,13 @@ class FakeRepository:
     def __init__(self, states: list[StoredOrderState]) -> None:
         self._states = states
         self.requested_brokers: list[str] = []
+        self.requested_since: list[object | None] = []
 
-    async def latest_order_states(self, broker: str) -> list[StoredOrderState]:
+    async def latest_order_states(
+        self, broker: str, since: object | None = None
+    ) -> list[StoredOrderState]:
         self.requested_brokers.append(broker)
+        self.requested_since.append(since)
         return self._states
 
 
@@ -293,6 +299,7 @@ async def test_reconcile_once_clean_pass_publishes_completed_only() -> None:
         "matched": 1,
         "discrepancies": 0,
         "clean": True,
+        "lookback_days": None,
     }
     assert envelope.correlation_id is not None
 
@@ -343,6 +350,42 @@ async def test_reconcile_once_publishes_discrepancy_events_before_completed() ->
     assert completed is not None
     assert completed["discrepancies"] == 2
     assert completed["clean"] is False
+
+
+@pytest.mark.asyncio
+async def test_reconcile_once_lookback_passes_cutoff_to_both_sides() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from shrap.agents.operations.reconciliation_agent.agent import reconcile_once
+
+    redis = FakeRedis()
+    broker_reader = FakeBrokerReader(account={"status": "ACTIVE"}, orders=[])
+    repository = FakeRepository([])
+
+    await reconcile_once(
+        broker_reader=broker_reader,
+        repository=repository,
+        publisher=EventPublisher(redis),
+        lookback_days=7.0,
+    )
+
+    assert len(broker_reader.requested_since) == 1
+    since_str = broker_reader.requested_since[0]
+    assert since_str is not None
+    since_dt = datetime.fromisoformat(since_str)
+    age = datetime.now(UTC) - since_dt
+    assert timedelta(days=6.9) < age < timedelta(days=7.1)
+    assert repository.requested_since[0] is not None
+
+    # Disabled lookback passes None to both sides.
+    await reconcile_once(
+        broker_reader=broker_reader,
+        repository=repository,
+        publisher=EventPublisher(redis),
+        lookback_days=None,
+    )
+    assert broker_reader.requested_since[-1] is None
+    assert repository.requested_since[-1] is None
 
 
 @pytest.mark.asyncio

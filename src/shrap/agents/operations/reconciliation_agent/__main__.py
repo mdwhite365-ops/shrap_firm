@@ -31,6 +31,7 @@ def main() -> None:
             order_limit=settings.order_limit,
             interval_seconds=settings.interval_seconds,
             retry_delay_seconds=settings.retry_delay_seconds,
+            lookback_days=settings.lookback_days if settings.lookback_days > 0 else None,
         )
     )
 
