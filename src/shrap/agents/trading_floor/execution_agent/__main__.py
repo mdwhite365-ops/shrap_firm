@@ -23,6 +23,8 @@ def main() -> None:
             block_ms=settings.block_ms,
             retry_delay_seconds=settings.retry_delay_seconds,
             status_poll_interval_seconds=settings.status_poll_interval_seconds,
+            group=settings.service_name,
+            consumer=settings.instance_id,
         )
     )
 

@@ -6,38 +6,56 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+import fakeredis.aioredis
 import pytest
 
 from shrap.events import Envelope, EventPublisher, normalize_redis_fields
+from shrap.events.groups import GroupEventSubscriber
 from shrap.trading_floor.decision_maker_service import poll_once
 
 
 class FakeRedis:
+    """fakeredis transport with recorded ``xadd`` calls for assertions."""
+
     def __init__(self) -> None:
+        self._real = fakeredis.aioredis.FakeRedis(decode_responses=True)
         self.calls: list[tuple[str, dict[str, str]]] = []
 
     async def xadd(self, stream: str, fields: dict[str, str]) -> str:
         self.calls.append((stream, fields))
-        return f"178012860000{len(self.calls)}-0"
+        return await self._real.xadd(stream, fields)
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any:
+        return await self._real.xgroup_create(name, groupname, id=id, mkstream=mkstream)
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
-    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
-        response: list[tuple[str, list[tuple[str, dict[str, str]]]]] = []
-        for stream, last_id in streams.items():
-            if str(last_id) == "$":
-                continue
-            entries = [
-                (f"178012860000{index}-0", fields)
-                for index, (written_stream, fields) in enumerate(self.calls, start=1)
-                if written_stream == stream and f"178012860000{index}-0" > str(last_id)
-            ]
-            if entries:
-                response.append((str(stream), entries[: count or len(entries)]))
-        return response
+    ) -> Any:
+        return await self._real.xreadgroup(
+            groupname, consumername, streams, count=count, block=block
+        )
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any:
+        return await self._real.xack(name, groupname, *ids)
+
+
+def subscriber_for(redis: FakeRedis) -> GroupEventSubscriber:
+    return GroupEventSubscriber(
+        redis,  # type: ignore[arg-type]
+        group="decision-maker",
+        start_id="0",
+    )
 
 
 def _signal(confidence: float, ticker: str = "SPY", quantity: int = 1) -> dict[str, Any]:
@@ -60,12 +78,10 @@ async def test_high_confidence_signal_becomes_intent() -> None:
         schema_version="1.0.0",
         payload=_signal(0.99),
     )
-    last_ids: dict[str, str] = {"trading.strategy.signal": "0-0"}
 
     emitted = await poll_once(
         redis=redis,  # type: ignore[arg-type]
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
@@ -103,18 +119,18 @@ async def test_low_confidence_and_malformed_signals_skip_and_advance() -> None:
         schema_version="1.0.0",
         payload=_signal(0.95),
     )
-    last_ids: dict[str, str] = {"trading.strategy.signal": "0-0"}
 
     emitted = await poll_once(
         redis=redis,  # type: ignore[arg-type]
-        last_ids=last_ids,
-        start_id="0-0",
+        subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
     )
 
     assert emitted == 1
-    assert last_ids["trading.strategy.signal"] == "1780128600003-0"
+    # All three acked: skipped, malformed, and emitted alike stay skipped
+    # after a restart instead of being redelivered.
+    assert await subscriber_for(redis).read(["trading.strategy.signal"], block_ms=1) == []
     intent_calls = [c for c in redis.calls if c[0] == "trading.decision.intent"]
     assert len(intent_calls) == 1
 

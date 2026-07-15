@@ -17,7 +17,8 @@ import structlog
 from redis.asyncio import Redis
 
 from shrap.common.logging import configure_logging
-from shrap.events import EventPublisher, EventSubscriber, PublishedEvent, ReceivedEvent
+from shrap.events import EventPublisher, PublishedEvent, ReceivedEvent
+from shrap.events.groups import GroupEventSubscriber, RedisGroupClient
 from shrap.trading_floor.alpaca import AlpacaPaperClient, AlpacaPaperSettings, AsyncHttpClient
 
 log = structlog.get_logger(__name__)
@@ -28,17 +29,30 @@ STREAM_EXECUTION_ORDER_STATUS_UPDATED = "execution.order.status-updated"
 STREAM_EXECUTION_ORDER_FILLED = "execution.order.filled"
 PRODUCED_BY = "trading-floor/execution-agent"
 SCHEMA_VERSION = "1.0.0"
+CONSUMER_GROUP = "execution-agent"
 
 
 class RedisStreamClient(Protocol):
     async def xadd(self, stream: str, fields: dict[str, str]) -> str: ...
 
-    async def xread(
+    async def xgroup_create(
         self,
+        name: str,
+        groupname: str,
+        id: str = "$",
+        mkstream: bool = False,
+    ) -> Any: ...
+
+    async def xreadgroup(
+        self,
+        groupname: str,
+        consumername: str,
         streams: dict[Any, Any],
         count: int | None = None,
         block: int | None = None,
     ) -> Any: ...
+
+    async def xack(self, name: str, groupname: str, *ids: str) -> Any: ...
 
 
 class PaperBroker(Protocol):
@@ -255,26 +269,27 @@ async def process_risk_event(
 async def poll_once(
     redis: RedisStreamClient,
     broker: PaperBroker,
-    last_ids: dict[str, str],
-    start_id: str,
+    subscriber: GroupEventSubscriber,
     count: int,
     block_ms: int,
+    retry_delay_seconds: float = 0.0,
 ) -> int:
     """Read approved risk decisions and submit paper orders."""
 
-    last_ids.setdefault(STREAM_RISK_APPROVED, start_id)
-    subscriber = EventSubscriber(redis)
     try:
-        events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+        events = await subscriber.read(
+            streams=[STREAM_RISK_APPROVED], count=count, block_ms=block_ms
+        )
     except Exception:
-        log.exception("execution_agent.read_failed", streams=dict(last_ids))
+        log.exception("execution_agent.read_failed", group=subscriber.group)
+        await asyncio.sleep(retry_delay_seconds)
         return 0
 
     processed = 0
     for event in events:
         try:
             result = await process_risk_event(redis, broker, event)
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
             processed += 1
             log.info(
                 "execution_agent.order_submitted",
@@ -283,19 +298,19 @@ async def poll_once(
                 stream=result.stream,
             )
         except ValueError:
-            # Malformed event: permanent for this event. Skip it or the loop
-            # stalls forever on a poison message and never reaches new intents.
+            # Malformed event: permanent for this event. Ack and skip it or
+            # the loop stalls forever on a poison message.
             log.exception(
                 "execution_agent.risk_event_invalid_skipped",
                 stream=event.stream,
                 redis_stream_id=event.redis_stream_id,
                 risk_event_id=event.envelope.event_id,
             )
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
             continue
         except Exception as exc:
             if is_duplicate_order_error(exc):
-                # Restart replay: this intent's order already exists at the
+                # Replay/redelivery: this intent's order already exists at the
                 # broker (client_order_id is the risk event ID, so replays are
                 # deduplicated broker-side). Reconciliation covers any order
                 # whose submitted event never persisted.
@@ -305,16 +320,17 @@ async def poll_once(
                     redis_stream_id=event.redis_stream_id,
                     risk_event_id=event.envelope.event_id,
                 )
-                last_ids[event.stream] = event.redis_stream_id
+                await subscriber.ack(event)
                 continue
             # Systemic error (broker down, bad credentials, network): stop the
-            # batch WITHOUT advancing so the same event retries next cycle.
+            # batch WITHOUT acking so the same event is redelivered next cycle.
             log.exception(
                 "execution_agent.risk_event_failed",
                 stream=event.stream,
                 redis_stream_id=event.redis_stream_id,
                 risk_event_id=event.envelope.event_id,
             )
+            await asyncio.sleep(retry_delay_seconds)
             break
     return processed
 
@@ -404,29 +420,30 @@ async def repoll_pending_once(
 async def poll_order_status_once(
     redis: RedisStreamClient,
     broker: PaperBroker,
-    last_ids: dict[str, str],
-    start_id: str,
+    subscriber: GroupEventSubscriber,
     count: int,
     block_ms: int,
     pending: dict[str, PendingOrder] | None = None,
     poll_interval_seconds: float = 5.0,
     now: float = 0.0,
+    retry_delay_seconds: float = 0.0,
 ) -> int:
     """Read submitted paper orders and publish current broker status/fill events."""
 
-    last_ids.setdefault(STREAM_EXECUTION_ORDER_SUBMITTED, start_id)
-    subscriber = EventSubscriber(redis)
     try:
-        events = await subscriber.read(streams=last_ids, count=count, block_ms=block_ms)
+        events = await subscriber.read(
+            streams=[STREAM_EXECUTION_ORDER_SUBMITTED], count=count, block_ms=block_ms
+        )
     except Exception:
-        log.exception("execution_agent.status_read_failed", streams=dict(last_ids))
+        log.exception("execution_agent.status_read_failed", group=subscriber.group)
+        await asyncio.sleep(retry_delay_seconds)
         return 0
 
     processed = 0
     for event in events:
         try:
             result = await process_order_status_event(redis, broker, event)
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
             processed += 1
             _track_if_pending(pending, event, result, now, poll_interval_seconds)
             log.info(
@@ -436,23 +453,25 @@ async def poll_order_status_once(
                 stream=result.stream,
             )
         except ValueError:
-            # Malformed submitted event: permanent for this event; skip it so
-            # the status loop cannot stall on a poison message.
+            # Malformed submitted event: permanent for this event; ack and
+            # skip it so the status loop cannot stall on a poison message.
             log.exception(
                 "execution_agent.order_status_invalid_skipped",
                 stream=event.stream,
                 redis_stream_id=event.redis_stream_id,
                 submitted_event_id=event.envelope.event_id,
             )
-            last_ids[event.stream] = event.redis_stream_id
+            await subscriber.ack(event)
             continue
         except Exception:
+            # Systemic error: no ack, so the same event is redelivered next cycle.
             log.exception(
                 "execution_agent.order_status_failed",
                 stream=event.stream,
                 redis_stream_id=event.redis_stream_id,
                 submitted_event_id=event.envelope.event_id,
             )
+            await asyncio.sleep(retry_delay_seconds)
             break
     return processed
 
@@ -466,33 +485,44 @@ async def run_loop(
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
     status_poll_interval_seconds: float = 5.0,
+    group: str = CONSUMER_GROUP,
+    consumer: str | None = None,
 ) -> None:
-    """Run the paper Execution Agent loop until ``stop`` is set."""
+    """Run the paper Execution Agent loop until ``stop`` is set.
+
+    Both read loops share one consumer group (KI-006): the risk loop on
+    ``risk.intent.approved``, the status loop on ``execution.order.submitted``.
+    ``start_id`` only positions the group the first time it is created.
+    """
 
     loop = asyncio.get_running_loop()
-    risk_last_ids: dict[str, str] = {}
-    status_last_ids: dict[str, str] = {}
+    subscriber = GroupEventSubscriber(
+        cast(RedisGroupClient, redis),
+        group=group,
+        consumer=consumer,
+        start_id=start_id,
+    )
     pending: dict[str, PendingOrder] = {}
     while not stop.is_set():
         try:
             submitted = await poll_once(
                 redis=redis,
                 broker=broker,
-                last_ids=risk_last_ids,
-                start_id=start_id,
+                subscriber=subscriber,
                 count=count,
                 block_ms=block_ms,
+                retry_delay_seconds=retry_delay_seconds,
             )
             status_checked = await poll_order_status_once(
                 redis=redis,
                 broker=broker,
-                last_ids=status_last_ids,
-                start_id=start_id,
+                subscriber=subscriber,
                 count=count,
                 block_ms=block_ms,
                 pending=pending,
                 poll_interval_seconds=status_poll_interval_seconds,
                 now=loop.time(),
+                retry_delay_seconds=retry_delay_seconds,
             )
             repolled = await repoll_pending_once(
                 redis=redis,
@@ -509,8 +539,7 @@ async def run_loop(
                     status_checked=status_checked,
                     repolled=repolled,
                     pending=len(pending),
-                    risk_last_ids=dict(risk_last_ids),
-                    status_last_ids=dict(status_last_ids),
+                    group=group,
                 )
             else:
                 await asyncio.sleep(0)
@@ -529,6 +558,8 @@ async def run(
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
     status_poll_interval_seconds: float = 5.0,
+    group: str = CONSUMER_GROUP,
+    consumer: str | None = None,
 ) -> None:
     """Run the paper Execution Agent service until SIGINT/SIGTERM."""
 
@@ -540,6 +571,8 @@ async def run(
         start_id=start_id,
         count=count,
         block_ms=block_ms,
+        group=group,
+        consumer=consumer or group,
     )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
@@ -560,6 +593,8 @@ async def run(
                 block_ms=block_ms,
                 retry_delay_seconds=retry_delay_seconds,
                 status_poll_interval_seconds=status_poll_interval_seconds,
+                group=group,
+                consumer=consumer,
             )
         finally:
             await redis.aclose()
@@ -567,6 +602,7 @@ async def run(
 
 
 __all__ = [
+    "CONSUMER_GROUP",
     "PRODUCED_BY",
     "SCHEMA_VERSION",
     "STREAM_EXECUTION_ORDER_FILLED",
