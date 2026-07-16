@@ -264,13 +264,31 @@ with three job-type branches (evaluation, refit, kill-review).
 
 ## Sprint scope
 
-- Month 2: Walk-forward + trade-count gate + realistic costs + verdict
+**Sequencing and engine (Mike's ruling, 2026-07-15):**
+
+1. The Evaluator is **not implemented until the Framework #1 agents exist**
+   (Tech Watcher → Infrastructure Mapper → Bottleneck Scout). The
+   anchor-freshness gate (Processing step 2) is load-bearing under ADR-0007;
+   evaluating unanchored strategies was rejected in favor of building the
+   funnel top-down so anchors are real from the first evaluation.
+2. **Backtest engine: in-house walk-forward** (numpy/pandas expanding-window
+   over `market_data.*`), deterministic, no new dependencies. VectorBT PRO
+   is re-scoped as a gated upgrade — the gate is evaluation volume or
+   strategy complexity the in-house harness cannot handle honestly, and the
+   purchase is Mike's decision at that gate. Architecture-doc references to
+   VectorBT PRO as the Evaluator engine are updated when the Evaluator
+   implementation card lands.
+
+Phase scope (relative to Framework #1 completion, not calendar months):
+
+- First card: Walk-forward + trade-count gate + realistic costs + verdict
   pipeline + promotion to paper. Anchor-freshness check wired to
-  `research.world_changers` and `research.bottlenecks` tables.
-- Month 3: PBO, DSR, CPCV, regime-stratified reports. Kill-review pipeline
+  `research.world_changers` and `research.bottlenecks` tables (which exist
+  by then).
+- Then: PBO, DSR, CPCV, regime-stratified reports. Kill-review pipeline
   consuming all three thesis-broken event types. Halt event wired to paper
   runner.
-- Month 4: Sunday re-evaluation of all paper-stage strategies. Decay
+- Then: Sunday re-evaluation of all paper-stage strategies. Decay
   detection. False-alarm retraction handling.
 
 ## Deferred

@@ -47,10 +47,10 @@
 
 ## Open
 
-- No open implementation PRs. Next: Strategy Evaluator minimal backtest
-  harness — needs Mike's scoping ruling first (backtest engine and
-  anchor-freshness handling; the spec's VectorBT PRO and Framework #1
-  table dependencies don't exist yet).
+- No open implementation PRs. Mike ruled (2026-07-15): build the
+  Framework #1 funnel before the Evaluator (anchors must be real), and
+  the Evaluator uses an in-house walk-forward engine (VectorBT PRO
+  re-gated). Next: Tech Watcher seed card.
 - Dell redeploy pending: running containers predate PR #36 (`git pull` +
   full `docker compose up -d --build` after the pending SPY fill lands).
 
