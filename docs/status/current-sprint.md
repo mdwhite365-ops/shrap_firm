@@ -1,35 +1,31 @@
 # Current sprint status
 
-**Last updated:** 2026-07-15
-**Phase:** Month 3 / paper spine closed → Research implementation
+**Last updated:** 2026-07-15 (late evening)
+**Phase:** Month 3 / spine closed → Research middle loop open
 **Operating mode:** Paper only. No real-money execution.
 
 ## Current focus
 
-**The paper spine is closed.** The market-hours smoke passed 9/9 on the Dell
-on 2026-07-15: intent → risk approval → Alpaca submission → live fill →
-persistence → audit trail → clean reconciliation, all through the deployed
-services. Card 16 is done and KI-003 is resolved. The next build work is the
-Research middle loop and the consumer-groups infrastructure card.
+**The middle loop is open.** The paper spine closed 9/9 on 2026-07-15; the
+same evening, Mike armed the strategy fixture and the firm submitted its
+first fully autonomous order (SPY buy x1, ~5s signal-to-broker, no human in
+the loop — fill pending the 2026-07-16 open). The strategy registry — the
+middle loop's system of record — merged as PR #38. Next build work is the
+Strategy Librarian service.
 
 ## Main branch state
 
-Merged on `main` through PR #35. Since the 2026-07-06 status:
+Merged on `main` through PR #38. Since the spine-close status (PR #36):
 
-1. PR #28–29: status reconciliation and doc-drift audit after the poison fix.
-2. PR #30: Redis-backed order-rate guardrails in the pre-trade gate — daily
-   cap + per-symbol cooldown, persisted across restarts (blunts the
-   replay-reapproval hazard of KI-006).
-3. PR #31: account snapshots — reconciliation publishes an account summary on
-   the bus and persists per pass to `ops.account_snapshots`.
-4. PR #32: poison-skip hardening extended to Paper Order Store, Audit Logger,
-   and the shared `EventSubscriber` (completes the pattern from PR #27).
-5. PR #33: first autonomous signal path — strategy fixture + decision maker
-   service, **disarmed by default** (`STRATEGY_FIXTURE_ENABLED=false`).
-6. PR #34–35: reconciliation lookback window (default 7 days) so pre-spine
-   June orders don't flag as discrepancies forever, plus the percent-encoding
-   fix for the Alpaca `after` timestamp (found live on 2026-07-15 when every
-   reconciliation pass silently failed).
+1. PR #37: all stream consumers moved to Redis consumer groups with
+   acknowledged, persisted offsets (`src/shrap/events/groups.py`). KI-006
+   resolved; restart replay is gone at the root.
+2. PR #38: strategy registry schema + lifecycle state machine
+   (`src/shrap/research/strategy_registry.py`): `research.strategies` +
+   append-only `research.strategy_transitions`, enforced promotion path
+   `hypothesis → paper → small-size-paper → live-paper` with kill-review
+   states, `real` unrepresentable by design. Draft Strategy Librarian spec
+   in `docs/agents/research/strategy-librarian.md`.
 
 ## Spine verification record
 
@@ -37,18 +33,27 @@ Merged on `main` through PR #35. Since the 2026-07-06 status:
   reconciliation check flagged a June-era order predating persistence.
 - **2026-07-15:** 9/9 PASS — fill AAPL x1 @ 326.28, `reconciliation:
   clean=True discrepancies=0`. Spine closed.
+- **2026-07-15 23:32 UTC:** first autonomous signal → order. Fixture fired
+  on `late-cycle-melt-up`, chain ran signal → intent → approval → Alpaca
+  submission unattended. Order `6315af3f` pending (market closed).
 
 ## Open work
 
-- **Consumer groups / persisted offsets card (KI-006):** agents replay full
-  stream history on restart. Replay is now safe everywhere (PR #32) but
-  wasteful; consumer groups with acknowledged offsets are the proper fix.
-  Include retry-backoff for systemic errors. Was the deferred Month-1
-  decision; now the top infrastructure card.
-- **First autonomous trade (Mike's switch):** set
-  `STRATEGY_FIXTURE_ENABLED=true` in `infra/.env`, rebuild
-  `strategy-fixture` + `decision-maker`, and the fixture path produces the
-  firm's first non-smoke trade through the full spine.
+- **Verify the first autonomous fill (2026-07-16 after 09:30 ET):** confirm
+  `execution.order.filled`, persisted fill row, clean reconciliation. Then
+  **disarm the fixture** (`STRATEGY_FIXTURE_ENABLED=false` + recreate) — its
+  proof job is done; the next armed path should be a registry-promoted
+  strategy.
+- **Dell redeploy:** running containers predate PR #36. After the fill
+  lands: `git pull` + full `docker compose up -d --build` to pick up
+  consumer groups.
+- **Strategy Librarian service card:** consume Evaluator verdict events,
+  apply registry transitions, publish `research.strategy.*` lifecycle
+  events. Consumer-group discipline, compose service.
+- **Retry-backoff for systemic errors:** scoped into KI-006's mitigation but
+  not shipped in PR #37; fold into a consumer hygiene card (candidate
+  companion: market-closed re-poll backoff — the pending SPY order polls
+  Alpaca every ~10s all night).
 - **Regime threshold watch:** v0.1 calibration is single-day evidence. A
   historical feature backfill would earn the thresholds.
 
@@ -63,5 +68,5 @@ Alpaca paper credentials live only in local ignored `infra/.env`.
 
 ## Next recommended card
 
-Consumer groups / persisted offsets (retire KI-006), or strategy registry /
-librarian schema (Research middle loop) — Mike's call on ordering.
+Strategy Librarian service (the registry's event-facing half), or the
+Strategy Evaluator minimal backtest harness — Mike's call on ordering.
