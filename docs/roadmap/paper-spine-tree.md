@@ -60,9 +60,13 @@ Shrap paper-trading spine
     ├── Regime Classifier minimal statistical implementation [done, Card 18, PR #24–26]
     ├── First autonomous signal path (fixture + decision maker) [done, PR #33 — armed 2026-07-15, first autonomous order submitted]
     ├── Strategy registry / librarian schema [done, PR #38]
-    ├── Strategy Librarian service (verdict events → transitions → lifecycle events)
+    ├── Strategy Librarian service (verdict events → transitions → lifecycle events) [done, PR #40]
+    ├── Framework #1 funnel (decided 2026-07-15: build before the Evaluator so anchors are real)
+    │   ├── Tech Watcher seed (EDGAR/arXiv/USPTO ingest + synthesis pass) — first LLM-calling agent
+    │   ├── Infrastructure Mapper seed (dependency graphs per promoted world-changer)
+    │   └── Bottleneck Scout seed (saturation / forced-substitute detection)
     ├── Hypothesis Generator seed path
-    ├── Strategy Evaluator minimal backtest harness
+    ├── Strategy Evaluator minimal backtest harness (in-house walk-forward; VectorBT PRO re-gated)
     └── First strategy promotion into paper spine
 ```
 

@@ -39,12 +39,18 @@
 - PR #37 — All stream consumers moved to Redis consumer groups (KI-006).
 - PR #38 — Strategy registry schema + lifecycle state machine — first
   Research middle-loop card. Draft Strategy Librarian spec included.
+- PR #39 — Status reconciliation: middle loop open, KI-006 resolved,
+  first autonomous order recorded.
+- PR #40 — Strategy Librarian deployable service: verdict events →
+  registry transitions → `research.strategy.*` lifecycle events. Idles
+  until an Evaluator exists; safe to deploy now.
 
 ## Open
 
-- No open implementation PRs. Next: Strategy Librarian service card
-  (consume Evaluator verdicts, apply registry transitions, publish
-  `research.strategy.*` lifecycle events).
+- No open implementation PRs. Mike ruled (2026-07-15): build the
+  Framework #1 funnel before the Evaluator (anchors must be real), and
+  the Evaluator uses an in-house walk-forward engine (VectorBT PRO
+  re-gated). Next: Tech Watcher seed card.
 - Dell redeploy pending: running containers predate PR #36 (`git pull` +
   full `docker compose up -d --build` after the pending SPY fill lands).
 

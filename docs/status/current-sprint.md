@@ -47,9 +47,13 @@ Merged on `main` through PR #38. Since the spine-close status (PR #36):
 - **Dell redeploy:** running containers predate PR #36. After the fill
   lands: `git pull` + full `docker compose up -d --build` to pick up
   consumer groups.
-- **Strategy Librarian service card:** consume Evaluator verdict events,
-  apply registry transitions, publish `research.strategy.*` lifecycle
-  events. Consumer-group discipline, compose service.
+- **Framework #1 funnel (Mike's ruling 2026-07-15):** the Evaluator is
+  deferred until Tech Watcher → Infrastructure Mapper → Bottleneck Scout
+  exist, so the anchor gate is real from the first evaluation. Engine
+  ruling recorded in the Evaluator spec: in-house walk-forward; VectorBT
+  PRO re-gated. Next card: Tech Watcher seed — the firm's first
+  LLM-calling agent (needs Anthropic API key in `infra/.env`, ADR-0009
+  tier registry wiring, Langfuse tracing).
 - **Retry-backoff for systemic errors:** scoped into KI-006's mitigation but
   not shipped in PR #37; fold into a consumer hygiene card (candidate
   companion: market-closed re-poll backoff — the pending SPY order polls
@@ -68,5 +72,6 @@ Alpaca paper credentials live only in local ignored `infra/.env`.
 
 ## Next recommended card
 
-Strategy Librarian service (the registry's event-facing half), or the
-Strategy Evaluator minimal backtest harness — Mike's call on ordering.
+Tech Watcher seed (Framework #1 opener, first LLM-calling agent), then
+Infrastructure Mapper and Bottleneck Scout seeds, then Hypothesis
+Generator, then the Evaluator.
