@@ -33,13 +33,13 @@ TIER_LOCAL_HEAVY = "local-heavy"
 
 DEFAULT_OLLAMA_URL = "http://ollama:11434"
 
-# Mirror of docs/infrastructure/llm-registry.md v0.1. `no-llm` is not a
+# Mirror of docs/infrastructure/llm-registry.md v0.2. `no-llm` is not a
 # resolvable tier — deterministic agents simply do not construct a client.
 _DEFAULT_BINDINGS: dict[str, tuple[str, str]] = {
     TIER_CLOUD_JUDGMENT_HEAVY: (PROVIDER_ANTHROPIC, "claude-opus-4-7"),
     TIER_CLOUD_DEFAULT: (PROVIDER_ANTHROPIC, "claude-sonnet-4-6"),
     TIER_CLOUD_CHEAP: (PROVIDER_ANTHROPIC, "claude-haiku-4"),
-    TIER_LOCAL_CLASSIFICATION: (PROVIDER_OLLAMA, "qwen2.5:9b-instruct-q4_K_M"),
+    TIER_LOCAL_CLASSIFICATION: (PROVIDER_OLLAMA, "qwen3.5:9b-q4_K_M"),
     TIER_LOCAL_HEAVY: (PROVIDER_OLLAMA, "mistral-small:24b-instruct-q4_K_M"),
 }
 

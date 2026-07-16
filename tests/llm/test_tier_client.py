@@ -32,7 +32,7 @@ def test_local_classification_resolves_to_dell_ollama_default() -> None:
     assert binding == ModelBinding(
         tier=TIER_LOCAL_CLASSIFICATION,
         provider=PROVIDER_OLLAMA,
-        model="qwen2.5:9b-instruct-q4_K_M",
+        model="qwen3.5:9b-q4_K_M",
         base_url="http://ollama:11434",
     )
 
@@ -49,14 +49,14 @@ def test_env_can_point_a_cloud_tier_at_ollama() -> None:
     registry = TierRegistry(
         {
             "SHRAP_LLM_CLOUD_DEFAULT_PROVIDER": "ollama",
-            "SHRAP_LLM_CLOUD_DEFAULT_MODEL": "qwen2.5:9b-instruct-q4_K_M",
+            "SHRAP_LLM_CLOUD_DEFAULT_MODEL": "qwen3.5:9b-q4_K_M",
         }
     )
 
     binding = registry.resolve(TIER_CLOUD_DEFAULT)
 
     assert binding.provider == PROVIDER_OLLAMA
-    assert binding.model == "qwen2.5:9b-instruct-q4_K_M"
+    assert binding.model == "qwen3.5:9b-q4_K_M"
     assert binding.base_url == "http://ollama:11434"
 
 
@@ -122,11 +122,11 @@ async def test_complete_calls_ollama_chat_and_returns_result() -> None:
     assert result.content == "melt-up continues"
     assert result.input_tokens == 42
     assert result.output_tokens == 17
-    assert result.model == "qwen2.5:9b-instruct-q4_K_M"
+    assert result.model == "qwen3.5:9b-q4_K_M"
 
     url, body, _timeout = http.requests[0]
     assert url == "http://ollama:11434/api/chat"
-    assert body["model"] == "qwen2.5:9b-instruct-q4_K_M"
+    assert body["model"] == "qwen3.5:9b-q4_K_M"
     assert body["stream"] is False
     assert body["format"] == "json"
     assert body["messages"][0] == {"role": "system", "content": "You are a classifier."}

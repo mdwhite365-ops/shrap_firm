@@ -1,7 +1,7 @@
 # LLM Registry
 
-**Version:** 0.1 draft
-**Date:** 2026-05-30
+**Version:** 0.2
+**Date:** 2026-07-16 (v0.1 seeded 2026-05-30)
 **Owner:** Platform Department (delegated to Model Registry Maintainer)
 **Status:** Living
 
@@ -24,7 +24,7 @@ Changing the latter without breaking the former is the whole point.
 | `cloud-judgment-heavy` | Claude Opus 4.7 | Anthropic | ~200k tokens | High | Hardest judgment turns; uncertainty quantification; load-bearing code review | Hypothesis Generator (judgment turns); Decision Maker (uncertainty quantification); Implementation Agent on protected paths |
 | `cloud-default` | Claude Sonnet 4.6 | Anthropic | ~200k tokens | Medium | General-purpose reasoning, drafting, code synthesis on non-load-bearing surfaces | Tech Watcher; Bottleneck Scout; Infrastructure Mapper; Implementation Agent on non-protected paths |
 | `cloud-cheap` | Claude Haiku 4 | Anthropic | ~200k tokens | Low | Summarization, alert formatting, light transformation | Reporting Department (not yet specced — no assignment yet) |
-| `local-classification` | `qwen2.5:9b-instruct-q4_K_M` (Ollama) | Local (Dell) | 32k tokens (approx; depends on Ollama config) | Marginal (electricity) | Statistical classification, sentiment, tagging | Regime Classifier statistical layer; news sentiment; ticker tagging |
+| `local-classification` | `qwen3.5:9b-q4_K_M` (Ollama) | Local (Dell) | 256k model max; VRAM-capped on the Dell (keep `num_ctx` modest on 8 GB) | Marginal (electricity) | Statistical classification, sentiment, tagging | Regime Classifier statistical layer; news sentiment; ticker tagging; Tech Watcher (seed, all tiers routed here pending cloud billing) |
 | `local-heavy` | `mistral-small:24b-instruct-q4_K_M` (Ollama) | Local (Ryzen, via `ryzen.tasks` stream) | 32k tokens (approx; depends on Ollama config) | Marginal (electricity) | Heavier local inference offloaded to Ryzen substrate | Agents that publish to `ryzen.tasks` (consumer set TBD per agent spec) |
 | `no-llm` | N/A | — | — | None | Deterministic logic only | Risk Officer; Strategy Evaluator core stats; Health Monitor |
 
@@ -76,6 +76,7 @@ Append-only. Newest at the bottom.
 | 2026-05-30 | `local-classification` | N/A | `qwen2.5:9b-instruct-q4_K_M` | initial seed | Mike White | this PR |
 | 2026-05-30 | `local-heavy` | N/A | `mistral-small:24b-instruct-q4_K_M` | initial seed | Mike White | this PR |
 | 2026-05-30 | `no-llm` | N/A | N/A | initial seed | Mike White | this PR |
+| 2026-07-16 | `local-classification` | `qwen2.5:9b-instruct-q4_K_M` | `qwen3.5:9b-q4_K_M` | N/A — seed correction, not a swap: the v0.1 tag never existed (Qwen 2.5 has no 9B; discovered on first `ollama pull`). No incumbent ever ran, so there is nothing to shadow-eval against. `qwen3.5:9b-q4_K_M` is 6.6 GB, fits the Dell's 8 GB GTX 1080; requires Ollama >= 0.31.x (compose pin bumped 0.3.12 → 0.31.2 in the same PR). | Mike White | PR (this) |
 
 ## Hard Rules
 
@@ -115,3 +116,8 @@ Append-only. Newest at the bottom.
   get its own eval cadence, or does it piggyback on `cloud-default`
   evals? Deferred until the Reporting Department spec exists and there
   is an actual consumer to evaluate against.
+- **(d) `local-heavy` tag validity.** `mistral-small:24b-instruct-q4_K_M`
+  was seeded the same day as the invalid Qwen tag and has never been
+  pulled (the Ryzen worker does not exist yet). Verify the tag against
+  the Ollama library — and whether a newer generation supersedes it —
+  before the Ryzen worker card lands.

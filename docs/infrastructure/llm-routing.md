@@ -23,7 +23,7 @@ Every agent in the firm is assigned to one of three tiers. The tier is declared 
 
 **Local-primary.** Agent calls Ollama. Two physical homes:
 
-- **Dell (Qwen 2.5 9B-instruct, Q4_K_M quant).** Default for latency-sensitive local work. The 8 GB VRAM on the GTX 1080 is the constraint; this model fits with headroom for concurrent agents.
+- **Dell (Qwen 3.5 9B, Q4_K_M quant — 6.6 GB).** Default for latency-sensitive local work. The 8 GB VRAM on the GTX 1080 is the constraint; this model fits, with thinner headroom than the original 2.5-era assumption — keep `num_ctx` modest, and `qwen3.5:4b-q4_K_M` (3.4 GB) is the documented fallback if concurrent load OOMs the card.
 - **Ryzen (Qwen 2.5 14B-instruct, Mistral Small 24B-instruct, both Q4_K_M).** Heavier inference for work that does not need sub-second latency. Routed via `ryzen.tasks` Redis Stream per the hardware doc.
 
 Local-primary agents fall back to cloud when the local instance is unavailable, with the fallback recorded as a degraded operation in the daily briefing.
@@ -227,7 +227,7 @@ The fallback chain is declared per agent in the spec.
 
 **Why Claude Sonnet 4.6 as the cloud default.** Cost-quality tradeoff at the working level the firm needs. Opus 4.7 is reserved for tasks where Sonnet has demonstrably underperformed during evaluation — primarily Implementation Agent's hard code-generation tasks and some Structural Analysis synthesis work.
 
-**Why Qwen 2.5 9B as the Dell local default.** Fits in the GTX 1080's 8 GB VRAM with headroom. Instruction-following is adequate for classification and bulk summarization. Newer models (Qwen 3, Llama 4) may displace this; revisit at the end of month 2 once shadow-eval data has accumulated.
+**Why Qwen 3.5 9B as the Dell local default.** The originally planned "Qwen 2.5 9B" never existed (Qwen 2.5 shipped no 9B size — the invalid tag was discovered on the first real `ollama pull`, 2026-07-16). Corrected to `qwen3.5:9b-q4_K_M`: the largest current-generation Qwen that fits the GTX 1080's 8 GB VRAM (6.6 GB at Q4_K_M), two model generations newer than the original plan, multimodal, 256K max context (VRAM-capped in practice). This resolved the "revisit when Qwen 3 lands" note from v0.1. Requires Ollama ≥ 0.31.x — the compose image pin moved 0.3.12 → 0.31.2 with the correction.
 
 **Why Qwen 2.5 14B and Mistral Small 24B on Ryzen.** Both fit comfortably on the RTX 4070 Super's 12 GB VRAM at Q4_K_M. Qwen 14B for general-purpose heavy local work; Mistral Small 24B for tasks where instruction-following or reasoning quality matters more than throughput. The cloud-fallback path lands on Mistral Small 24B specifically because its quality has the best chance of matching Sonnet on the kinds of tasks that cloud-primary agents do.
 
