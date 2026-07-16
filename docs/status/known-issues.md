@@ -42,10 +42,8 @@ The Reconciliation Agent compares Alpaca paper orders against `trading.paper_ord
 
 ## KI-006 — Agents replay full stream history on every restart
 
-**Status:** Made safe (PR #27); proper fix pending.
+**Status:** Resolved 2026-07-15. PR #37 moved all stream consumers to Redis consumer groups.
 
-Stream consumers (Execution Agent, Paper Order Store, Audit Logger) hold their offsets in memory and read from `start_id=0-0` on restart, replaying the entire history. This caused the 2026-07-06 incident: a container rebuild replayed an approved intent, Alpaca rejected the duplicate `client_order_id` (422), and the loop stalled forever on the poisoned event — blocking all subsequent orders until PR #27 taught it to skip duplicates and malformed events.
+Stream consumers held their offsets in memory and read from `start_id=0-0` on restart, replaying the entire history — the cause of the 2026-07-06 poison-event incident. PR #27/#32 made replay safe (poison-skip); PR #30's rate guardrails blunted the replay-reapproval hazard; PR #37 fixed the root cause with consumer groups and acknowledged, persisted offsets (`src/shrap/events/groups.py`).
 
-Replay is now safe everywhere but wasteful: PR #32 extended the poison-skip pattern to the Paper Order Store, Audit Logger, and the shared `EventSubscriber`, and PR #30's Redis-persisted rate guardrails (daily cap + per-symbol cooldown) blunt the replay-reapproval hazard at the risk gate.
-
-**Mitigation:** Redis consumer groups with acknowledged, persisted offsets — the deferred Month-1 decision from the decision queue, now the top infrastructure card. Include retry-backoff for systemic errors (broker/DB down) in the same card.
+Two residuals, tracked in `current-sprint.md` open work: (1) retry-backoff for systemic errors (broker/DB down) was scoped into this card's mitigation but did not ship in PR #37; (2) the Dell has not yet been redeployed with PR #36+ — the running containers predate consumer groups.

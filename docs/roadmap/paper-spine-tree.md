@@ -58,8 +58,9 @@ Shrap paper-trading spine
 │
 └── 7. Research unlock [OPEN — Mike accepted spine status 2026-07-06]
     ├── Regime Classifier minimal statistical implementation [done, Card 18, PR #24–26]
-    ├── First autonomous signal path (fixture + decision maker) [done, PR #33 — disarmed by default]
-    ├── Strategy registry / librarian schema
+    ├── First autonomous signal path (fixture + decision maker) [done, PR #33 — armed 2026-07-15, first autonomous order submitted]
+    ├── Strategy registry / librarian schema [done, PR #38]
+    ├── Strategy Librarian service (verdict events → transitions → lifecycle events)
     ├── Hypothesis Generator seed path
     ├── Strategy Evaluator minimal backtest harness
     └── First strategy promotion into paper spine
