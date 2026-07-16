@@ -47,9 +47,12 @@ Merged on `main` through PR #38. Since the spine-close status (PR #36):
 - **Dell redeploy:** running containers predate PR #36. After the fill
   lands: `git pull` + full `docker compose up -d --build` to pick up
   consumer groups.
-- **Strategy Librarian service card:** consume Evaluator verdict events,
-  apply registry transitions, publish `research.strategy.*` lifecycle
-  events. Consumer-group discipline, compose service.
+- **Strategy Evaluator minimal harness card:** blocked on Mike's scoping
+  ruling — backtest engine (spec says VectorBT PRO, which is paid and not
+  yet licensed/installed) and anchor-freshness handling (Framework #1
+  tables `research.world_changers` / `research.bottlenecks` don't exist
+  yet). Whichever way Mike rules, the Evaluator spec gets amended in the
+  same card (drift rule).
 - **Retry-backoff for systemic errors:** scoped into KI-006's mitigation but
   not shipped in PR #37; fold into a consumer hygiene card (candidate
   companion: market-closed re-poll backoff — the pending SPY order polls
@@ -68,5 +71,5 @@ Alpaca paper credentials live only in local ignored `infra/.env`.
 
 ## Next recommended card
 
-Strategy Librarian service (the registry's event-facing half), or the
-Strategy Evaluator minimal backtest harness — Mike's call on ordering.
+Strategy Evaluator minimal backtest harness (after Mike's engine/anchor
+scoping ruling), then the Hypothesis Generator seed path.
