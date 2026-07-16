@@ -519,6 +519,36 @@ services:
       - shrap_net
 
   # -------------------------------------------------------------------------
+  # Strategy Librarian - Research Department, the registry's event-facing
+  # half. Consumes research.strategy.verdict, applies lifecycle transitions
+  # through the state-machine-enforcing registry, publishes
+  # research.strategy.* lifecycle events. Idles until an Evaluator exists.
+  # -------------------------------------------------------------------------
+  strategy-librarian:
+    build:
+      context: ../
+      dockerfile: infra/strategy-librarian.Dockerfile
+    container_name: shrap_strategy_librarian
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      STRATEGY_LIBRARIAN_REDIS_URL: "redis://redis:6379/0"
+      STRATEGY_LIBRARIAN_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      STRATEGY_LIBRARIAN_START_ID: "0"
+      STRATEGY_LIBRARIAN_COUNT: "100"
+      STRATEGY_LIBRARIAN_BLOCK_MS: "5000"
+      STRATEGY_LIBRARIAN_RETRY_DELAY_SECONDS: "1.0"
+      STRATEGY_LIBRARIAN_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
   # Regime Classifier - Intelligence Department, statistical layer only.
   # Syncs daily bars (Alpaca data API, IEX feed) into market_data.ohlcv_1d
   # and publishes intel.regime.tick / .changed / .sizing-modifier events.
