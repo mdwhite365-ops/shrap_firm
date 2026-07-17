@@ -211,7 +211,7 @@ services:
   # Ollama - local LLM serving. GPU passthrough via NVIDIA Container Toolkit.
   # Hosts Qwen 3.5 9B on the Dell per docs/infrastructure/llm-routing.md.
   # Image >= 0.31.x required for Qwen 3.5-generation models; 0.31.2 also
-  # enables flash attention on older NVIDIA GPUs (the GTX 1080).
+  # enables flash attention on older NVIDIA GPUs (Pascal/Turing class).
   # -------------------------------------------------------------------------
   ollama:
     image: ollama/ollama:0.31.2

@@ -87,7 +87,7 @@ The Compose file encodes dependency order via `depends_on` health checks:
 
 **Ollama on Dell**
 
-The Dell's GTX 1080 (8GB VRAM) serves Qwen 2.5 9B for local department agents. The RTX 2070 Super upgrade (planned, post-sprint) will increase VRAM headroom.
+The Dell's RTX 2070 Super (8GB VRAM; swapped in for the GTX 1080 on 2026-07-16) serves Qwen 3.5 9B for local department agents. Note the swap does not add VRAM — both cards are 8GB; the gain is Turing tensor cores (materially faster inference) and native flash-attention support.
 
 ```bash
 # Verify Ollama is serving
@@ -230,7 +230,7 @@ No automated alerting during the sprint; monitor manually:
 - **Redis stream sizes:** `redis-cli XLEN <stream-name>` for `ryzen.tasks`, `ryzen.results`, and primary event streams; trim if streams grow unbounded due to unacknowledged consumer groups
 - **PostgreSQL table growth:** `SELECT pg_size_pretty(pg_total_relation_size('<table>'))` for trade history and TimescaleDB hypertables; evaluate compression or partitioning if growth outpaces projections
 
-**GPU upgrade procedure (Dell GTX 1080 → RTX 2070 Super)**
+**GPU upgrade procedure (Dell GTX 1080 → RTX 2070 Super) — executed 2026-07-16**
 
 1. Stop all containers: `docker compose -f /mnt/Archive/<dataset>/compose/docker-compose.yml down`
 2. Power off Dell, swap card, boot TrueNAS SCALE
