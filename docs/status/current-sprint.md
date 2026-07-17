@@ -39,14 +39,14 @@ Merged on `main` through PR #38. Since the spine-close status (PR #36):
 
 ## Open work
 
-- **Verify the first autonomous fill (2026-07-16 after 09:30 ET):** confirm
-  `execution.order.filled`, persisted fill row, clean reconciliation. Then
-  **disarm the fixture** (`STRATEGY_FIXTURE_ENABLED=false` + recreate) — its
-  proof job is done; the next armed path should be a registry-promoted
-  strategy.
-- **Dell redeploy:** running containers predate PR #36. After the fill
-  lands: `git pull` + full `docker compose up -d --build` to pick up
-  consumer groups.
+- **First autonomous fill landed 2026-07-16** (SPY x1 at the open). Still
+  to close out: confirm clean reconciliation, then **disarm the fixture**
+  (`STRATEGY_FIXTURE_ENABLED=false` + recreate) — its proof job is done;
+  the next armed path should be a registry-promoted strategy.
+- **Dell session (one sitting):** disarm fixture → `git pull` (PRs
+  #36–43) → compose down → GPU swap (GTX 1080 → RTX 2070 Super, runbook
+  procedure in `docs/03-hardware.md`) → full `docker compose up -d
+  --build` → `ollama pull qwen3.5:9b-q4_K_M`.
 - **Framework #1 funnel (Mike's ruling 2026-07-15):** the Evaluator is
   deferred until Tech Watcher → Infrastructure Mapper → Bottleneck Scout
   exist, so the anchor gate is real from the first evaluation. Engine

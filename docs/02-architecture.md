@@ -231,7 +231,7 @@ Shrap runs on three machines. Each has a defined role. They are not interchangea
 **Dell Precision 5820 — production tier.**
 The Dell is the always-on production environment. It hosts everything that must run continuously: the trading floor, all intelligence and operations agents, the message bus (Redis), the primary database (PostgreSQL + TimescaleDB), the vector store (Qdrant), Langfuse, and the Ollama instance serving local models. The Dell is the only machine on the production trading path. If the Dell is down, the firm is down.
 
-Current GPU: GTX 1080, used for Ollama inference. Upgrade to RTX 2070 Super is planned for the early build period; the architecture does not depend on the specific card, only on Ollama being available with sufficient VRAM for Qwen 9B as the default classification model.
+Current GPU: RTX 2070 Super (8 GB, Turing; upgraded from the GTX 1080 on 2026-07-16), used for Ollama inference. The architecture does not depend on the specific card, only on Ollama being available with sufficient VRAM for Qwen 9B as the default classification model.
 
 The Dell runs Docker Compose. All production containers are defined in the repo's `docker-compose.yml`. Persistent volumes (PostgreSQL data, Qdrant indices, Redis Streams log) are mounted to paths on TrueNAS storage, which provides redundancy for the data layer independent of the compute.
 

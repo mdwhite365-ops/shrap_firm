@@ -1,5 +1,6 @@
 # Shrap: Vision
 
+
 **Document version:** 0.1 (draft)
 **Last updated:** 2026-05-06
 **Owner:** Mike White
@@ -9,7 +10,8 @@
 
 ## What Shrap is
 
-Shrap is a self-developing, self-improving, self-trading firm that operates on Mike's hardware, manages Mike's capital, and is built and maintained primarily by AI agents under Mike's architectural direction.
+Shrap is a self-developing, self-improving, self-trading firm that operates on Mike's hardware, manages Mike's capit
+al, and is built and maintained primarily by AI agents under Mike's architectural direction.
 
 The firm trades a deliberately focused universe of stocks deeply rather than a broad universe shallowly. The launch Universe begins with a 50-name list and grows only when approved research theses surface tradable candidates worth adding. The firm adapts its active research lenses and strategy library to current market conditions using both statistical state classification and historical-analog reasoning. It generates, validates, promotes, and retires trading strategies autonomously through a research loop that runs while Mike sleeps. It reads news, financial filings, social sentiment, and structural macro data to find edges most retail traders cannot see. And it improves its own infrastructure over time, including drafting specifications and writing code under Mike's review.
 
@@ -177,7 +179,7 @@ This pattern means the system scales beyond any single context window. The repo 
 
 Shrap operates on a three-machine cluster, each with a defined role:
 
-**Dell Precision 5820 (TrueNAS)** — Production tier. Always-on. Runs the trading floor, intelligence agents, operations agents, message bus, databases, and observability stack. Currently equipped with GTX 1080 (will be upgraded to RTX 2070 Super in early build). Hosts Ollama for local LLM serving with Qwen 9B as default classification model.
+**Dell Precision 5820 (TrueNAS)** — Production tier. Always-on. Runs the trading floor, intelligence agents, operations agents, message bus, databases, and observability stack. Equipped with RTX 2070 Super (upgraded from GTX 1080, 2026-07-16). Hosts Ollama for local LLM serving with Qwen 9B as default classification model.
 
 **Ryzen 7 7800X with RTX 4070 Super 12GB** — Heavy inference and research tier. On-demand availability via Tailscale. Runs heavier local LLMs (Qwen 14B, Mistral Small 24B), backtest workloads, and any agent task requiring more horsepower than the Dell can deliver. Used for the development department's heavier code generation tasks. Eventually used for fine-tuning local models on accumulated trade data.
 

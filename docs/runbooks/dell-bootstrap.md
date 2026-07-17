@@ -36,7 +36,7 @@ TrueNAS SCALE ships Docker as part of its app platform. If for any reason Docker
 
 ### 1.3 NVIDIA Container Toolkit (for Ollama GPU passthrough)
 
-- NVIDIA driver installed on the host and `nvidia-smi` reports the GTX 1080.
+- NVIDIA driver installed on the host and `nvidia-smi` reports the Dell's GPU (RTX 2070 Super as of 2026-07-16).
 - `nvidia-container-toolkit` package installed.
 - `/etc/docker/daemon.json` configured with the `nvidia` runtime, or `nvidia-ctk runtime configure --runtime=docker` has been run.
 - `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi` succeeds.

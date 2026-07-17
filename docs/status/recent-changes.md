@@ -80,10 +80,13 @@
   regime gate passed on `late-cycle-melt-up` — and the full chain ran with
   no human in the loop: signal → intent → risk approval → Alpaca submission
   (SPY buy x1, order `6315af3f`, ~5 seconds end to end). Market was closed;
-  fill expected at the 2026-07-16 open via Card 16 re-polling. Plan: verify
-  fill + clean reconciliation, then disarm the fixture — its job is done
-  once the autonomous path is proven; the next thing to arm the trading
-  path should be a real strategy promoted out of the registry.
+  the order queued at Alpaca overnight via Card 16 re-polling.
+- **2026-07-16 (first autonomous fill):** the SPY order filled at the open —
+  the firm's first trade with no human anywhere in the loop, signal through
+  fill. Remaining follow-ups in the same Dell session: confirm the
+  reconciliation pass is clean, disarm the fixture
+  (`STRATEGY_FIXTURE_ENABLED=false`), full-stack rebuild (PRs #36–43), and
+  the GTX 1080 → RTX 2070 Super GPU swap per the hardware-doc procedure.
 
 ## Security notes
 
