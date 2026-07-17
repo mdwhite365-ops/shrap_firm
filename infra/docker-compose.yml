@@ -210,11 +210,13 @@ services:
   # -------------------------------------------------------------------------
   # Ollama - local LLM serving. GPU passthrough via NVIDIA Container Toolkit.
   # Hosts Qwen 3.5 9B on the Dell per docs/infrastructure/llm-routing.md.
-  # Image >= 0.31.x required for Qwen 3.5-generation models; 0.31.2 also
-  # enables flash attention on older NVIDIA GPUs (Pascal/Turing class).
+  # Image >= 0.31.x required for Qwen 3.5-generation models. 0.32.0 is what
+  # Mike deployed on the Dell 2026-07-16 (drift committed, PR #25 pattern);
+  # its CUDA path needs NVIDIA driver 570+ — present on the Dell since the
+  # 2070 Super swap. Driver 550 + this image = silent CPU-only fallback.
   # -------------------------------------------------------------------------
   ollama:
-    image: ollama/ollama:0.31.2
+    image: ollama/ollama:0.32.0
     container_name: shrap_ollama
     restart: unless-stopped
     volumes:
