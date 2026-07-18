@@ -20,16 +20,28 @@ from typing import Any, Protocol
 import structlog
 
 from shrap.llm.registry import TIER_LOCAL_CLASSIFICATION
-from shrap.research.tech_watcher.archetypes import ARCHETYPE_KEYS, archetype_prompt_block
+from shrap.research.tech_watcher.archetypes import ARCHETYPE_KEYS, archetype_filter_prompt_block
 
 log = structlog.get_logger(__name__)
 
+# Bump on any behavior-relevant prompt change; stamped into filter_result so
+# calibration reviews know which prompt scored each item.
+FILTER_PROMPT_VERSION = 2
+
 FILTER_SYSTEM_PROMPT = (
     "You are the Tech Watcher bulk filter for a research funnel. You receive one "
-    "ingested item (an SEC filing headline or an arXiv abstract) and the allowed "
-    "world-changer archetype vocabulary. Decide whether the item is plausible "
-    "EVIDENCE for any archetype — a real-world signal that the pattern may be "
-    "playing out. Most items are not relevant; when unsure, say not relevant. "
+    "ingested item (an SEC filing headline or an arXiv abstract) and the "
+    "world-changer recognition grammar: archetype definitions, signature signals, "
+    "and known impostors. Decide whether the item is EVIDENCE that an archetype's "
+    "pattern is actually playing out in the real world.\n"
+    "Hard rules:\n"
+    "- Evidence means real-world adoption or economics: capacity, capex, pricing, "
+    "deployment, revenue attribution, regulatory or clinical milestones. An item "
+    "that is merely ABOUT a technology — a new method, model architecture, "
+    "benchmark, or simulation result — is NOT evidence, no matter how impressive.\n"
+    "- If the item matches a known impostor pattern for the archetype, it is not "
+    "relevant.\n"
+    "- Most items are not relevant. When unsure, say not relevant.\n"
     "Respond with ONLY a JSON object: "
     '{"relevant": true|false, "archetype": "<key or null>", "reason": "<one sentence>"}. '
     "The archetype must be one of the provided keys or null."
@@ -103,7 +115,7 @@ class AsyncPool(Protocol):
 def _item_prompt(item: UnfilteredItem) -> str:
     summary = (item.summary or "")[:1500]
     return (
-        f"Archetype vocabulary:\n{archetype_prompt_block()}\n\n"
+        f"Recognition grammar:\n{archetype_filter_prompt_block()}\n\n"
         f"Item (source={item.source}, kind={item.kind or 'unknown'}):\n"
         f"Title: {item.title}\n"
         f"Summary: {summary or '(none)'}"
@@ -178,6 +190,7 @@ async def filter_pass(
                         "archetype": verdict.archetype,
                         "reason": verdict.reason,
                         "model": result.model,
+                        "prompt_version": FILTER_PROMPT_VERSION,
                     },
                     separators=(",", ":"),
                 ),

@@ -37,7 +37,11 @@ from ulid import ULID
 
 from shrap.events import EventPublisher
 from shrap.llm.registry import TIER_CLOUD_DEFAULT
-from shrap.research.tech_watcher.archetypes import ARCHETYPE_KEYS, archetype_prompt_block
+from shrap.research.tech_watcher.archetypes import (
+    ARCHETYPE_KEYS,
+    archetype_impostor_block,
+    archetype_prompt_block,
+)
 from shrap.research.tech_watcher.candidates import PostgresCandidateStore
 
 log = structlog.get_logger(__name__)
@@ -231,6 +235,7 @@ def _cluster_prompt(cluster: Cluster) -> str:
     lines = [
         f"Archetype vocabulary:\n{archetype_prompt_block()}",
         f"\nTarget archetype for this cluster: {cluster.archetype}",
+        archetype_impostor_block(cluster.archetype),
         f"Source classes represented: {', '.join(cluster.source_classes)}",
         "\nEvidence items:",
     ]
