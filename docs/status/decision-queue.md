@@ -26,7 +26,7 @@
 
 **Current state:** First live batch under prompt v1 over-flagged (6 kept, ~1 real), diagnosed as a prompt gap and fixed in PR #49. The v2 re-filter ran 2026-07-18: 0/246 kept — false positives eliminated, but the false-negative check on the one borderline-real item is unauditable (KI-007). The evidence is now one-sided: v2 doesn't over-flag, but whether it under-flags is unknown.
 
-**Recommendation:** Keep open. Spot-check v2 rejection reasons for coherence, ship the KI-007 verdict-history fix, and judge on the next few live batches — a real world-changer signal should eventually triangulate across EDGAR + arXiv, which the filter can't silently suppress on both legs.
+**Recommendation:** Keep open. The 2026-07-18 spot-check (10 random v2 rejections) passed — reasons coherent, impostor-class papers rejected on the right grounds — so the rejection direction looks sound. Ship the KI-007 verdict-history fix and judge the keep direction on the next few live batches; a real world-changer signal should eventually triangulate across EDGAR + arXiv, which the filter can't silently suppress on both legs.
 
 ## Resolved decisions
 

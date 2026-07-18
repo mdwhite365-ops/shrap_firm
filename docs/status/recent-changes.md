@@ -140,6 +140,11 @@
   triangulation-stage rejection never wrote a graveyard row, and the PR #49
   redeploy discarded the container logs holding the v1 keep list (KI-007).
   DQ-006 stays open on spot-check + future live-batch evidence.
+- **2026-07-18 (spot-check):** 10 random v2 rejection reasons reviewed —
+  all coherent; boilerplate 8-Ks correctly identified, and two ML-methods
+  arXiv papers (the exact impostor class that fooled v1) rejected with the
+  right archetype and the economic-evidence rule cited. Supports the
+  prompt-gap diagnosis; the false-negative direction remains untested.
 
 ## Security notes
 
