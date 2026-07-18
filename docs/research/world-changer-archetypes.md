@@ -57,6 +57,13 @@ x86 + Windows in PCs; ARM in mobile.
   years out since the 2010s).
 - Neuromorphic chips as a mainstream alternative.
 - Crypto-mining ASIC firms reframed as "AI compute."
+- ML methods/architecture papers presented as substrate shifts — a new
+  model, training technique, or benchmark result is research *about*
+  computing, not evidence of a substrate transition. Evidence is
+  adoption economics (TCO, capex, moats), never algorithmic novelty.
+  (Added 2026-07-17 after the Tech Watcher's first live filter batch
+  flagged four methods papers and one neuromorphic paper — the
+  impostor lists now ride in the filter prompt.)
 
 **Kill criteria template:**
 - Substrate-specific software moat erodes (open replacement reaches

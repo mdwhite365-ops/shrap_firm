@@ -360,3 +360,62 @@ def test_render_markdown_shows_proposed_and_graveyard() -> None:
     assert "attach rate < 10% by FY28" in markdown
     assert "Rejection graveyard" in markdown
     assert "kill_criteria must be a non-empty list" in markdown
+
+
+# --- calibration v2 prompt content ---------------------------------------------
+
+
+def test_filter_prompt_block_carries_signals_and_impostors() -> None:
+    from shrap.research.tech_watcher.archetypes import archetype_filter_prompt_block
+
+    block = archetype_filter_prompt_block()
+    assert "neuromorphic" in block.lower()  # the impostor the first batch missed
+    assert "ML methods/architecture papers" in block
+    assert "TCO advantage" in block
+    assert "Phase 3" in block
+
+
+def test_filter_system_prompt_demands_economic_evidence() -> None:
+    from shrap.research.tech_watcher.filter import FILTER_SYSTEM_PROMPT
+
+    assert "NOT evidence" in FILTER_SYSTEM_PROMPT
+    assert "impostor" in FILTER_SYSTEM_PROMPT
+
+
+async def test_filter_pass_stamps_prompt_version() -> None:
+    pool = FakePool()
+    from shrap.research.tech_watcher.filter import (
+        FILTER_PROMPT_VERSION,
+        SELECT_UNFILTERED_SQL,
+    )
+
+    pool.conn.fetch_results[SELECT_UNFILTERED_SQL] = [
+        {
+            "item_id": "arxiv:1",
+            "source": "arxiv",
+            "kind": "cs.LG",
+            "title": "t",
+            "summary": None,
+        }
+    ]
+    llm = FakeLLM(['{"relevant": false, "archetype": null, "reason": "methods paper"}'])
+
+    await filter_pass(pool, llm)  # type: ignore[arg-type]
+
+    marked = [args for sql, args in pool.conn.executed if sql == MARK_FILTERED_SQL]
+    assert json.loads(str(marked[0][2]))["prompt_version"] == FILTER_PROMPT_VERSION
+
+
+def test_synthesis_cluster_prompt_includes_target_impostors() -> None:
+    from shrap.research.tech_watcher.synthesis import _cluster_prompt
+
+    cluster = Cluster(
+        archetype="compute-substrate",
+        items=(
+            _relevant("a", "arxiv", "compute-substrate"),
+            _relevant("b", "sec-edgar", "compute-substrate"),
+        ),
+    )
+    prompt = _cluster_prompt(cluster)
+    assert "Known impostors for compute-substrate" in prompt
+    assert "neuromorphic" in prompt.lower()
