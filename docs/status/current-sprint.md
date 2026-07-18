@@ -1,6 +1,6 @@
 # Current sprint status
 
-**Last updated:** 2026-07-17 (night)
+**Last updated:** 2026-07-18
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
@@ -18,11 +18,12 @@ Next: the promotion workflow, then the Infrastructure Mapper.
 
 ## Main branch state
 
-Merged on `main` through PR #45. Highlights since the spine-close status:
+Merged on `main` through PR #50. Highlights since the spine-close status:
 consumer groups (#37), strategy registry + state machine (#38), Strategy
 Librarian service (#40), Evaluator ruling — Framework #1 first, in-house
 walk-forward engine (#41), LLM tier client (#42), registry seed correction +
-Ollama runtime bump (#43), GPU swap + drift commit (#44–45). Full list in
+Ollama runtime bump (#43), GPU swap + drift commit (#44–45), Tech Watcher
+ingest + synthesis + filter prompt v2 (#47–49). Full list in
 `recent-changes.md`.
 
 ## Spine verification record
@@ -45,10 +46,12 @@ Ollama runtime bump (#43), GPU swap + drift commit (#44–45). Full list in
 - **Monday 2026-07-20 open:** the after-hours smoke order (2026-07-17
   16:59 ET) fills; confirm `execution.order.filled` + clean
   reconciliation to certify the rebuilt stack end to end.
-- **Re-filter under prompt v2** (after PR #49 deploys): reset
-  `filter_result` for unsynthesized items, compare against the v1
-  baseline (6 flagged / ~1 real). Residual error rate is the honest
-  Qwen-quality datapoint for the cloud-tier decision.
+- **v2 re-filter ran 2026-07-18: 0/246 kept.** The five v1 false positives
+  are gone, but the v1 borderline-real item was also rejected and cannot be
+  identified for a false-negative audit (KI-007 — pre-synthesis rejections
+  leave no trace; the re-filter overwrote v1 verdicts and the redeploy ate
+  the logs). The Qwen-quality verdict (DQ-006) now rests on spot-checking
+  v2 rejection reasons and on the next live batches' behavior.
 - **Promotion workflow card (next):** Mike's promote/kill action on
   review-page candidates → status update + `research.world-changer-promoted`
   event. The Infrastructure Mapper has no input until this exists.
