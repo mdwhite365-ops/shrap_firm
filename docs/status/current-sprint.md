@@ -1,19 +1,20 @@
 # Current sprint status
 
-**Last updated:** 2026-07-17
-**Phase:** Month 3 / middle loop open → Framework #1 funnel
+**Last updated:** 2026-07-17 (night)
+**Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
 ## Current focus
 
-**First autonomous trade complete; substrate upgraded; Framework #1 next.**
-The fixture-originated SPY order filled at the 2026-07-16 open — signal to
-fill, no human in the loop — and the fixture is now disarmed. The registry +
-librarian arc (PRs #38/#40) is merged and deployed. The LLM substrate is
-live: tier client (PR #42), corrected registry seed `qwen3.5:9b-q4_K_M`
-(PR #43), RTX 2070 Super serving it on GPU (PRs #44–45). Next build work is
-the Tech Watcher seed — the funnel's first agent and the firm's first
-LLM-calling agent, local-only per Mike's ruling.
+**All three loops are physically running.** The inner loop trades
+autonomously (first fixture-originated fill 2026-07-16). The middle loop
+has its registry + librarian waiting on an Evaluator. And as of tonight the
+research funnel is live end to end: the Tech Watcher ingests EDGAR + arXiv
+hourly, filters on local Qwen (2070 Super), and declined to propose on its
+first batch because the two-source triangulation rule held — exactly the
+honest behavior it was built for. First calibration finding (filter
+over-flagging) was diagnosed as a prompt gap, fixed same night (PR #49).
+Next: the promotion workflow, then the Infrastructure Mapper.
 
 ## Main branch state
 
@@ -44,11 +45,13 @@ Ollama runtime bump (#43), GPU swap + drift commit (#44–45). Full list in
 - **Monday 2026-07-20 open:** the after-hours smoke order (2026-07-17
   16:59 ET) fills; confirm `execution.order.filled` + clean
   reconciliation to certify the rebuilt stack end to end.
-- **Tech Watcher seed card (next):** Framework #1 opener, first
-  LLM-calling agent. Local-only on the tier client per Mike's ruling —
-  no cloud billing required. Carried design note: qwen3.5 thinks by
-  default; the tier client needs a `think: false` toggle for bulk
-  classification calls.
+- **Re-filter under prompt v2** (after PR #49 deploys): reset
+  `filter_result` for unsynthesized items, compare against the v1
+  baseline (6 flagged / ~1 real). Residual error rate is the honest
+  Qwen-quality datapoint for the cloud-tier decision.
+- **Promotion workflow card (next):** Mike's promote/kill action on
+  review-page candidates → status update + `research.world-changer-promoted`
+  event. The Infrastructure Mapper has no input until this exists.
 - **Fixture disarm verification:** `docker logs shrap_strategy_fixture`
   should show `"enabled": false` post-rebuild (belt-and-suspenders; the
   .env flip + rebuild happened in the 2026-07-17 session).
@@ -70,6 +73,6 @@ Alpaca paper credentials live only in local ignored `infra/.env`.
 
 ## Next recommended card
 
-Tech Watcher seed (Framework #1 opener, first LLM-calling agent), then
+World-changer promotion workflow (small — unlocks the Mapper), then
 Infrastructure Mapper and Bottleneck Scout seeds, then Hypothesis
 Generator, then the Evaluator.

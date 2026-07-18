@@ -62,7 +62,8 @@ Shrap paper-trading spine
     ├── Strategy registry / librarian schema [done, PR #38]
     ├── Strategy Librarian service (verdict events → transitions → lifecycle events) [done, PR #40]
     ├── Framework #1 funnel (decided 2026-07-15: build before the Evaluator so anchors are real)
-    │   ├── Tech Watcher seed (EDGAR/arXiv/USPTO ingest + synthesis pass) — first LLM-calling agent
+    │   ├── Tech Watcher seed [done, PRs #47–49 — ingest + filter + synthesis live on the Dell 2026-07-17]
+    │   ├── World-changer promotion workflow (Mike's promote/kill action → promoted event)
     │   ├── Infrastructure Mapper seed (dependency graphs per promoted world-changer)
     │   └── Bottleneck Scout seed (saturation / forced-substitute detection)
     ├── Hypothesis Generator seed path
