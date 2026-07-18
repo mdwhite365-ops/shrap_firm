@@ -44,15 +44,26 @@
 - PR #40 — Strategy Librarian deployable service: verdict events →
   registry transitions → `research.strategy.*` lifecycle events. Idles
   until an Evaluator exists; safe to deploy now.
+- PR #41 — Status + Evaluator ruling: Framework #1 before the Evaluator;
+  in-house walk-forward engine (VectorBT PRO re-gated).
+- PR #42 — LLM tier client: ADR-0009 registry-driven wrapper, Ollama
+  backend, cloud tiers fail loudly until billing exists.
+- PR #43 — Registry seed correction: `qwen2.5:9b` never existed →
+  `qwen3.5:9b-q4_K_M`; Ollama image pin bumped off 2024-era 0.3.12.
+- PR #44 — Dell GPU swap docs (GTX 1080 → RTX 2070 Super) + first
+  autonomous fill recorded.
+- PR #45 — Ollama pin drift committed: 0.32.0 deployed and GPU-verified
+  (CUDA needs driver 570+; driver 550 = silent CPU-only fallback).
 
 ## Open
 
-- No open implementation PRs. Mike ruled (2026-07-15): build the
-  Framework #1 funnel before the Evaluator (anchors must be real), and
-  the Evaluator uses an in-house walk-forward engine (VectorBT PRO
-  re-gated). Next: Tech Watcher seed card.
-- Dell redeploy pending: running containers predate PR #36 (`git pull` +
-  full `docker compose up -d --build` after the pending SPY fill lands).
+- No open implementation PRs. Next: Tech Watcher seed (Framework #1
+  opener, first LLM-calling agent, local-only on the tier client).
+  Design note carried from the field: qwen3.5 is a thinking model — the
+  tier client wants a `think: false` toggle for bulk classification.
+- Dell is current through PR #45 (2026-07-17): full stack rebuilt on
+  consumer groups + librarian, RTX 2070 Super verified serving
+  `qwen3.5:9b-q4_K_M` on GPU, fixture disarmed.
 
 ## Live smoke notes
 
@@ -83,10 +94,16 @@
   the order queued at Alpaca overnight via Card 16 re-polling.
 - **2026-07-16 (first autonomous fill):** the SPY order filled at the open —
   the firm's first trade with no human anywhere in the loop, signal through
-  fill. Remaining follow-ups in the same Dell session: confirm the
-  reconciliation pass is clean, disarm the fixture
-  (`STRATEGY_FIXTURE_ENABLED=false`), full-stack rebuild (PRs #36–43), and
-  the GTX 1080 → RTX 2070 Super GPU swap per the hardware-doc procedure.
+  fill.
+- **2026-07-17 (upgrade session):** fixture disarmed, full-stack rebuild
+  (PRs #36–45: consumer groups, librarian, ollama 0.32.0), GTX 1080 →
+  RTX 2070 Super per the hardware-doc procedure. GPU inference verified:
+  CUDA compute=7.5, `qwen3.5:9b` at 85% GPU util / 6.5 GB VRAM. Found:
+  the 1080 host (driver 550) had been silently CPU-only under ollama
+  0.32 — the swap fixed inference, not just speed. Post-rebuild spine
+  smoke ran after hours (16:59 ET): submission → persistence → audit
+  passed on the new stack; the order queued at Alpaca and the fill +
+  clean-reconciliation close-out lands at the Monday 2026-07-20 open.
 
 ## Security notes
 
