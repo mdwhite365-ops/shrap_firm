@@ -553,6 +553,35 @@ services:
       - shrap_net
 
   # -------------------------------------------------------------------------
+  # Tech Watcher (ingest slice) - Research Department, top of the
+  # Framework #1 funnel. Hourly EDGAR + arXiv pulls into
+  # research.raw_source_items with atomic cursor advance; publishes
+  # ingestion.heartbeat per source. Deterministic - the LLM synthesis
+  # pass is the next card.
+  # -------------------------------------------------------------------------
+  tech-watcher:
+    build:
+      context: ../
+      dockerfile: infra/tech-watcher.Dockerfile
+    container_name: shrap_tech_watcher
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TECH_WATCHER_REDIS_URL: "redis://redis:6379/0"
+      TECH_WATCHER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      TECH_WATCHER_INTERVAL_SECONDS: "3600"
+      TECH_WATCHER_MAX_RESULTS: "100"
+      TECH_WATCHER_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
   # Regime Classifier - Intelligence Department, statistical layer only.
   # Syncs daily bars (Alpaca data API, IEX feed) into market_data.ohlcv_1d
   # and publishes intel.regime.tick / .changed / .sizing-modifier events.
