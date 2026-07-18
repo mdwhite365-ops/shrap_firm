@@ -63,9 +63,13 @@ Shrap paper-trading spine
     ├── Strategy Librarian service (verdict events → transitions → lifecycle events) [done, PR #40]
     ├── Framework #1 funnel (decided 2026-07-15: build before the Evaluator so anchors are real)
     │   ├── Tech Watcher seed [done, PRs #47–49 — ingest + filter + synthesis live on the Dell 2026-07-17]
-    │   ├── World-changer promotion workflow (Mike's promote/kill action → promoted event)
+    │   ├── Gov-sources ingest: USASpending + DOE newsroom source classes (2026-07-18 ruling — Valar case)
+    │   ├── World-changer promotion workflow (Mike's promote/kill + Mike-seeded candidates)
     │   ├── Infrastructure Mapper seed (dependency graphs per promoted world-changer)
     │   └── Bottleneck Scout seed (saturation / forced-substitute detection)
+    ├── Intelligence Department Month 2 seeds (pulled forward 2026-07-18)
+    │   ├── News Analyzer spec + service (→ intelligence.signal)
+    │   └── Filing Processor spec + service (universe-name 8-Ks → intelligence.signal)
     ├── Hypothesis Generator seed path
     ├── Strategy Evaluator minimal backtest harness (in-house walk-forward; VectorBT PRO re-gated)
     └── First strategy promotion into paper spine

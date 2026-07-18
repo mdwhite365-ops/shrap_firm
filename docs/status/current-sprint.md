@@ -74,8 +74,24 @@ Alpaca paper credentials live only in local ignored `infra/.env`.
 - Check only presence/length.
 - If a key appears in chat or a log, rotate it.
 
-## Next recommended card
+## Card order (Mike's ruling, 2026-07-18)
 
-World-changer promotion workflow (small — unlocks the Mapper), then
-Infrastructure Mapper and Bottleneck Scout seeds, then Hypothesis
-Generator, then the Evaluator.
+Motivating case: Valar Atomics' Ward 250 reached criticality 2026-06-18
+under the DOE Reactor Pilot Program — a textbook cost-curve-crossing
+signal that the funnel could not see. The confirming paper trail (DOE
+award, program announcements) lives in sources the Tech Watcher spec
+already lists but the deployed slice doesn't ingest. Ruling: widen the
+web before deepening the funnel.
+
+1. **Gov-sources ingest** — USASpending awards + DOE newsroom as new
+   Tech Watcher source classes (SAM.gov deferred until an API key
+   exists). Follows the PR #47 ingest pattern.
+2. **Promotion workflow** — Mike's promote/kill action, plus a
+   Mike-seeded candidate path (first seed: mass-manufactured fission
+   cost-curve crossing).
+3. **Intelligence Department Month 2 seeds** — News Analyzer spec +
+   service, then Filing Processor spec + service, both publishing
+   `intelligence.signal` (which the Tech Watcher already consumes as
+   an event trigger).
+4. Then the prior queue: Infrastructure Mapper, Bottleneck Scout,
+   Hypothesis Generator, Evaluator.
