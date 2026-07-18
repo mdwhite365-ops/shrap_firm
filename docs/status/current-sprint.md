@@ -1,6 +1,6 @@
 # Current sprint status
 
-**Last updated:** 2026-07-17 (night)
+**Last updated:** 2026-07-18
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
@@ -18,11 +18,12 @@ Next: the promotion workflow, then the Infrastructure Mapper.
 
 ## Main branch state
 
-Merged on `main` through PR #45. Highlights since the spine-close status:
+Merged on `main` through PR #50. Highlights since the spine-close status:
 consumer groups (#37), strategy registry + state machine (#38), Strategy
 Librarian service (#40), Evaluator ruling — Framework #1 first, in-house
 walk-forward engine (#41), LLM tier client (#42), registry seed correction +
-Ollama runtime bump (#43), GPU swap + drift commit (#44–45). Full list in
+Ollama runtime bump (#43), GPU swap + drift commit (#44–45), Tech Watcher
+ingest + synthesis + filter prompt v2 (#47–49). Full list in
 `recent-changes.md`.
 
 ## Spine verification record

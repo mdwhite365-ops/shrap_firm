@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-18
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -46,4 +46,4 @@ The Reconciliation Agent compares Alpaca paper orders against `trading.paper_ord
 
 Stream consumers held their offsets in memory and read from `start_id=0-0` on restart, replaying the entire history — the cause of the 2026-07-06 poison-event incident. PR #27/#32 made replay safe (poison-skip); PR #30's rate guardrails blunted the replay-reapproval hazard; PR #37 fixed the root cause with consumer groups and acknowledged, persisted offsets (`src/shrap/events/groups.py`).
 
-Two residuals, tracked in `current-sprint.md` open work: (1) retry-backoff for systemic errors (broker/DB down) was scoped into this card's mitigation but did not ship in PR #37; (2) the Dell has not yet been redeployed with PR #36+ — the running containers predate consumer groups.
+One residual, tracked in `current-sprint.md` open work: retry-backoff for systemic errors (broker/DB down) was scoped into this card's mitigation but did not ship in PR #37. The second residual (Dell running pre-#36 containers) was resolved by the 2026-07-17 upgrade session: full-stack rebuild through PR #45, consumer groups live in production.

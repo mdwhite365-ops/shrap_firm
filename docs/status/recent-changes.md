@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-18
 
 ## Merged since the inner-loop paper spine push began
 

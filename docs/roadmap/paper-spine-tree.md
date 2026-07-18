@@ -1,6 +1,6 @@
 # Paper spine roadmap tree
 
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-18
 **Principle:** Finish the paper-trading spine before Research implementation.
 **Spine status: CLOSED** — market-hours smoke passed 9/9 on the Dell 2026-07-15.
 
