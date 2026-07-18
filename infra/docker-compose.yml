@@ -572,12 +572,24 @@ services:
       TECH_WATCHER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
       TECH_WATCHER_INTERVAL_SECONDS: "3600"
       TECH_WATCHER_MAX_RESULTS: "100"
+      TECH_WATCHER_LLM_ENABLED: "${TECH_WATCHER_LLM_ENABLED:-true}"
+      TECH_WATCHER_FILTER_MAX_ITEMS: "300"
+      TECH_WATCHER_SYNTHESIS_INTERVAL_SECONDS: "86400"
+      TECH_WATCHER_MAX_PROPOSALS: "10"
       TECH_WATCHER_LOG_LEVEL: "INFO"
+      # Local-only LLM routing (Mike's ruling 2026-07-15): both tiers this
+      # agent uses are env-routed to the Dell's Ollama. Deployment routing,
+      # not a registry change — see docs/infrastructure/llm-registry.md.
+      SHRAP_LLM_OLLAMA_URL: "http://ollama:11434"
+      SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "qwen3.5:9b-q4_K_M"
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      ollama:
+        condition: service_started
     networks:
       - shrap_net
 

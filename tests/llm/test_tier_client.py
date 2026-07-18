@@ -181,3 +181,16 @@ async def test_empty_content_raises_ollama_error() -> None:
 
     with pytest.raises(OllamaError, match="no content"):
         await client.complete(TIER_LOCAL_CLASSIFICATION, prompt="hello")
+
+
+async def test_think_toggle_is_passed_through_and_absent_by_default() -> None:
+    http = FakeHTTP(_ok_response())
+    client = TierLLMClient(TierRegistry({}), http)
+
+    await client.complete(TIER_LOCAL_CLASSIFICATION, prompt="classify", think=False)
+    await client.complete(TIER_LOCAL_CLASSIFICATION, prompt="classify")
+
+    _url, body_think, _t = http.requests[0]
+    _url, body_default, _t = http.requests[1]
+    assert body_think["think"] is False
+    assert "think" not in body_default

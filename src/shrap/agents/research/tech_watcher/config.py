@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     max_results: int = 100
     interval_seconds: float = 3600.0
     http_timeout: float = 30.0
+    llm_enabled: bool = True
+    filter_max_items: int = 300
+    synthesis_interval_seconds: float = 86400.0
+    max_proposals: int = 10
     log_level: str = "INFO"
 
     def postgres_dsn_value(self) -> str:
@@ -64,5 +68,9 @@ class Settings(BaseSettings):
             "max_results": self.max_results,
             "interval_seconds": self.interval_seconds,
             "http_timeout": self.http_timeout,
+            "llm_enabled": self.llm_enabled,
+            "filter_max_items": self.filter_max_items,
+            "synthesis_interval_seconds": self.synthesis_interval_seconds,
+            "max_proposals": self.max_proposals,
             "log_level": self.log_level,
         }

@@ -70,6 +70,7 @@ The matrix is the source of truth for current routing. When an agent migrates ti
 
 | Agent | Current tier | Notes |
 |---|---|---|
+| Tech Watcher | Local (Qwen 3.5 9B, Dell) — all tiers env-routed | Seed deployment under the 2026-07-15 local-only ruling; spec tiers (`cloud-default` synthesis, `local-classification` filter) unchanged as contract. Cloud flip = compose env change |
 | Regime Classifier | No-LLM | Statistical computation only |
 | Regime Researcher | Cloud (Sonnet 4.6) | Historical analog synthesis requires judgment |
 | Hypothesis Generator | Cloud (Sonnet 4.6) | Cost of poor hypotheses propagates downstream |

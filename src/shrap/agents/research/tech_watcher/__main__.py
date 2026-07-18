@@ -29,6 +29,10 @@ def main() -> None:
             max_results=settings.max_results,
             interval_seconds=settings.interval_seconds,
             http_timeout=settings.http_timeout,
+            llm_enabled=settings.llm_enabled,
+            filter_max_items=settings.filter_max_items,
+            synthesis_interval_seconds=settings.synthesis_interval_seconds,
+            max_proposals=settings.max_proposals,
             service_name=settings.service_name,
             log_level=settings.log_level,
         )

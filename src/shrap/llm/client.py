@@ -92,7 +92,16 @@ class TierLLMClient:
         system: str | None = None,
         json_mode: bool = False,
         temperature: float = 0.2,
+        think: bool | None = None,
     ) -> LLMResult:
+        """Complete a prompt on whatever model serves ``tier``.
+
+        ``think`` controls reasoning-model behavior: ``False`` disables the
+        thinking pass (bulk classification wants this — qwen3.5 reasons out
+        loud by default and that is latency and tokens), ``True`` forces it,
+        ``None`` leaves the model default.
+        """
+
         binding = self._registry.resolve(tier)
         if binding.provider != PROVIDER_OLLAMA:
             raise ProviderNotConfiguredError(
@@ -101,7 +110,7 @@ class TierLLMClient:
                 f"SHRAP_LLM_{tier.upper().replace('-', '_')}_PROVIDER=ollama or configure "
                 "the provider"
             )
-        return await self._complete_ollama(binding, prompt, system, json_mode, temperature)
+        return await self._complete_ollama(binding, prompt, system, json_mode, temperature, think)
 
     async def _complete_ollama(
         self,
@@ -110,6 +119,7 @@ class TierLLMClient:
         system: str | None,
         json_mode: bool,
         temperature: float,
+        think: bool | None = None,
     ) -> LLMResult:
         messages: list[dict[str, str]] = []
         if system is not None:
@@ -123,6 +133,8 @@ class TierLLMClient:
         }
         if json_mode:
             body["format"] = "json"
+        if think is not None:
+            body["think"] = think
 
         started = time.monotonic()
         response = await self._http.post(

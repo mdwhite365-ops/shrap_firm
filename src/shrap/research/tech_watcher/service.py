@@ -11,10 +11,12 @@ never corrupts output).
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 import httpx
 import structlog
@@ -23,6 +25,9 @@ from redis.asyncio import Redis
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher
+from shrap.llm import TierLLMClient, TierRegistry
+from shrap.research.tech_watcher.candidates import PostgresCandidateStore
+from shrap.research.tech_watcher.filter import filter_pass
 from shrap.research.tech_watcher.sources import (
     ArxivSource,
     EdgarSource,
@@ -30,6 +35,7 @@ from shrap.research.tech_watcher.sources import (
     RawSourceItem,
 )
 from shrap.research.tech_watcher.store import PostgresRawItemStore
+from shrap.research.tech_watcher.synthesis import synthesis_pass
 
 log = structlog.get_logger(__name__)
 
@@ -120,6 +126,21 @@ async def ingest_pass(
     return inserted_by_source
 
 
+@dataclass(frozen=True, slots=True)
+class LLMStages:
+    """The LLM-backed pipeline stages wired into the hourly loop.
+
+    ``run_filter`` scores unfiltered items (spec step 2); ``run_synthesis``
+    runs the daily cluster/synthesize/validate batch (steps 3-7);
+    ``synthesis_due`` reads the batch clock. Absent (None in run_loop) the
+    loop is ingest-only — slice-A behavior, also the LLM kill switch.
+    """
+
+    run_filter: Callable[[], Awaitable[object]]
+    run_synthesis: Callable[[], Awaitable[object]]
+    synthesis_due: Callable[[], Awaitable[bool]]
+
+
 async def run_loop(
     sources: Sequence[Source],
     http: HTTPClient,
@@ -128,8 +149,14 @@ async def run_loop(
     stop: asyncio.Event,
     interval_seconds: float = 3600.0,
     timeout: float = 30.0,
+    llm_stages: LLMStages | None = None,
 ) -> None:
-    """Run ingest passes on a simple interval until ``stop`` is set."""
+    """Run pipeline passes on a simple interval until ``stop`` is set.
+
+    Each stage fails independently: an Ollama outage stops filtering for
+    the pass (items stay unfiltered and retry next pass) without touching
+    ingest, and vice versa.
+    """
 
     while not stop.is_set():
         try:
@@ -137,6 +164,20 @@ async def run_loop(
             log.info("tech_watcher.pass_complete", inserted=counts)
         except Exception:
             log.exception("tech_watcher.pass_failed")
+        if llm_stages is not None:
+            try:
+                verdicts = await llm_stages.run_filter()
+                log.info(
+                    "tech_watcher.filter_complete", verdicts=len(cast("list[object]", verdicts))
+                )
+            except Exception:
+                log.exception("tech_watcher.filter_failed")
+            try:
+                if await llm_stages.synthesis_due():
+                    report = await llm_stages.run_synthesis()
+                    log.info("tech_watcher.synthesis_complete", report=str(report))
+            except Exception:
+                log.exception("tech_watcher.synthesis_failed")
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval_seconds)
         except TimeoutError:
@@ -152,10 +193,15 @@ async def run(
     max_results: int = 100,
     interval_seconds: float = 3600.0,
     http_timeout: float = 30.0,
+    llm_enabled: bool = True,
+    llm_env: dict[str, str] | None = None,
+    filter_max_items: int = 300,
+    synthesis_interval_seconds: float = 86400.0,
+    max_proposals: int = 10,
     service_name: str = PRODUCED_BY,
     log_level: str = "INFO",
 ) -> None:
-    """Run the Tech Watcher ingest service until SIGINT/SIGTERM."""
+    """Run the Tech Watcher service (ingest + filter + daily synthesis)."""
 
     configure_logging(service_name, log_level)
     log.info(
@@ -165,6 +211,8 @@ async def run(
         edgar_forms=list(edgar_forms),
         arxiv_categories=list(arxiv_categories),
         interval_seconds=interval_seconds,
+        llm_enabled=llm_enabled,
+        synthesis_interval_seconds=synthesis_interval_seconds,
     )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
@@ -172,11 +220,37 @@ async def run(
     pool = await create_asyncpg_pool(postgres_dsn)
     store = PostgresRawItemStore(pool)
     await store.ensure_schema()
+    candidate_store = PostgresCandidateStore(pool)
+    await candidate_store.ensure_schema()
     sources: list[Source] = [
         EdgarSource(user_agent=sec_user_agent, forms=edgar_forms, max_results=max_results),
         ArxivSource(categories=arxiv_categories, max_results=max_results),
     ]
     async with httpx.AsyncClient(follow_redirects=True) as http:
+        llm_stages: LLMStages | None = None
+        if llm_enabled:
+            registry = TierRegistry(llm_env if llm_env is not None else dict(os.environ))
+            llm = TierLLMClient(registry, http)
+
+            async def _run_filter() -> object:
+                return await filter_pass(pool, llm, max_items=filter_max_items)
+
+            async def _run_synthesis() -> object:
+                return await synthesis_pass(
+                    pool, llm, cast(Any, redis), max_proposals=max_proposals
+                )
+
+            async def _synthesis_due() -> bool:
+                last = await candidate_store.last_batch_at()
+                if last is None:
+                    return True
+                return (datetime.now(UTC) - last).total_seconds() >= synthesis_interval_seconds
+
+            llm_stages = LLMStages(
+                run_filter=_run_filter,
+                run_synthesis=_run_synthesis,
+                synthesis_due=_synthesis_due,
+            )
         try:
             await run_loop(
                 sources,
@@ -186,6 +260,7 @@ async def run(
                 stop=stop,
                 interval_seconds=interval_seconds,
                 timeout=http_timeout,
+                llm_stages=llm_stages,
             )
         finally:
             await redis.aclose()
