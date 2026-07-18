@@ -55,15 +55,28 @@
 - PR #45 — Ollama pin drift committed: 0.32.0 deployed and GPU-verified
   (CUDA needs driver 570+; driver 550 = silent CPU-only fallback).
 
+- PR #46 — Status close-out of the 2026-07-17 upgrade session.
+- PR #47 — Tech Watcher ingest slice: EDGAR + arXiv Atom pulls into
+  `research.raw_source_items` with atomic cursor advance, heartbeats,
+  single-source failure isolation.
+- PR #48 — Tech Watcher synthesis slice: local bulk filter
+  (`think:false`), archetype clustering with the two-source
+  triangulation rule, strict-schema candidate synthesis + deterministic
+  validator, rejection graveyard, `shrap-tech-watcher-review` page.
+- PR #49 — Filter prompt v2 after the first live batch: full recognition
+  grammar (signature signals + impostor lists) in the prompt,
+  economic-evidence hard rule, prompt-version stamping.
+
 ## Open
 
-- No open implementation PRs. Next: Tech Watcher seed (Framework #1
-  opener, first LLM-calling agent, local-only on the tier client).
-  Design note carried from the field: qwen3.5 is a thinking model — the
-  tier client wants a `think: false` toggle for bulk classification.
-- Dell is current through PR #45 (2026-07-17): full stack rebuilt on
-  consumer groups + librarian, RTX 2070 Super verified serving
-  `qwen3.5:9b-q4_K_M` on GPU, fixture disarmed.
+- Re-filter the 246-item baseline under prompt v2 and compare against
+  the v1 result (6 flagged, ~1 real). If v2 still over-flags with the
+  full grammar in the prompt, that is a genuine Qwen-quality datapoint
+  for the cloud-tier decision.
+- Next cards: **promotion workflow** (Mike's promote/kill action →
+  `research.world-changer-promoted` event — nothing downstream starts
+  without it), then **Infrastructure Mapper seed**.
+- Dell is current through PR #48 with the full funnel deployed.
 
 ## Live smoke notes
 
@@ -104,6 +117,21 @@
   smoke ran after hours (16:59 ET): submission → persistence → audit
   passed on the new stack; the order queued at Alpaca and the fill +
   clean-reconciliation close-out lands at the Monday 2026-07-20 open.
+
+## Research funnel notes
+
+- **2026-07-17 (first full pipeline run):** ingest 246 items (146 EDGAR,
+  100 arXiv) → filter kept 6 (2.4%) → 1 cluster, **0 promotable** — all
+  six were arXiv-only, so the two-source triangulation rule held and no
+  candidate was fabricated. Zero synthesis calls spent.
+- **Calibration finding:** of the 6 flagged, ~5 were false positives
+  (4 ML methods papers + 1 neuromorphic paper that the archetype doc's
+  own impostor list names). Root cause: the v1 filter prompt carried
+  definitions only — the model was never shown the impostor lists.
+  Fixed in PR #49 (full recognition grammar in the prompt); verdict on
+  Qwen's quality deferred until the v2 re-filter shows the residual
+  error rate. Defense in depth worked as designed: the over-permissive
+  filter cost six wasted rows, not a bad proposal.
 
 ## Security notes
 
