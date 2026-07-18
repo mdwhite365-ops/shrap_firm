@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     sec_user_agent: str = _DEFAULT_SEC_USER_AGENT
     edgar_forms: str = "10-K,10-Q,8-K"
     arxiv_categories: str = "cs.AI,cs.LG,cond-mat,q-bio.NC"
+    gov_sources_enabled: bool = True
+    usaspending_agencies: str = "Department of Energy,Department of Defense"
+    usaspending_min_amount: float = 5_000_000.0
+    usaspending_lookback_days: int = 30
+    doe_feed_url: str = "https://www.energy.gov/articles/rss.xml"
     max_results: int = 100
     interval_seconds: float = 3600.0
     http_timeout: float = 30.0
@@ -54,6 +59,9 @@ class Settings(BaseSettings):
     def arxiv_categories_tuple(self) -> tuple[str, ...]:
         return tuple(c.strip() for c in self.arxiv_categories.split(",") if c.strip())
 
+    def usaspending_agencies_tuple(self) -> tuple[str, ...]:
+        return tuple(a.strip() for a in self.usaspending_agencies.split(",") if a.strip())
+
     def redacted(self) -> dict[str, object]:
         """Return a log-safe settings snapshot."""
 
@@ -65,6 +73,11 @@ class Settings(BaseSettings):
             "sec_user_agent": self.sec_user_agent,
             "edgar_forms": self.edgar_forms,
             "arxiv_categories": self.arxiv_categories,
+            "gov_sources_enabled": self.gov_sources_enabled,
+            "usaspending_agencies": self.usaspending_agencies,
+            "usaspending_min_amount": self.usaspending_min_amount,
+            "usaspending_lookback_days": self.usaspending_lookback_days,
+            "doe_feed_url": self.doe_feed_url,
             "max_results": self.max_results,
             "interval_seconds": self.interval_seconds,
             "http_timeout": self.http_timeout,

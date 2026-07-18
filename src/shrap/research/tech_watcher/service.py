@@ -29,10 +29,13 @@ from shrap.llm import TierLLMClient, TierRegistry
 from shrap.research.tech_watcher.candidates import PostgresCandidateStore
 from shrap.research.tech_watcher.filter import filter_pass
 from shrap.research.tech_watcher.sources import (
+    DOE_NEWS_FEED_URL,
     ArxivSource,
+    DoeNewsroomSource,
     EdgarSource,
     HTTPClient,
     RawSourceItem,
+    UsaSpendingSource,
 )
 from shrap.research.tech_watcher.store import PostgresRawItemStore
 from shrap.research.tech_watcher.synthesis import synthesis_pass
@@ -190,6 +193,11 @@ async def run(
     sec_user_agent: str,
     edgar_forms: tuple[str, ...] = ("10-K", "10-Q", "8-K"),
     arxiv_categories: tuple[str, ...] = ("cs.AI", "cs.LG", "cond-mat", "q-bio.NC"),
+    gov_sources_enabled: bool = True,
+    usaspending_agencies: tuple[str, ...] = ("Department of Energy", "Department of Defense"),
+    usaspending_min_amount: float = 5_000_000.0,
+    usaspending_lookback_days: int = 30,
+    doe_feed_url: str = DOE_NEWS_FEED_URL,
     max_results: int = 100,
     interval_seconds: float = 3600.0,
     http_timeout: float = 30.0,
@@ -210,6 +218,8 @@ async def run(
         postgres_dsn="***",
         edgar_forms=list(edgar_forms),
         arxiv_categories=list(arxiv_categories),
+        gov_sources_enabled=gov_sources_enabled,
+        usaspending_agencies=list(usaspending_agencies),
         interval_seconds=interval_seconds,
         llm_enabled=llm_enabled,
         synthesis_interval_seconds=synthesis_interval_seconds,
@@ -226,6 +236,16 @@ async def run(
         EdgarSource(user_agent=sec_user_agent, forms=edgar_forms, max_results=max_results),
         ArxivSource(categories=arxiv_categories, max_results=max_results),
     ]
+    if gov_sources_enabled:
+        sources.append(
+            UsaSpendingSource(
+                agencies=usaspending_agencies,
+                min_amount=usaspending_min_amount,
+                lookback_days=usaspending_lookback_days,
+                max_results=max_results,
+            )
+        )
+        sources.append(DoeNewsroomSource(feed_url=doe_feed_url))
     async with httpx.AsyncClient(follow_redirects=True) as http:
         llm_stages: LLMStages | None = None
         if llm_enabled:
