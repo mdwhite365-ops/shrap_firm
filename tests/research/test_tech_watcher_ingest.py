@@ -14,9 +14,11 @@ from shrap.research.tech_watcher.service import (
 )
 from shrap.research.tech_watcher.sources import (
     ArxivSource,
+    DoeNewsroomSource,
     EdgarSource,
     RawSourceItem,
     SourceError,
+    UsaSpendingSource,
 )
 from shrap.research.tech_watcher.store import (
     INSERT_RAW_ITEM_SQL,
@@ -52,6 +54,45 @@ ARXIV_FEED = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+USASPENDING_JSON = """{
+  "results": [
+    {
+      "Award ID": "DENE0009234",
+      "Recipient Name": "VALAR ATOMICS, INC.",
+      "Award Amount": 28000000.0,
+      "Description": "REACTOR PILOT PROGRAM - ADVANCED REACTOR DEMONSTRATION",
+      "Start Date": "2026-06-01",
+      "Awarding Agency": "Department of Energy",
+      "generated_internal_id": "CONT_AWD_DENE0009234_8900"
+    },
+    {
+      "Award ID": "IGNORED",
+      "Recipient Name": null,
+      "generated_internal_id": "CONT_AWD_NO_RECIPIENT"
+    }
+  ]
+}"""
+
+DOE_RSS = """<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xml:base="https://www.energy.gov/">
+  <channel>
+    <title>Energy News</title>
+    <item>
+      <title>DOE  Celebrates Second Advanced Reactor
+ Achieving Criticality</title>
+      <link>https://www.energy.gov/articles/doe-celebrates-second-advanced-reactor</link>
+      <description>&lt;p&gt;The Department of Energy announced
+&lt;b&gt;criticality&lt;/b&gt; today.&lt;/p&gt;</description>
+      <pubDate>Thu, 18 Jun 2026 09:30:00 -0400</pubDate>
+    </item>
+    <item>
+      <title>No link item</title>
+    </item>
+  </channel>
+</rss>
+"""
+
+
 class FakeResponse:
     def __init__(self, status_code: int, text: str) -> None:
         self.status_code = status_code
@@ -62,12 +103,19 @@ class FakeHTTP:
     def __init__(self, responses: list[FakeResponse]) -> None:
         self._responses = responses
         self.requests: list[tuple[str, dict[str, str]]] = []
+        self.post_bodies: list[dict[str, Any]] = []
 
     async def get(
         self, url: str, *, params: dict[str, str], headers: dict[str, str], timeout: float
     ) -> FakeResponse:
         self.requests.append((url, params))
-        return self._responses[len(self.requests) - 1]
+        return self._responses[len(self.requests) + len(self.post_bodies) - 1]
+
+    async def post(
+        self, url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: float
+    ) -> FakeResponse:
+        self.post_bodies.append(json)
+        return self._responses[len(self.requests) + len(self.post_bodies) - 1]
 
 
 # --- sources -------------------------------------------------------------------
@@ -129,6 +177,68 @@ async def test_arxiv_parses_entry_with_category_and_whitespace_normalized() -> N
 async def test_arxiv_garbage_body_raises_source_error() -> None:
     http = FakeHTTP([FakeResponse(200, "not xml at all")])
     source = ArxivSource(categories=("cs.AI",))
+
+    with pytest.raises(SourceError, match="not parseable"):
+        await source.fetch(http)
+
+
+async def test_usaspending_parses_award_and_skips_recipientless_row() -> None:
+    http = FakeHTTP([FakeResponse(200, USASPENDING_JSON)])
+    source = UsaSpendingSource(
+        agencies=("Department of Energy",), min_amount=5_000_000.0, lookback_days=30
+    )
+
+    items = await source.fetch(http)
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.item_id == "usaspending:CONT_AWD_DENE0009234_8900"
+    assert item.source == "usaspending"
+    assert item.kind == "award"
+    assert item.title == "Department of Energy award to VALAR ATOMICS, INC. ($28,000,000)"
+    assert item.summary == "REACTOR PILOT PROGRAM - ADVANCED REACTOR DEMONSTRATION"
+    assert item.url == "https://www.usaspending.gov/award/CONT_AWD_DENE0009234_8900"
+    assert item.external_ts is not None and item.external_ts.year == 2026
+    body = http.post_bodies[0]
+    assert body["filters"]["award_amounts"] == [{"lower_bound": 5_000_000.0}]
+    assert body["filters"]["agencies"][0]["name"] == "Department of Energy"
+
+
+async def test_usaspending_non_200_raises_source_error() -> None:
+    http = FakeHTTP([FakeResponse(500, "oops")])
+    source = UsaSpendingSource(agencies=("Department of Energy",))
+
+    with pytest.raises(SourceError, match="500"):
+        await source.fetch(http)
+
+
+async def test_usaspending_garbage_json_raises_source_error() -> None:
+    http = FakeHTTP([FakeResponse(200, "not json")])
+    source = UsaSpendingSource(agencies=("Department of Energy",))
+
+    with pytest.raises(SourceError, match="not parseable"):
+        await source.fetch(http)
+
+
+async def test_doe_newsroom_parses_item_and_strips_html() -> None:
+    http = FakeHTTP([FakeResponse(200, DOE_RSS)])
+    source = DoeNewsroomSource()
+
+    items = await source.fetch(http)
+
+    assert len(items) == 1  # the link-less item is dropped
+    item = items[0]
+    assert item.item_id == "doe-news:/articles/doe-celebrates-second-advanced-reactor"
+    assert item.source == "doe-newsroom"
+    assert item.kind == "article"
+    assert item.title == "DOE Celebrates Second Advanced Reactor Achieving Criticality"
+    assert item.summary == "The Department of Energy announced criticality today."
+    assert item.external_ts is not None and item.external_ts.month == 6
+
+
+async def test_doe_newsroom_garbage_body_raises_source_error() -> None:
+    http = FakeHTTP([FakeResponse(200, "<<<not xml")])
+    source = DoeNewsroomSource()
 
     with pytest.raises(SourceError, match="not parseable"):
         await source.fetch(http)
@@ -319,9 +429,12 @@ def test_settings_parse_env_and_split_lists(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setenv("TECH_WATCHER_EDGAR_FORMS", "8-K, 10-K")
     monkeypatch.setenv("TECH_WATCHER_INTERVAL_SECONDS", "600")
+    monkeypatch.setenv("TECH_WATCHER_USASPENDING_AGENCIES", "Department of Energy, NASA")
     settings = Settings()
 
     assert settings.edgar_forms_tuple() == ("8-K", "10-K")
     assert settings.arxiv_categories_tuple() == ("cs.AI", "cs.LG", "cond-mat", "q-bio.NC")
+    assert settings.usaspending_agencies_tuple() == ("Department of Energy", "NASA")
+    assert settings.gov_sources_enabled is True
     assert settings.interval_seconds == 600.0
     assert settings.redacted()["postgres_dsn"] == "***"

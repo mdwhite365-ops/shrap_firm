@@ -26,11 +26,12 @@ log = structlog.get_logger(__name__)
 
 # Bump on any behavior-relevant prompt change; stamped into filter_result so
 # calibration reviews know which prompt scored each item.
-FILTER_PROMPT_VERSION = 2
+FILTER_PROMPT_VERSION = 3
 
 FILTER_SYSTEM_PROMPT = (
     "You are the Tech Watcher bulk filter for a research funnel. You receive one "
-    "ingested item (an SEC filing headline or an arXiv abstract) and the "
+    "ingested item (an SEC filing headline, an arXiv abstract, a government "
+    "contract award, or an agency press item) and the "
     "world-changer recognition grammar: archetype definitions, signature signals, "
     "and known impostors. Decide whether the item is EVIDENCE that an archetype's "
     "pattern is actually playing out in the real world.\n"
