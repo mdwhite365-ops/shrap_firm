@@ -34,8 +34,15 @@ CREATE TABLE IF NOT EXISTS research.raw_source_items (
     payload JSONB NOT NULL,
     fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     filtered_at TIMESTAMPTZ,
+    filter_result JSONB,
     synthesized_at TIMESTAMPTZ
 )
+""".strip()
+
+# Idempotent migration for tables created by the slice-A deploy.
+ADD_FILTER_RESULT_COLUMN_SQL = """
+ALTER TABLE research.raw_source_items
+ADD COLUMN IF NOT EXISTS filter_result JSONB
 """.strip()
 
 CREATE_RAW_ITEMS_SOURCE_INDEX_SQL = """
@@ -115,6 +122,7 @@ class PostgresRawItemStore:
             await conn.execute(CREATE_RAW_ITEMS_TABLE_SQL)
             await conn.execute(CREATE_RAW_ITEMS_SOURCE_INDEX_SQL)
             await conn.execute(CREATE_RAW_ITEMS_UNPROCESSED_INDEX_SQL)
+            await conn.execute(ADD_FILTER_RESULT_COLUMN_SQL)
             await conn.execute(CREATE_INGEST_CURSORS_TABLE_SQL)
 
     async def upsert_batch(

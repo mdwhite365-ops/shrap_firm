@@ -9,9 +9,21 @@ tier for the foreseeable future; move bulk filtering fully local once shadow
 evaluation passes. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
-**Date:** 2026-05-30
+**Date:** 2026-05-30 (routing amendment 2026-07-17)
 **Author:** Mike White
 **Version:** 0.1 (draft)
+
+> **Seed-deployment routing (Mike's ruling, 2026-07-15/17):** the firm runs
+> local-only until cloud API billing exists. In the deployed seed, every
+> tier this agent uses is env-routed to Ollama on the Dell
+> (`qwen3.5:9b-q4_K_M`) via the tier client's deployment overrides — the
+> tier aliases above remain the spec contract, and flipping synthesis to a
+> true cloud model is a compose env change, not a code change. Known
+> quality tradeoff: local synthesis produces mushier candidates; Mike
+> gatekeeps at the review page. The v0 pipeline also simplifies step 3:
+> clustering is by archetype (deterministic), not LLM topic/entity
+> clustering; single-source clusters wait unsynthesized until a second
+> source class corroborates (they are the `seen-not-proposed` population).
 
 ## Purpose
 
