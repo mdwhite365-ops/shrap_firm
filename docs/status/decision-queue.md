@@ -30,6 +30,16 @@
 
 ## Resolved decisions
 
+- **DQ-007 — Research source coverage vs Mapper ordering.** Resolved
+  2026-07-18 by Mike. Motivating case: Valar Atomics' Ward 250 criticality
+  (DOE Reactor Pilot Program, 2026-06-18) was invisible to the deployed
+  EDGAR+arXiv slice, though its paper trail lives in sources the Tech
+  Watcher spec already lists. Ruling: gov-sources ingest (USASpending +
+  DOE newsroom; SAM.gov gated on an API key) ships before the promotion
+  workflow, and the Intelligence Department Month 2 agents (News Analyzer,
+  Filing Processor) are pulled into the near-term queue ahead of the
+  Mapper. Full order in `current-sprint.md`.
+
 - **DQ-001 — NautilusTrader bridge boundary.** Resolved 2026-07-06 by ADR-0003
   (Accepted): direct Alpaca paper is the broker interface for the paper phase;
   Nautilus is re-gated on live capital or execution needs beyond market/day orders.
