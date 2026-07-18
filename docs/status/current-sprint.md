@@ -1,31 +1,28 @@
 # Current sprint status
 
-**Last updated:** 2026-07-15 (late evening)
-**Phase:** Month 3 / spine closed → Research middle loop open
+**Last updated:** 2026-07-17
+**Phase:** Month 3 / middle loop open → Framework #1 funnel
 **Operating mode:** Paper only. No real-money execution.
 
 ## Current focus
 
-**The middle loop is open.** The paper spine closed 9/9 on 2026-07-15; the
-same evening, Mike armed the strategy fixture and the firm submitted its
-first fully autonomous order (SPY buy x1, ~5s signal-to-broker, no human in
-the loop — fill pending the 2026-07-16 open). The strategy registry — the
-middle loop's system of record — merged as PR #38. Next build work is the
-Strategy Librarian service.
+**First autonomous trade complete; substrate upgraded; Framework #1 next.**
+The fixture-originated SPY order filled at the 2026-07-16 open — signal to
+fill, no human in the loop — and the fixture is now disarmed. The registry +
+librarian arc (PRs #38/#40) is merged and deployed. The LLM substrate is
+live: tier client (PR #42), corrected registry seed `qwen3.5:9b-q4_K_M`
+(PR #43), RTX 2070 Super serving it on GPU (PRs #44–45). Next build work is
+the Tech Watcher seed — the funnel's first agent and the firm's first
+LLM-calling agent, local-only per Mike's ruling.
 
 ## Main branch state
 
-Merged on `main` through PR #38. Since the spine-close status (PR #36):
-
-1. PR #37: all stream consumers moved to Redis consumer groups with
-   acknowledged, persisted offsets (`src/shrap/events/groups.py`). KI-006
-   resolved; restart replay is gone at the root.
-2. PR #38: strategy registry schema + lifecycle state machine
-   (`src/shrap/research/strategy_registry.py`): `research.strategies` +
-   append-only `research.strategy_transitions`, enforced promotion path
-   `hypothesis → paper → small-size-paper → live-paper` with kill-review
-   states, `real` unrepresentable by design. Draft Strategy Librarian spec
-   in `docs/agents/research/strategy-librarian.md`.
+Merged on `main` through PR #45. Highlights since the spine-close status:
+consumer groups (#37), strategy registry + state machine (#38), Strategy
+Librarian service (#40), Evaluator ruling — Framework #1 first, in-house
+walk-forward engine (#41), LLM tier client (#42), registry seed correction +
+Ollama runtime bump (#43), GPU swap + drift commit (#44–45). Full list in
+`recent-changes.md`.
 
 ## Spine verification record
 
@@ -36,24 +33,25 @@ Merged on `main` through PR #38. Since the spine-close status (PR #36):
 - **2026-07-15 23:32 UTC:** first autonomous signal → order. Fixture fired
   on `late-cycle-melt-up`, chain ran signal → intent → approval → Alpaca
   submission unattended. Order `6315af3f` pending (market closed).
+- **2026-07-16 open:** order `6315af3f` filled — first fully autonomous
+  trade, signal through fill. Fixture disarmed after.
+- **2026-07-17:** post-upgrade smoke (consumer groups + librarian +
+  ollama 0.32.0 + RTX 2070 Super): submission/persistence/audit passed;
+  after-hours order queued, fill close-out at the 2026-07-20 open.
 
 ## Open work
 
-- **First autonomous fill landed 2026-07-16** (SPY x1 at the open). Still
-  to close out: confirm clean reconciliation, then **disarm the fixture**
-  (`STRATEGY_FIXTURE_ENABLED=false` + recreate) — its proof job is done;
-  the next armed path should be a registry-promoted strategy.
-- **Dell session (one sitting):** disarm fixture → `git pull` (PRs
-  #36–43) → compose down → GPU swap (GTX 1080 → RTX 2070 Super, runbook
-  procedure in `docs/03-hardware.md`) → full `docker compose up -d
-  --build` → `ollama pull qwen3.5:9b-q4_K_M`.
-- **Framework #1 funnel (Mike's ruling 2026-07-15):** the Evaluator is
-  deferred until Tech Watcher → Infrastructure Mapper → Bottleneck Scout
-  exist, so the anchor gate is real from the first evaluation. Engine
-  ruling recorded in the Evaluator spec: in-house walk-forward; VectorBT
-  PRO re-gated. Next card: Tech Watcher seed — the firm's first
-  LLM-calling agent (needs Anthropic API key in `infra/.env`, ADR-0009
-  tier registry wiring, Langfuse tracing).
+- **Monday 2026-07-20 open:** the after-hours smoke order (2026-07-17
+  16:59 ET) fills; confirm `execution.order.filled` + clean
+  reconciliation to certify the rebuilt stack end to end.
+- **Tech Watcher seed card (next):** Framework #1 opener, first
+  LLM-calling agent. Local-only on the tier client per Mike's ruling —
+  no cloud billing required. Carried design note: qwen3.5 thinks by
+  default; the tier client needs a `think: false` toggle for bulk
+  classification calls.
+- **Fixture disarm verification:** `docker logs shrap_strategy_fixture`
+  should show `"enabled": false` post-rebuild (belt-and-suspenders; the
+  .env flip + rebuild happened in the 2026-07-17 session).
 - **Retry-backoff for systemic errors:** scoped into KI-006's mitigation but
   not shipped in PR #37; fold into a consumer hygiene card (candidate
   companion: market-closed re-poll backoff — the pending SPY order polls
