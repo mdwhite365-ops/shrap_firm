@@ -37,6 +37,7 @@ regime-classifier = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 decision-maker = ["pydantic-settings>=2.4"]
 strategy-fixture = ["pydantic-settings>=2.4"]
 strategy-librarian = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
+tech-watcher = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 spine-smoke = ["asyncpg>=0.29"]
 
 [project.scripts]
@@ -51,6 +52,7 @@ shrap-regime-classifier = "shrap.agents.intelligence.regime_classifier.__main__:
 shrap-decision-maker = "shrap.agents.trading_floor.decision_maker.__main__:main"
 shrap-strategy-fixture = "shrap.agents.research.strategy_fixture.__main__:main"
 shrap-strategy-librarian = "shrap.agents.research.strategy_librarian.__main__:main"
+shrap-tech-watcher = "shrap.agents.research.tech_watcher.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shrap"]
