@@ -24,9 +24,9 @@
 
 **Question:** Is local Qwen (`qwen3.5:9b` on the 2070 Super) good enough for the Tech Watcher filter, or does the filter stage need a cloud tier?
 
-**Current state:** First live batch under prompt v1 over-flagged (6 kept, ~1 real), diagnosed as a prompt gap and fixed in PR #49. The honest datapoint is the residual error rate of the v2 re-filter over the 246-item baseline, which has not run yet.
+**Current state:** First live batch under prompt v1 over-flagged (6 kept, ~1 real), diagnosed as a prompt gap and fixed in PR #49. The v2 re-filter ran 2026-07-18: 0/246 kept — false positives eliminated, but the false-negative check on the one borderline-real item is unauditable (KI-007). The evidence is now one-sided: v2 doesn't over-flag, but whether it under-flags is unknown.
 
-**Recommendation:** Defer until the v2 re-filter result is in; decide on evidence, not anecdote.
+**Recommendation:** Keep open. Spot-check v2 rejection reasons for coherence, ship the KI-007 verdict-history fix, and judge on the next few live batches — a real world-changer signal should eventually triangulate across EDGAR + arXiv, which the filter can't silently suppress on both legs.
 
 ## Resolved decisions
 

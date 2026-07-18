@@ -132,6 +132,14 @@
   Qwen's quality deferred until the v2 re-filter shows the residual
   error rate. Defense in depth worked as designed: the over-permissive
   filter cost six wasted rows, not a bad proposal.
+- **2026-07-18 (v2 re-filter):** all 246 baseline items re-filtered under
+  prompt v2 — **0 kept**. The impostor-list false positives are eliminated,
+  consistent with the prompt-gap diagnosis. But the comparison's key check —
+  did v2 reject the one borderline-real v1 item on principle or by mistake —
+  proved unauditable: the re-filter overwrote the v1 verdicts, the
+  triangulation-stage rejection never wrote a graveyard row, and the PR #49
+  redeploy discarded the container logs holding the v1 keep list (KI-007).
+  DQ-006 stays open on spot-check + future live-batch evidence.
 
 ## Security notes
 

@@ -46,10 +46,12 @@ ingest + synthesis + filter prompt v2 (#47–49). Full list in
 - **Monday 2026-07-20 open:** the after-hours smoke order (2026-07-17
   16:59 ET) fills; confirm `execution.order.filled` + clean
   reconciliation to certify the rebuilt stack end to end.
-- **Re-filter under prompt v2** (after PR #49 deploys): reset
-  `filter_result` for unsynthesized items, compare against the v1
-  baseline (6 flagged / ~1 real). Residual error rate is the honest
-  Qwen-quality datapoint for the cloud-tier decision.
+- **v2 re-filter ran 2026-07-18: 0/246 kept.** The five v1 false positives
+  are gone, but the v1 borderline-real item was also rejected and cannot be
+  identified for a false-negative audit (KI-007 — pre-synthesis rejections
+  leave no trace; the re-filter overwrote v1 verdicts and the redeploy ate
+  the logs). The Qwen-quality verdict (DQ-006) now rests on spot-checking
+  v2 rejection reasons and on the next live batches' behavior.
 - **Promotion workflow card (next):** Mike's promote/kill action on
   review-page candidates → status update + `research.world-changer-promoted`
   event. The Infrastructure Mapper has no input until this exists.
