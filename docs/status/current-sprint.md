@@ -1,30 +1,33 @@
 # Current sprint status
 
-**Last updated:** 2026-07-18
+**Last updated:** 2026-07-18 (night)
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
 ## Current focus
 
-**All three loops are physically running.** The inner loop trades
-autonomously (first fixture-originated fill 2026-07-16). The middle loop
-has its registry + librarian waiting on an Evaluator. And as of tonight the
-research funnel is live end to end: the Tech Watcher ingests EDGAR + arXiv
-hourly, filters on local Qwen (2070 Super), and declined to propose on its
-first batch because the two-source triangulation rule held — exactly the
-honest behavior it was built for. First calibration finding (filter
-over-flagging) was diagnosed as a prompt gap, fixed same night (PR #49).
-Next: the promotion workflow, then the Infrastructure Mapper.
+**All three loops are physically running, and the funnel has its first
+tracked candidate.** After the 2026-07-18 reorder ruling (DQ-007, PR #52 —
+"widen the web before deepening the funnel," motivated by the Valar
+Atomics case), the same day shipped: gov-sources ingest (PR #53 —
+USASpending awards + DOE newsroom), the promotion workflow (PR #54 —
+promote/kill CLI + Mike-seed path), a Dell rebuild deploying both, and
+the firm's first Mike-seeded world-changer:
+`Mass-manufactured fission cost-curve crossing`
+(`01KXVVPXDMB4HS1QNRPQWRP1RX`, archetype cost-curve, falsifier horizon
+2027-12, three observable kill criteria). Next: NRC news-feed source
+(regulator leg), source-class independence taxonomy (spec first), then
+the Intelligence Department Month 2 seeds.
 
 ## Main branch state
 
-Merged on `main` through PR #50. Highlights since the spine-close status:
+Merged on `main` through PR #54. Highlights since the spine-close status:
 consumer groups (#37), strategy registry + state machine (#38), Strategy
 Librarian service (#40), Evaluator ruling — Framework #1 first, in-house
 walk-forward engine (#41), LLM tier client (#42), registry seed correction +
 Ollama runtime bump (#43), GPU swap + drift commit (#44–45), Tech Watcher
-ingest + synthesis + filter prompt v2 (#47–49). Full list in
-`recent-changes.md`.
+ingest + synthesis + filter prompt v2 (#47–49), reorder ruling + gov
+sources + promotion workflow (#52–54). Full list in `recent-changes.md`.
 
 ## Spine verification record
 
