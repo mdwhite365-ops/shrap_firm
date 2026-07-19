@@ -48,6 +48,18 @@ CREATE INDEX IF NOT EXISTS world_changers_status_idx
 ON research.world_changers (status, created_at DESC)
 """.strip()
 
+# Idempotent migration for tables created by the synthesis-slice deploy:
+# Mike's promote/kill decisions carry a timestamp and a preserved note.
+ADD_DECIDED_AT_COLUMN_SQL = """
+ALTER TABLE research.world_changers
+ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ
+""".strip()
+
+ADD_DECISION_NOTE_COLUMN_SQL = """
+ALTER TABLE research.world_changers
+ADD COLUMN IF NOT EXISTS decision_note TEXT
+""".strip()
+
 CREATE_EVIDENCE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS research.world_changer_evidence (
     candidate_id TEXT NOT NULL REFERENCES research.world_changers (candidate_id),
@@ -107,7 +119,7 @@ SELECT_CANDIDATES_BY_STATUS_SQL = """
 SELECT
     candidate_id, name, archetype, status, thesis, confidence,
     expected_impact_horizon, kill_criteria, falsifier_horizon,
-    source_classes, rejection_reason, created_at
+    source_classes, rejection_reason, decided_at, decision_note, created_at
 FROM research.world_changers
 WHERE status = ANY($1::text[])
 ORDER BY created_at DESC
@@ -144,6 +156,8 @@ class PostgresCandidateStore:
         async with self._pool.acquire() as conn:
             await conn.execute(CREATE_WORLD_CHANGERS_TABLE_SQL)
             await conn.execute(CREATE_WORLD_CHANGERS_STATUS_INDEX_SQL)
+            await conn.execute(ADD_DECIDED_AT_COLUMN_SQL)
+            await conn.execute(ADD_DECISION_NOTE_COLUMN_SQL)
             await conn.execute(CREATE_EVIDENCE_TABLE_SQL)
             await conn.execute(CREATE_BATCHES_TABLE_SQL)
 
