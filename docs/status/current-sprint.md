@@ -67,6 +67,12 @@ sources + promotion workflow (#52–54). Full list in `recent-changes.md`.
   Alpaca every ~10s all night).
 - **Regime threshold watch:** v0.1 calibration is single-day evidence. A
   historical feature backfill would earn the thresholds.
+- **Market-Phase Scheduler (once merged):** deploy `market-phase` on the
+  Dell, confirm the startup event and the first real transitions on
+  `operations.market-phase`, then certify across a full weekend (deploy
+  before Friday close, verify `closed-day` Saturday/Sunday and `pre-open`
+  Monday 04:00 ET). Consumers (regime sync skip, overnight research
+  conductor, briefing) come in later cards.
 
 ## Local credentials policy
 

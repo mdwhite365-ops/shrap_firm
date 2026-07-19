@@ -623,3 +623,24 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Market Phase Scheduler - Operations Department. Deterministic XNYS
+  # calendar clock: publishes phase transitions (pre-open/open/after-hours/
+  # overnight/closed-day) on operations.market-phase. No LLM, no credentials;
+  # spine plumbing for the overnight research rhythm.
+  # -------------------------------------------------------------------------
+  market-phase:
+    build:
+      context: ../
+      dockerfile: infra/market-phase.Dockerfile
+    container_name: shrap_market_phase
+    restart: unless-stopped
+    environment:
+      MARKET_PHASE_REDIS_URL: "redis://redis:6379/0"
+      MARKET_PHASE_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
