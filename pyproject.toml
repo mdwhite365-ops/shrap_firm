@@ -54,6 +54,7 @@ shrap-strategy-fixture = "shrap.agents.research.strategy_fixture.__main__:main"
 shrap-strategy-librarian = "shrap.agents.research.strategy_librarian.__main__:main"
 shrap-tech-watcher = "shrap.agents.research.tech_watcher.__main__:main"
 shrap-tech-watcher-review = "shrap.research.tech_watcher.review:main"
+shrap-tech-watcher-promote = "shrap.research.tech_watcher.promotion:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shrap"]
