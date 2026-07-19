@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     usaspending_min_amount: float = 5_000_000.0
     usaspending_lookback_days: int = 30
     doe_feed_url: str = "https://www.energy.gov/articles/rss.xml"
+    fed_register_agencies: str = "nuclear-regulatory-commission"
     max_results: int = 100
     interval_seconds: float = 3600.0
     http_timeout: float = 30.0
@@ -62,6 +63,9 @@ class Settings(BaseSettings):
     def usaspending_agencies_tuple(self) -> tuple[str, ...]:
         return tuple(a.strip() for a in self.usaspending_agencies.split(",") if a.strip())
 
+    def fed_register_agencies_tuple(self) -> tuple[str, ...]:
+        return tuple(a.strip() for a in self.fed_register_agencies.split(",") if a.strip())
+
     def redacted(self) -> dict[str, object]:
         """Return a log-safe settings snapshot."""
 
@@ -78,6 +82,7 @@ class Settings(BaseSettings):
             "usaspending_min_amount": self.usaspending_min_amount,
             "usaspending_lookback_days": self.usaspending_lookback_days,
             "doe_feed_url": self.doe_feed_url,
+            "fed_register_agencies": self.fed_register_agencies,
             "max_results": self.max_results,
             "interval_seconds": self.interval_seconds,
             "http_timeout": self.http_timeout,

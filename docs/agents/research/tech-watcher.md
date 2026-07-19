@@ -103,6 +103,8 @@ Department, §Intelligence Department interface.
 | USPTO PatentsView | HTTP pull | Granted patents and published applications, filtered by CPC classes relevant to active world-changer themes |
 | Conference keynote video/transcript feeds | HTTP pull / repo cache | GTC, WWDC, Apple events, OpenAI dev days, Google I/O. Transcripts when available, ASR fallback otherwise |
 | USASpending.gov | HTTP pull | Government contract awards above a configurable threshold |
+| DOE newsroom (energy.gov RSS) | HTTP pull | Agency press announcements — program launches, award context (deployed 2026-07-18) |
+| Federal Register API (agency-filtered; NRC at launch) | HTTP pull | Regulator paper trail: license applications/renewals, rules, notices — the licensing-throughput signal. NRC's own site RSS is bot-blocked to non-browser clients (Akamai 403, verified 2026-07-19); the FR API is the reliable mirror of the regulator's substantive actions |
 | SAM.gov | HTTP pull | Active solicitations and award notices |
 | Semantic Scholar / OpenAlex | HTTP pull | Citation graph deltas for the cs.AI / cond-mat / q-bio.NC working set |
 | Redis: `intelligence.signal` | Event | Event-driven trigger for product launch and keynote-day passes |

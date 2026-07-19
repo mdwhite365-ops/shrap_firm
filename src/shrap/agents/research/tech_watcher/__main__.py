@@ -31,6 +31,7 @@ def main() -> None:
             usaspending_min_amount=settings.usaspending_min_amount,
             usaspending_lookback_days=settings.usaspending_lookback_days,
             doe_feed_url=settings.doe_feed_url,
+            fed_register_agencies=settings.fed_register_agencies_tuple(),
             max_results=settings.max_results,
             interval_seconds=settings.interval_seconds,
             http_timeout=settings.http_timeout,
