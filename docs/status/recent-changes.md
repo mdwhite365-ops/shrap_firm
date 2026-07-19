@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-18 (night)
+**Last updated:** 2026-07-19 (evening)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -77,6 +77,17 @@
 - PR #54 — Promotion workflow: `shrap-tech-watcher-promote`
   promote/kill/seed CLI; promoted/killed events; decided_at +
   decision_note columns; review page shows promoted + kill graveyard.
+- PR #55 — Status close-out of the 2026-07-18 session: gov sources
+  deployed, first Mike-seed live.
+- PR #56 — Market Phase Scheduler: deterministic XNYS calendar clock
+  publishing `operations.market-phase` (pre-open/open/after-hours/
+  overnight/closed-day; `pandas-market-calendars`, DST-tested). Deploy +
+  weekend certification pending; consumers come in later cards.
+- PR #57 — ADR-0012 accepted: tiered universe — Discovery (market-wide),
+  Watch (evidence-gated, not tradeable), Active (hard-capped 50,
+  Mike-approved). Tier transitions become bus events; Pre-Trade Tier 3
+  check is a follow-up card. Motivated by the RKLB/Iridium hand-run
+  analysis (2026-07-19 handoff).
 
 ## Open
 

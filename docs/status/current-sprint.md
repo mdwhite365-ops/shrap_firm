@@ -1,6 +1,6 @@
 # Current sprint status
 
-**Last updated:** 2026-07-18 (night)
+**Last updated:** 2026-07-19 (evening)
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
@@ -15,19 +15,22 @@ promote/kill CLI + Mike-seed path), a Dell rebuild deploying both, and
 the firm's first Mike-seeded world-changer:
 `Mass-manufactured fission cost-curve crossing`
 (`01KXVVPXDMB4HS1QNRPQWRP1RX`, archetype cost-curve, falsifier horizon
-2027-12, three observable kill criteria). Next: NRC news-feed source
+2027-12, three observable kill criteria). The 2026-07-19 session landed
+the RKLB/Iridium handoff items: ADR-0012 (tiered universe, PR #57) and
+the Market Phase Scheduler service (PR #56). Next: NRC news-feed source
 (regulator leg), source-class independence taxonomy (spec first), then
 the Intelligence Department Month 2 seeds.
 
 ## Main branch state
 
-Merged on `main` through PR #54. Highlights since the spine-close status:
+Merged on `main` through PR #57. Highlights since the spine-close status:
 consumer groups (#37), strategy registry + state machine (#38), Strategy
 Librarian service (#40), Evaluator ruling — Framework #1 first, in-house
 walk-forward engine (#41), LLM tier client (#42), registry seed correction +
 Ollama runtime bump (#43), GPU swap + drift commit (#44–45), Tech Watcher
 ingest + synthesis + filter prompt v2 (#47–49), reorder ruling + gov
-sources + promotion workflow (#52–54). Full list in `recent-changes.md`.
+sources + promotion workflow (#52–54), Market Phase Scheduler (#56),
+ADR-0012 tiered universe (#57). Full list in `recent-changes.md`.
 
 ## Spine verification record
 
@@ -55,9 +58,6 @@ sources + promotion workflow (#52–54). Full list in `recent-changes.md`.
   leave no trace; the re-filter overwrote v1 verdicts and the redeploy ate
   the logs). The Qwen-quality verdict (DQ-006) now rests on spot-checking
   v2 rejection reasons and on the next live batches' behavior.
-- **Promotion workflow card (next):** Mike's promote/kill action on
-  review-page candidates → status update + `research.world-changer-promoted`
-  event. The Infrastructure Mapper has no input until this exists.
 - **Fixture disarm verification:** `docker logs shrap_strategy_fixture`
   should show `"enabled": false` post-rebuild (belt-and-suspenders; the
   .env flip + rebuild happened in the 2026-07-17 session).
@@ -67,12 +67,18 @@ sources + promotion workflow (#52–54). Full list in `recent-changes.md`.
   Alpaca every ~10s all night).
 - **Regime threshold watch:** v0.1 calibration is single-day evidence. A
   historical feature backfill would earn the thresholds.
-- **Market-Phase Scheduler (once merged):** deploy `market-phase` on the
-  Dell, confirm the startup event and the first real transitions on
-  `operations.market-phase`, then certify across a full weekend (deploy
-  before Friday close, verify `closed-day` Saturday/Sunday and `pre-open`
-  Monday 04:00 ET). Consumers (regime sync skip, overnight research
-  conductor, briefing) come in later cards.
+- **Market-Phase Scheduler (merged, PR #56 — deploy pending):** deploy
+  `market-phase` on the Dell, confirm the startup event and the first real
+  transitions on `operations.market-phase`, then certify across a full
+  weekend (verify `closed-day` Saturday/Sunday and `pre-open` Monday
+  04:00 ET). Consumers (regime sync skip, overnight research conductor,
+  briefing) come in later cards.
+- **ADR-0012 follow-ups (accepted 2026-07-19, unscheduled):** restructure
+  `docs/universe/README.md` around the three tiers (the 50-name list
+  becomes the Tier 3 launch proposal, still awaiting DQ-004 lock-in);
+  update the Universe Curator spec from derived-only consumer to Tier 2/3
+  owner + transition-event publisher; Pre-Trade Checker Tier 3 membership
+  check card (needs a Tier 3 data source decision).
 
 ## Local credentials policy
 
