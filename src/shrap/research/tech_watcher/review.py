@@ -17,6 +17,7 @@ from typing import Any
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.research.tech_watcher.candidates import PostgresCandidateStore
+from shrap.research.tech_watcher.promotion import STATUS_KILLED, STATUS_PROMOTED
 from shrap.research.tech_watcher.synthesis import STATUS_PROPOSED, STATUS_REJECTED
 
 
@@ -31,17 +32,28 @@ def _loaded(value: object) -> Any:
 
 def render_markdown(candidates: list[dict[str, Any]]) -> str:
     proposed = [c for c in candidates if c["status"] == STATUS_PROPOSED]
+    promoted = [c for c in candidates if c["status"] == STATUS_PROMOTED]
+    killed = [c for c in candidates if c["status"] == STATUS_KILLED]
     rejected = [c for c in candidates if c["status"] == STATUS_REJECTED]
     lines = [
         "# Tech Watcher — world-changer candidates",
         "",
-        f"Proposed: {len(proposed)} · Rejected (graveyard): {len(rejected)}",
+        f"Proposed: {len(proposed)} · Promoted: {len(promoted)} · "
+        f"Killed: {len(killed)} · Rejected (graveyard): {len(rejected)}",
         "",
         "Promotion is Mike's call; nothing on this page is auto-promoted.",
         "",
-        "## Proposed",
+        "## Promoted",
         "",
     ]
+    if not promoted:
+        lines.append("(none)")
+    for c in promoted:
+        lines.append(
+            f"- `{c['candidate_id']}` [{c['archetype']}] {c['name']}"
+            + (f" — {c['decision_note']}" if c.get("decision_note") else "")
+        )
+    lines += ["", "## Proposed", ""]
     if not proposed:
         lines.append("(none yet)")
     for c in proposed:
@@ -61,7 +73,15 @@ def render_markdown(candidates: list[dict[str, Any]]) -> str:
             *[f"- {k}" for k in kill_criteria],
             "",
         ]
-    lines += ["## Rejection graveyard", ""]
+    lines += ["## Kill graveyard", ""]
+    if not killed:
+        lines.append("(empty)")
+    for c in killed:
+        lines.append(
+            f"- `{c['candidate_id']}` [{c['archetype']}] {c['name']} — "
+            f"{c.get('decision_note') or 'unknown reason'}"
+        )
+    lines += ["", "## Rejection graveyard", ""]
     if not rejected:
         lines.append("(empty)")
     for c in rejected:
@@ -77,7 +97,9 @@ async def _render(postgres_dsn: str) -> str:
     pool = await create_asyncpg_pool(postgres_dsn)
     try:
         store = PostgresCandidateStore(pool)
-        candidates = await store.candidates_by_status([STATUS_PROPOSED, STATUS_REJECTED])
+        candidates = await store.candidates_by_status(
+            [STATUS_PROPOSED, STATUS_PROMOTED, STATUS_KILLED, STATUS_REJECTED]
+        )
     finally:
         await pool.close()
     return render_markdown(candidates)

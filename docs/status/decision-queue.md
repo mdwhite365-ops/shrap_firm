@@ -1,35 +1,61 @@
 # Decision queue
 
-**Last updated:** 2026-06-21T15:47:43-07:00
+**Last updated:** 2026-07-18
 
 ## Active decisions
 
-### DQ-001 — NautilusTrader bridge boundary
+### DQ-004 — Universe lock-in
 
-**Question:** Does Month 1 completion require actual NautilusTrader routing, or is direct Alpaca paper acceptable for the first end-to-end paper spine?
+**Question:** Confirm or revise the proposed 50-name list in `docs/universe/README.md`.
 
-**Current state:** The implemented spine submits directly to Alpaca paper through the paper-only client. `docs/02-architecture.md` and ADR-0003 still describe NautilusTrader-to-Redis bridge coverage as an unresolved architecture question.
+**Current state:** The list is drafted and treated as locked by the constraints, but Mike has not explicitly signed off on the names. No deployed agent consumes the universe yet, so there is no operational forcing function — the Hypothesis Generator will be the first consumer.
 
-**Recommendation:** Treat direct Alpaca paper as acceptable for the Month 1 smoke, but keep ADR-0003 open and schedule a dedicated bridge-validation card before calling the Trading Floor architecture settled.
+**Recommendation:** Rule before the Hypothesis Generator card starts.
 
-### DQ-002 — Position state derivation boundary
+### DQ-005 — Regime Classifier calibration ownership
 
-**Question:** Should `trading.paper_order_events` remain append-only event history only, or should Card 13 derive current positions?
+**Question:** Who owns the thresholds/sizing bands in `src/shrap/intelligence/regime/profiles.py`, and how are they earned rather than guessed?
 
-**Current state:** PR #13 added append-only paper order events. PR #14 adds the consumer core. No current-position table exists yet.
+**Current state:** v0.1 values are single-day calibrations (PR #26). The spec's open questions (debounce M, epsilon, band derivation) are implemented as defaults pending Mike's ruling. A historical feature backfill would let the thresholds be derived from evidence.
 
-**Recommendation:** Keep Card 13 as Reconciliation/position-state design, not a hidden addition to Card 12 deployability.
+**Recommendation:** Schedule the backfill card before any strategy consumes regime-conditional sizing.
 
-### DQ-003 — Research start gate
+### DQ-006 — Cloud tier for the research filter
 
-**Question:** When do Research agents start?
+**Question:** Is local Qwen (`qwen3.5:9b` on the 2070 Super) good enough for the Tech Watcher filter, or does the filter stage need a cloud tier?
 
-**Current state:** Research specs exist, but no implementation exists. Mike explicitly agreed to finish the paper trading spine first.
+**Current state:** First live batch under prompt v1 over-flagged (6 kept, ~1 real), diagnosed as a prompt gap and fixed in PR #49. The v2 re-filter ran 2026-07-18: 0/246 kept — false positives eliminated, but the false-negative check on the one borderline-real item is unauditable (KI-007). The evidence is now one-sided: v2 doesn't over-flag, but whether it under-flags is unknown.
 
-**Recommendation:** Start Research only after: order-store service, reconciliation, full Docker stack smoke, and an explicit decision on the Nautilus bridge boundary.
+**Recommendation:** Keep open. The 2026-07-18 spot-check (10 random v2 rejections) passed — reasons coherent, impostor-class papers rejected on the right grounds — so the rejection direction looks sound. Ship the KI-007 verdict-history fix and judge the keep direction on the next few live batches; a real world-changer signal should eventually triangulate across EDGAR + arXiv, which the filter can't silently suppress on both legs.
+
+## Resolved decisions
+
+- **DQ-007 — Research source coverage vs Mapper ordering.** Resolved
+  2026-07-18 by Mike. Motivating case: Valar Atomics' Ward 250 criticality
+  (DOE Reactor Pilot Program, 2026-06-18) was invisible to the deployed
+  EDGAR+arXiv slice, though its paper trail lives in sources the Tech
+  Watcher spec already lists. Ruling: gov-sources ingest (USASpending +
+  DOE newsroom; SAM.gov gated on an API key) ships before the promotion
+  workflow, and the Intelligence Department Month 2 agents (News Analyzer,
+  Filing Processor) are pulled into the near-term queue ahead of the
+  Mapper. Full order in `current-sprint.md`.
+
+- **DQ-001 — NautilusTrader bridge boundary.** Resolved 2026-07-06 by ADR-0003
+  (Accepted): direct Alpaca paper is the broker interface for the paper phase;
+  Nautilus is re-gated on live capital or execution needs beyond market/day orders.
+- **DQ-002 — Position state derivation boundary.** Resolved by the Cards 13–14
+  split: order-level reconciliation shipped; position-state derivation is
+  deferred and tracked as KI-005.
+- **DQ-003 — Research start gate.** Resolved 2026-07-06: Mike accepted spine
+  status and opened the Research unlock. The spine itself closed 9/9 on 2026-07-15.
+- **Consumer groups (was deferred).** Resolved by PR #37 — all stream consumers
+  moved to Redis consumer groups with persisted offsets (KI-006).
+- **First strategy seed (was deferred).** Resolved by PR #33 — a minimal
+  deterministic strategy fixture, armed once for the first autonomous trade
+  (2026-07-15/16) and disarmed since.
 
 ## Deferred decisions
 
-- Whether to use Redis consumer groups/ACKs during Month 1 or defer to Month 2.
-- Whether the first live paper strategy seed comes from Mike's historical/manual setups or a minimal deterministic strategy fixture.
-- Whether `Daily Briefing Agent` waits until reconciliation exists or starts earlier from audit/order events only.
+- Whether the Daily Briefing Agent waits until Reporting implementation or
+  starts earlier from audit/order events only (unchanged; deferred to
+  post-Research per the roadmap).

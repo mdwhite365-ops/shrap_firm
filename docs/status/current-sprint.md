@@ -1,29 +1,33 @@
 # Current sprint status
 
-**Last updated:** 2026-07-17 (night)
+**Last updated:** 2026-07-18 (night)
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
 ## Current focus
 
-**All three loops are physically running.** The inner loop trades
-autonomously (first fixture-originated fill 2026-07-16). The middle loop
-has its registry + librarian waiting on an Evaluator. And as of tonight the
-research funnel is live end to end: the Tech Watcher ingests EDGAR + arXiv
-hourly, filters on local Qwen (2070 Super), and declined to propose on its
-first batch because the two-source triangulation rule held — exactly the
-honest behavior it was built for. First calibration finding (filter
-over-flagging) was diagnosed as a prompt gap, fixed same night (PR #49).
-Next: the promotion workflow, then the Infrastructure Mapper.
+**All three loops are physically running, and the funnel has its first
+tracked candidate.** After the 2026-07-18 reorder ruling (DQ-007, PR #52 —
+"widen the web before deepening the funnel," motivated by the Valar
+Atomics case), the same day shipped: gov-sources ingest (PR #53 —
+USASpending awards + DOE newsroom), the promotion workflow (PR #54 —
+promote/kill CLI + Mike-seed path), a Dell rebuild deploying both, and
+the firm's first Mike-seeded world-changer:
+`Mass-manufactured fission cost-curve crossing`
+(`01KXVVPXDMB4HS1QNRPQWRP1RX`, archetype cost-curve, falsifier horizon
+2027-12, three observable kill criteria). Next: NRC news-feed source
+(regulator leg), source-class independence taxonomy (spec first), then
+the Intelligence Department Month 2 seeds.
 
 ## Main branch state
 
-Merged on `main` through PR #45. Highlights since the spine-close status:
+Merged on `main` through PR #54. Highlights since the spine-close status:
 consumer groups (#37), strategy registry + state machine (#38), Strategy
 Librarian service (#40), Evaluator ruling — Framework #1 first, in-house
 walk-forward engine (#41), LLM tier client (#42), registry seed correction +
-Ollama runtime bump (#43), GPU swap + drift commit (#44–45). Full list in
-`recent-changes.md`.
+Ollama runtime bump (#43), GPU swap + drift commit (#44–45), Tech Watcher
+ingest + synthesis + filter prompt v2 (#47–49), reorder ruling + gov
+sources + promotion workflow (#52–54). Full list in `recent-changes.md`.
 
 ## Spine verification record
 
@@ -45,10 +49,12 @@ Ollama runtime bump (#43), GPU swap + drift commit (#44–45). Full list in
 - **Monday 2026-07-20 open:** the after-hours smoke order (2026-07-17
   16:59 ET) fills; confirm `execution.order.filled` + clean
   reconciliation to certify the rebuilt stack end to end.
-- **Re-filter under prompt v2** (after PR #49 deploys): reset
-  `filter_result` for unsynthesized items, compare against the v1
-  baseline (6 flagged / ~1 real). Residual error rate is the honest
-  Qwen-quality datapoint for the cloud-tier decision.
+- **v2 re-filter ran 2026-07-18: 0/246 kept.** The five v1 false positives
+  are gone, but the v1 borderline-real item was also rejected and cannot be
+  identified for a false-negative audit (KI-007 — pre-synthesis rejections
+  leave no trace; the re-filter overwrote v1 verdicts and the redeploy ate
+  the logs). The Qwen-quality verdict (DQ-006) now rests on spot-checking
+  v2 rejection reasons and on the next live batches' behavior.
 - **Promotion workflow card (next):** Mike's promote/kill action on
   review-page candidates → status update + `research.world-changer-promoted`
   event. The Infrastructure Mapper has no input until this exists.
@@ -77,8 +83,24 @@ Alpaca paper credentials live only in local ignored `infra/.env`.
 - Check only presence/length.
 - If a key appears in chat or a log, rotate it.
 
-## Next recommended card
+## Card order (Mike's ruling, 2026-07-18)
 
-World-changer promotion workflow (small — unlocks the Mapper), then
-Infrastructure Mapper and Bottleneck Scout seeds, then Hypothesis
-Generator, then the Evaluator.
+Motivating case: Valar Atomics' Ward 250 reached criticality 2026-06-18
+under the DOE Reactor Pilot Program — a textbook cost-curve-crossing
+signal that the funnel could not see. The confirming paper trail (DOE
+award, program announcements) lives in sources the Tech Watcher spec
+already lists but the deployed slice doesn't ingest. Ruling: widen the
+web before deepening the funnel.
+
+1. **Gov-sources ingest** — USASpending awards + DOE newsroom as new
+   Tech Watcher source classes (SAM.gov deferred until an API key
+   exists). Follows the PR #47 ingest pattern.
+2. **Promotion workflow** — Mike's promote/kill action, plus a
+   Mike-seeded candidate path (first seed: mass-manufactured fission
+   cost-curve crossing).
+3. **Intelligence Department Month 2 seeds** — News Analyzer spec +
+   service, then Filing Processor spec + service, both publishing
+   `intelligence.signal` (which the Tech Watcher already consumes as
+   an event trigger).
+4. Then the prior queue: Infrastructure Mapper, Bottleneck Scout,
+   Hypothesis Generator, Evaluator.

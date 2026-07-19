@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-18 (night)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -66,17 +66,42 @@
 - PR #49 — Filter prompt v2 after the first live batch: full recognition
   grammar (signature signals + impostor lists) in the prompt,
   economic-evidence hard rule, prompt-version stamping.
+- PR #50 — Status close-out: funnel live, first pipeline run, calibration.
+- PR #51 — Doc-drift reconciliation + v2 re-filter results (0/246 kept,
+  spot-check passed) + KI-007 (pre-synthesis rejections leave no trace).
+- PR #52 — 2026-07-18 reorder ruling (DQ-007): widen the web before
+  deepening the funnel; gov sources + Intelligence Dept pulled forward.
+- PR #53 — Gov-sources ingest: USASpending awards (DOE + DoD, $5M floor,
+  30-day lookback) + DOE newsroom RSS as Tech Watcher source classes;
+  filter prompt v3 (item types widened). SAM.gov deferred on API key.
+- PR #54 — Promotion workflow: `shrap-tech-watcher-promote`
+  promote/kill/seed CLI; promoted/killed events; decided_at +
+  decision_note columns; review page shows promoted + kill graveyard.
 
 ## Open
 
-- Re-filter the 246-item baseline under prompt v2 and compare against
-  the v1 result (6 flagged, ~1 real). If v2 still over-flags with the
-  full grammar in the prompt, that is a genuine Qwen-quality datapoint
-  for the cloud-tier decision.
-- Next cards: **promotion workflow** (Mike's promote/kill action →
-  `research.world-changer-promoted` event — nothing downstream starts
-  without it), then **Infrastructure Mapper seed**.
-- Dell is current through PR #48 with the full funnel deployed.
+- Next cards (2026-07-18 ruling order): **NRC news feed** (generalize the
+  RSS source class; the regulator leg of licensing throughput),
+  **source-class independence taxonomy** (spec paragraph first — DOE
+  press + DOE award should not fake two-leg triangulation), then
+  **Intelligence Dept Month 2 seeds** (News Analyzer, Filing Processor),
+  then Infrastructure Mapper.
+- KI-007 fix (pre-synthesis graveyard rows + append-only filter verdict
+  history) — slot before or with the NRC card; every live batch until
+  then keeps making rejections unauditable.
+- Dell is current through PR #54 (rebuilt 2026-07-18 night): gov sources
+  ingest live, promotion CLI available in the tech-watcher container.
+
+## Funnel candidate log
+
+- **2026-07-18 (first Mike-seed):** `Mass-manufactured fission cost-curve
+  crossing` — `01KXVVPXDMB4HS1QNRPQWRP1RX`, archetype cost-curve,
+  source_class `mike-seed`, falsifier horizon 2027-12. Kill criteria:
+  no unsubsidized hyperscaler/industrial nuclear PPA by horizon;
+  nth-of-a-kind $/kW flattens across two vendor cohorts; NRC/DOE
+  licensing throughput regresses to pre-2025 rates for two consecutive
+  quarters. Motivating case: Valar Atomics Ward 250 criticality
+  (DOE Reactor Pilot Program, 2026-06-18).
 
 ## Live smoke notes
 
@@ -132,6 +157,19 @@
   Qwen's quality deferred until the v2 re-filter shows the residual
   error rate. Defense in depth worked as designed: the over-permissive
   filter cost six wasted rows, not a bad proposal.
+- **2026-07-18 (v2 re-filter):** all 246 baseline items re-filtered under
+  prompt v2 — **0 kept**. The impostor-list false positives are eliminated,
+  consistent with the prompt-gap diagnosis. But the comparison's key check —
+  did v2 reject the one borderline-real v1 item on principle or by mistake —
+  proved unauditable: the re-filter overwrote the v1 verdicts, the
+  triangulation-stage rejection never wrote a graveyard row, and the PR #49
+  redeploy discarded the container logs holding the v1 keep list (KI-007).
+  DQ-006 stays open on spot-check + future live-batch evidence.
+- **2026-07-18 (spot-check):** 10 random v2 rejection reasons reviewed —
+  all coherent; boilerplate 8-Ks correctly identified, and two ML-methods
+  arXiv papers (the exact impostor class that fooled v1) rejected with the
+  right archetype and the economic-evidence rule cited. Supports the
+  prompt-gap diagnosis; the false-negative direction remains untested.
 
 ## Security notes
 

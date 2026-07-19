@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-07-15
+**Last updated:** 2026-07-18
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -46,4 +46,26 @@ The Reconciliation Agent compares Alpaca paper orders against `trading.paper_ord
 
 Stream consumers held their offsets in memory and read from `start_id=0-0` on restart, replaying the entire history — the cause of the 2026-07-06 poison-event incident. PR #27/#32 made replay safe (poison-skip); PR #30's rate guardrails blunted the replay-reapproval hazard; PR #37 fixed the root cause with consumer groups and acknowledged, persisted offsets (`src/shrap/events/groups.py`).
 
-Two residuals, tracked in `current-sprint.md` open work: (1) retry-backoff for systemic errors (broker/DB down) was scoped into this card's mitigation but did not ship in PR #37; (2) the Dell has not yet been redeployed with PR #36+ — the running containers predate consumer groups.
+One residual, tracked in `current-sprint.md` open work: retry-backoff for systemic errors (broker/DB down) was scoped into this card's mitigation but did not ship in PR #37. The second residual (Dell running pre-#36 containers) was resolved by the 2026-07-17 upgrade session: full-stack rebuild through PR #45, consumer groups live in production.
+
+## KI-007 — Pre-synthesis funnel rejections leave no persistent trace
+
+**Status:** Open. Found 2026-07-18 during the v2 re-filter audit.
+
+The Tech Watcher's rejection graveyard (`research.world_changers`, status
+`rejected`) only records candidates that reach synthesis. A cluster killed
+earlier by the two-source triangulation rule writes no row, and a re-filter
+overwrites `filter_result` in place, so the prior prompt version's verdicts
+are destroyed. Container logs were the only remaining record of the first
+batch's six v1 keeps, and they did not survive the PR #49 redeploy.
+
+Concrete cost: after the v2 re-filter (0/246 kept), the one borderline-real
+v1 item could not be identified to audit whether v2 rejected it on principle
+(economic-evidence rule) or misread it — the false-negative check the
+re-filter comparison existed for. This violates "the denominator is never
+hidden" and principle 8 (audit everything).
+
+**Mitigation (candidate card):** persist cluster-stage rejections as
+graveyard rows before synthesis, and retain filter verdict history per
+prompt version (append, don't overwrite) so re-filter comparisons are
+queryable after the fact.
