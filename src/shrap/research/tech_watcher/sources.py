@@ -1,6 +1,6 @@
 """Source clients for the Tech Watcher ingest pass.
 
-Four source classes, none requiring credentials:
+Five source classes, none requiring credentials:
 
 - **SEC EDGAR** current-filings feed per form type (10-K/10-Q/8-K). SEC
   requires a descriptive ``User-Agent`` with contact info; the value comes
@@ -14,6 +14,13 @@ Four source classes, none requiring credentials:
   paper trail for private-company signals (the Valar Atomics case).
 - **DOE newsroom** RSS feed (energy.gov Energy News). Item identity is
   the article link path.
+- **Federal Register** documents API filtered to configured agency slugs
+  (NRC at launch) — the regulator leg of the 2026-07-18 ruling. The NRC's
+  own newsroom RSS sits behind Akamai bot protection that 403s
+  non-browser clients (verified 2026-07-19 from www and ww2 hosts), so
+  licensing throughput reads the regulator's substantive paper trail —
+  license applications/renewals, rules, notices — from the FR API
+  instead: open JSON, no key. Item identity is the FR document number.
 
 SAM.gov (solicitations) is spec'd but deferred: it requires an API key.
 
@@ -40,11 +47,13 @@ SOURCE_EDGAR = "sec-edgar"
 SOURCE_ARXIV = "arxiv"
 SOURCE_USASPENDING = "usaspending"
 SOURCE_DOE_NEWS = "doe-newsroom"
+SOURCE_FED_REGISTER = "federal-register"
 
 EDGAR_CURRENT_URL = "https://www.sec.gov/cgi-bin/browse-edgar"
 ARXIV_QUERY_URL = "https://export.arxiv.org/api/query"
 USASPENDING_SEARCH_URL = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
 DOE_NEWS_FEED_URL = "https://www.energy.gov/articles/rss.xml"
+FED_REGISTER_DOCUMENTS_URL = "https://www.federalregister.gov/api/v1/documents.json"
 
 # Contract award type codes: definitive contracts + purchase orders + IDVs.
 _USASPENDING_AWARD_TYPES = ["A", "B", "C", "D"]
@@ -383,4 +392,85 @@ class DoeNewsroomSource:
             url=link,
             external_ts=external_ts,
             payload={"link": link, "pub_date": pub_date},
+        )
+
+
+class FederalRegisterSource:
+    """Federal Register documents API, one GET per configured agency slug.
+
+    The regulator leg. NRC's own newsroom RSS is Akamai bot-blocked to
+    non-browser clients (403, verified 2026-07-19), so licensing throughput
+    reads license applications/renewals, rules, and notices from the FR API.
+    """
+
+    def __init__(self, agencies: tuple[str, ...], max_results: int = 100) -> None:
+        self._agencies = agencies
+        self._max_results = max_results
+
+    @property
+    def name(self) -> str:
+        return SOURCE_FED_REGISTER
+
+    async def fetch(self, http: HTTPClient, timeout: float = 30.0) -> list[RawSourceItem]:
+        items: list[RawSourceItem] = []
+        seen: set[str] = set()
+        for agency in self._agencies:
+            params = {
+                "conditions[agencies][]": agency,
+                "order": "newest",
+                "per_page": str(min(self._max_results, 100)),
+            }
+            response = await http.get(
+                FED_REGISTER_DOCUMENTS_URL, params=params, headers={}, timeout=timeout
+            )
+            if response.status_code != 200:
+                raise SourceError(f"federal-register[{agency}]: HTTP {response.status_code}")
+            try:
+                data = json.loads(response.text)
+            except json.JSONDecodeError as e:
+                raise SourceError(f"federal-register[{agency}]: response is not JSON: {e}") from e
+            for result in data.get("results") or []:
+                item = self._result_to_item(result)
+                if item is not None and item.item_id not in seen:
+                    seen.add(item.item_id)
+                    items.append(item)
+        return items
+
+    def _result_to_item(self, result: dict[str, Any]) -> RawSourceItem | None:
+        document_number = result.get("document_number")
+        title = result.get("title")
+        if not document_number or not title:
+            return None
+        doc_type = result.get("type")
+        kind = "-".join(str(doc_type).lower().split()) if doc_type else "document"
+        publication_date = result.get("publication_date")
+        external_ts: datetime | None = None
+        if publication_date:
+            try:
+                external_ts = datetime.strptime(str(publication_date), "%Y-%m-%d").replace(
+                    tzinfo=UTC
+                )
+            except ValueError:
+                external_ts = None
+        abstract = result.get("abstract")
+        agency_slugs = [
+            a["slug"]
+            for a in (result.get("agencies") or [])
+            if isinstance(a, dict) and a.get("slug")
+        ]
+        return RawSourceItem(
+            item_id=f"fedreg:{document_number}",
+            source=SOURCE_FED_REGISTER,
+            kind=kind,
+            title=" ".join(str(title).split()),
+            summary=" ".join(str(abstract).split()) if abstract else None,
+            url=result.get("html_url"),
+            external_ts=external_ts,
+            payload={
+                "document_number": document_number,
+                "type": doc_type,
+                "publication_date": publication_date,
+                "html_url": result.get("html_url"),
+                "agencies": agency_slugs,
+            },
         )

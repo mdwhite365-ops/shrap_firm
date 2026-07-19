@@ -33,6 +33,7 @@ from shrap.research.tech_watcher.sources import (
     ArxivSource,
     DoeNewsroomSource,
     EdgarSource,
+    FederalRegisterSource,
     HTTPClient,
     RawSourceItem,
     UsaSpendingSource,
@@ -198,6 +199,7 @@ async def run(
     usaspending_min_amount: float = 5_000_000.0,
     usaspending_lookback_days: int = 30,
     doe_feed_url: str = DOE_NEWS_FEED_URL,
+    fed_register_agencies: tuple[str, ...] = ("nuclear-regulatory-commission",),
     max_results: int = 100,
     interval_seconds: float = 3600.0,
     http_timeout: float = 30.0,
@@ -220,6 +222,7 @@ async def run(
         arxiv_categories=list(arxiv_categories),
         gov_sources_enabled=gov_sources_enabled,
         usaspending_agencies=list(usaspending_agencies),
+        fed_register_agencies=list(fed_register_agencies),
         interval_seconds=interval_seconds,
         llm_enabled=llm_enabled,
         synthesis_interval_seconds=synthesis_interval_seconds,
@@ -246,6 +249,9 @@ async def run(
             )
         )
         sources.append(DoeNewsroomSource(feed_url=doe_feed_url))
+        sources.append(
+            FederalRegisterSource(agencies=fed_register_agencies, max_results=max_results)
+        )
     async with httpx.AsyncClient(follow_redirects=True) as http:
         llm_stages: LLMStages | None = None
         if llm_enabled:

@@ -16,6 +16,7 @@ from shrap.research.tech_watcher.sources import (
     ArxivSource,
     DoeNewsroomSource,
     EdgarSource,
+    FederalRegisterSource,
     RawSourceItem,
     SourceError,
     UsaSpendingSource,
@@ -241,6 +242,77 @@ async def test_doe_newsroom_garbage_body_raises_source_error() -> None:
     source = DoeNewsroomSource()
 
     with pytest.raises(SourceError, match="not parseable"):
+        await source.fetch(http)
+
+
+FEDREG_JSON = """{
+  "count": 2,
+  "results": [
+    {
+      "document_number": "2026-14565",
+      "title": "Constellation Energy Generation, LLC;\\n  R.E. Ginna Subsequent License Renewal",
+      "type": "Notice",
+      "abstract": "The NRC is considering an application for subsequent license renewal.",
+      "publication_date": "2026-07-20",
+      "html_url": "https://www.federalregister.gov/documents/2026/07/20/2026-14565/constellation",
+      "agencies": [{"slug": "nuclear-regulatory-commission"}]
+    },
+    {
+      "title": "No document number, dropped",
+      "type": "Notice"
+    }
+  ]
+}"""
+
+
+async def test_federal_register_parses_document() -> None:
+    http = FakeHTTP([FakeResponse(200, FEDREG_JSON)])
+    source = FederalRegisterSource(agencies=("nuclear-regulatory-commission",), max_results=50)
+
+    items = await source.fetch(http)
+
+    assert len(items) == 1  # the number-less result is dropped
+    item = items[0]
+    assert item.item_id == "fedreg:2026-14565"
+    assert item.source == "federal-register"
+    assert item.kind == "notice"
+    assert item.title == (
+        "Constellation Energy Generation, LLC; R.E. Ginna Subsequent License Renewal"
+    )
+    assert item.summary is not None and item.summary.startswith("The NRC is considering")
+    assert item.url is not None and item.url.endswith("2026-14565/constellation")
+    assert item.external_ts == datetime(2026, 7, 20, tzinfo=UTC)
+    assert item.payload["agencies"] == ["nuclear-regulatory-commission"]
+    _url, params = http.requests[0]
+    assert params["conditions[agencies][]"] == "nuclear-regulatory-commission"
+    assert params["per_page"] == "50"
+
+
+async def test_federal_register_dedupes_across_agency_queries() -> None:
+    http = FakeHTTP([FakeResponse(200, FEDREG_JSON), FakeResponse(200, FEDREG_JSON)])
+    source = FederalRegisterSource(
+        agencies=("nuclear-regulatory-commission", "department-of-energy")
+    )
+
+    items = await source.fetch(http)
+
+    assert len(http.requests) == 2
+    assert len(items) == 1  # same document number from both queries
+
+
+async def test_federal_register_non_200_raises_source_error() -> None:
+    http = FakeHTTP([FakeResponse(503, "unavailable")])
+    source = FederalRegisterSource(agencies=("nuclear-regulatory-commission",))
+
+    with pytest.raises(SourceError, match="503"):
+        await source.fetch(http)
+
+
+async def test_federal_register_garbage_body_raises_source_error() -> None:
+    http = FakeHTTP([FakeResponse(200, "<<<not json")])
+    source = FederalRegisterSource(agencies=("nuclear-regulatory-commission",))
+
+    with pytest.raises(SourceError, match="not JSON"):
         await source.fetch(http)
 
 
