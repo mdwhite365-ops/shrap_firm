@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-18
+**Last updated:** 2026-07-18 (night)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -66,17 +66,42 @@
 - PR #49 — Filter prompt v2 after the first live batch: full recognition
   grammar (signature signals + impostor lists) in the prompt,
   economic-evidence hard rule, prompt-version stamping.
+- PR #50 — Status close-out: funnel live, first pipeline run, calibration.
+- PR #51 — Doc-drift reconciliation + v2 re-filter results (0/246 kept,
+  spot-check passed) + KI-007 (pre-synthesis rejections leave no trace).
+- PR #52 — 2026-07-18 reorder ruling (DQ-007): widen the web before
+  deepening the funnel; gov sources + Intelligence Dept pulled forward.
+- PR #53 — Gov-sources ingest: USASpending awards (DOE + DoD, $5M floor,
+  30-day lookback) + DOE newsroom RSS as Tech Watcher source classes;
+  filter prompt v3 (item types widened). SAM.gov deferred on API key.
+- PR #54 — Promotion workflow: `shrap-tech-watcher-promote`
+  promote/kill/seed CLI; promoted/killed events; decided_at +
+  decision_note columns; review page shows promoted + kill graveyard.
 
 ## Open
 
-- Re-filter the 246-item baseline under prompt v2 and compare against
-  the v1 result (6 flagged, ~1 real). If v2 still over-flags with the
-  full grammar in the prompt, that is a genuine Qwen-quality datapoint
-  for the cloud-tier decision.
-- Next cards: **promotion workflow** (Mike's promote/kill action →
-  `research.world-changer-promoted` event — nothing downstream starts
-  without it), then **Infrastructure Mapper seed**.
-- Dell is current through PR #48 with the full funnel deployed.
+- Next cards (2026-07-18 ruling order): **NRC news feed** (generalize the
+  RSS source class; the regulator leg of licensing throughput),
+  **source-class independence taxonomy** (spec paragraph first — DOE
+  press + DOE award should not fake two-leg triangulation), then
+  **Intelligence Dept Month 2 seeds** (News Analyzer, Filing Processor),
+  then Infrastructure Mapper.
+- KI-007 fix (pre-synthesis graveyard rows + append-only filter verdict
+  history) — slot before or with the NRC card; every live batch until
+  then keeps making rejections unauditable.
+- Dell is current through PR #54 (rebuilt 2026-07-18 night): gov sources
+  ingest live, promotion CLI available in the tech-watcher container.
+
+## Funnel candidate log
+
+- **2026-07-18 (first Mike-seed):** `Mass-manufactured fission cost-curve
+  crossing` — `01KXVVPXDMB4HS1QNRPQWRP1RX`, archetype cost-curve,
+  source_class `mike-seed`, falsifier horizon 2027-12. Kill criteria:
+  no unsubsidized hyperscaler/industrial nuclear PPA by horizon;
+  nth-of-a-kind $/kW flattens across two vendor cohorts; NRC/DOE
+  licensing throughput regresses to pre-2025 rates for two consecutive
+  quarters. Motivating case: Valar Atomics Ward 250 criticality
+  (DOE Reactor Pilot Program, 2026-06-18).
 
 ## Live smoke notes
 
