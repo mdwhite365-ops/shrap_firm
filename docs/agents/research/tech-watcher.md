@@ -175,13 +175,12 @@ declared origin does not count toward triangulation.
    peer-reviewed or replicated result should ever count hard, that is a
    deliberate future change, not a default.
 
-**Implementation note (spec-first).** The deployed v0 code counts distinct
-feed names (`Cluster.source_classes`). This section is the contract for
-the follow-up code card: derive origin + hardness per item (the needed
-fields are already in item payloads) and replace the promotable predicate
-with rules 1–2. Until that card ships, the deployed rule remains
-feed-name-based and this taxonomy governs interpretation at the review
-page.
+**Implementation note.** Implemented in the same-day follow-up code card
+(2026-07-19): the synthesis pass derives origin + hardness per item from
+the ingest payloads (`derive_origin` in `synthesis.py`) and
+`Cluster.promotable` enforces rules 1–2. Items whose origin cannot be
+derived get an `unmapped:` origin that never counts toward triangulation
+and never provides the hard leg.
 
 ## Processing
 

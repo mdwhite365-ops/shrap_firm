@@ -7,11 +7,15 @@ Pipeline over relevant, not-yet-synthesized items:
    refinement recorded in the spec.
 2. **Triangulate** — every cluster's disposition is logged per pass to
    ``research.tech_watcher_cluster_log`` (KI-007 — pre-synthesis holds
-   used to leave no trace). A cluster is promotable only with >=2 independent
-   source classes (the spec's primary defense against marketing-driven
-   false positives). Single-source clusters stay unsynthesized and wait:
-   they re-enter every batch until a second source class corroborates or
-   they age out. They are the ``seen-not-proposed`` population.
+   used to leave no trace). Independence follows the source-class
+   taxonomy (tech-watcher spec): items map to originating institutions
+   (issuer / research / gov:<agency>) with a hard/soft class, and a
+   cluster is promotable only with >=2 distinct origins and at least one
+   hard leg — same agency via two feeds is one leg. This is the spec's
+   primary defense against marketing-driven false positives.
+   Single-origin clusters stay unsynthesized and wait: they re-enter
+   every batch until an independent origin corroborates or they age out.
+   They are the ``seen-not-proposed`` population.
 3. **Synthesize** — top-N promotable clusters (ranked by source breadth,
    then evidence count) each get one LLM call producing the spec's strict
    candidate JSON. The call goes to the ``cloud-default`` tier alias; in
@@ -45,6 +49,13 @@ from shrap.research.tech_watcher.archetypes import (
     archetype_prompt_block,
 )
 from shrap.research.tech_watcher.candidates import PostgresCandidateStore
+from shrap.research.tech_watcher.sources import (
+    SOURCE_ARXIV,
+    SOURCE_DOE_NEWS,
+    SOURCE_EDGAR,
+    SOURCE_FED_REGISTER,
+    SOURCE_USASPENDING,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -81,6 +92,39 @@ SYNTHESIS_SYSTEM_PROMPT = (
 )
 
 
+# Source-class independence taxonomy (tech-watcher spec, 2026-07-19):
+# triangulation counts originating institutions, not ingest feeds. Hardness
+# separates facts with legal/financial consequence from narrative. A source
+# without a declared origin never counts toward triangulation.
+_HARD_SOURCES = frozenset({SOURCE_EDGAR, SOURCE_USASPENDING, SOURCE_FED_REGISTER})
+
+
+def _gov_slug(name: str) -> str:
+    return "-".join(name.lower().split())
+
+
+def derive_origin(source: str, payload: Mapping[str, Any] | None) -> str:
+    """Map an item to its originating institution per the taxonomy table."""
+
+    if source == SOURCE_EDGAR:
+        return "issuer"
+    if source == SOURCE_ARXIV:
+        return "research"
+    if source == SOURCE_DOE_NEWS:
+        return "gov:department-of-energy"
+    if source == SOURCE_USASPENDING:
+        agency = (payload or {}).get("awarding_agency")
+        if isinstance(agency, str) and agency.strip():
+            return f"gov:{_gov_slug(agency)}"
+        return f"unmapped:{source}"
+    if source == SOURCE_FED_REGISTER:
+        agencies = (payload or {}).get("agencies")
+        if isinstance(agencies, list) and agencies and isinstance(agencies[0], str):
+            return f"gov:{agencies[0]}"
+        return f"unmapped:{source}"
+    return f"unmapped:{source}"
+
+
 @dataclass(frozen=True, slots=True)
 class RelevantItem:
     """One filtered-relevant item entering clustering."""
@@ -91,6 +135,8 @@ class RelevantItem:
     title: str
     summary: str | None
     reason: str
+    origin: str
+    hard: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,8 +151,15 @@ class Cluster:
         return tuple(sorted({i.source for i in self.items}))
 
     @property
+    def origins(self) -> tuple[str, ...]:
+        """Distinct originating institutions; unmapped origins never count."""
+        return tuple(sorted({i.origin for i in self.items if not i.origin.startswith("unmapped:")}))
+
+    @property
     def promotable(self) -> bool:
-        return len(self.source_classes) >= 2
+        """Taxonomy rule v1: >=2 distinct origins AND at least one hard leg."""
+        has_hard_leg = any(i.hard for i in self.items if not i.origin.startswith("unmapped:"))
+        return len(self.origins) >= 2 and has_hard_leg
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +191,7 @@ class RedisStreamClient(Protocol):
 
 
 SELECT_RELEVANT_UNSYNTHESIZED_SQL = """
-SELECT item_id, source, title, summary, filter_result
+SELECT item_id, source, title, summary, filter_result, payload
 FROM research.raw_source_items
 WHERE filtered_at IS NOT NULL
   AND synthesized_at IS NULL
@@ -220,14 +273,20 @@ async def _load_relevant_items(pool: AsyncPool) -> list[RelevantItem]:
         archetype = parsed.get("archetype") if isinstance(parsed, dict) else None
         if not isinstance(archetype, str) or archetype not in ARCHETYPE_KEYS:
             continue
+        source = str(row["source"])
+        payload_raw = row["payload"]
+        payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+        payload_map = payload if isinstance(payload, dict) else None
         items.append(
             RelevantItem(
                 item_id=str(row["item_id"]),
-                source=str(row["source"]),
+                source=source,
                 archetype=archetype,
                 title=str(row["title"]),
                 summary=None if row["summary"] is None else str(row["summary"]),
                 reason=str(parsed.get("reason", "")) if isinstance(parsed, dict) else "",
+                origin=derive_origin(source, payload_map),
+                hard=source in _HARD_SOURCES,
             )
         )
     return items
@@ -264,7 +323,7 @@ async def synthesis_pass(
     items = await _load_relevant_items(pool)
     clusters = build_clusters(items)
     promotable = [c for c in clusters if c.promotable]
-    promotable.sort(key=lambda c: (len(c.source_classes), len(c.items)), reverse=True)
+    promotable.sort(key=lambda c: (len(c.origins), len(c.items)), reverse=True)
     to_synthesize = promotable[:max_proposals]
 
     # KI-007: log every cluster's disposition before any LLM call, so a
@@ -326,7 +385,11 @@ async def synthesis_pass(
             ),
             dependency_graph_seed=seed_raw if isinstance(seed_raw, list) else None,
             source_classes=list(cluster.source_classes),
-            score={"source_classes": len(cluster.source_classes), "evidence": len(cluster.items)},
+            score={
+                "source_classes": len(cluster.source_classes),
+                "origins": len(cluster.origins),
+                "evidence": len(cluster.items),
+            },
             rejection_reason=rejection,
             llm_model=result.model,
             batch_id=batch_id,
