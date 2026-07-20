@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-19 (evening)
+**Last updated:** 2026-07-19 (late night)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -88,20 +88,39 @@
   Mike-approved). Tier transitions become bus events; Pre-Trade Tier 3
   check is a follow-up card. Motivated by the RKLB/Iridium hand-run
   analysis (2026-07-19 handoff).
+- PR #58 — Status refresh recording #56–57.
+- PR #59 — Regulator leg via the Federal Register API (NRC at launch,
+  agency filter is config). Rechecked live before building: nrc.gov RSS
+  is Akamai bot-blocked to every non-browser client tested, so the FR
+  API carries the regulator's substantive paper trail instead — license
+  applications/renewals, rules, notices.
+- PR #60 — KI-007 fix: append-only `research.filter_verdict_history`
+  (prompt-version-stamped, written before the in-place mark) +
+  `research.tech_watcher_cluster_log` (every cluster's disposition
+  logged before any synthesis LLM call).
+- PR #61 — Source-class independence taxonomy v1 (spec): triangulation
+  keys on originating institution (issuer / research / gov:<agency>)
+  with hard/soft classes; promotable = >=2 origins + >=1 hard leg.
+- PR #62 — News Analyzer spec (Intelligence Month 2 seed #1): Alpaca
+  news vendor accepted; materiality-only signals on
+  `intelligence.signal`; market-phase-driven cadence; no direction
+  hints in v1.
+- PR #63 — Taxonomy enforced in code: `derive_origin` from ingest
+  payloads, new `Cluster.promotable` predicate, unmapped origins never
+  count. DOE press + DOE award can no longer fake triangulation
+  (regression-tested).
 
 ## Open
 
-- Next cards (2026-07-18 ruling order): **NRC news feed** (generalize the
-  RSS source class; the regulator leg of licensing throughput),
-  **source-class independence taxonomy** (spec paragraph first — DOE
-  press + DOE award should not fake two-leg triangulation), then
-  **Intelligence Dept Month 2 seeds** (News Analyzer, Filing Processor),
-  then Infrastructure Mapper.
-- KI-007 fix (pre-synthesis graveyard rows + append-only filter verdict
-  history) — slot before or with the NRC card; every live batch until
-  then keeps making rejections unauditable.
-- Dell is current through PR #54 (rebuilt 2026-07-18 night): gov sources
-  ingest live, promotion CLI available in the tech-watcher container.
+- Next cards: **News Analyzer service** (spec #62 accepted — Alpaca
+  vendor, Tier 3 names, market-phase cadence), **Filing Processor spec**
+  (Intelligence Month 2 seed #2), then Infrastructure Mapper. The
+  taxonomy code card (#63) closed the regulator-leg + taxonomy items
+  from the 2026-07-18 ruling order.
+- Dell is current through PR #54 (rebuilt 2026-07-18 night). PRs #56–63
+  await one rebuild session: tech-watcher (FR source, KI-007 tables,
+  taxonomy rule) + market-phase (new service). Command block in the
+  session notes; expect the funnel to promote more strictly after.
 
 ## Funnel candidate log
 
