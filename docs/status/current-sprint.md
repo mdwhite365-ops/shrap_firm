@@ -1,6 +1,6 @@
 # Current sprint status
 
-**Last updated:** 2026-07-19 (evening)
+**Last updated:** 2026-07-19 (late night)
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
@@ -16,21 +16,28 @@ the firm's first Mike-seeded world-changer:
 `Mass-manufactured fission cost-curve crossing`
 (`01KXVVPXDMB4HS1QNRPQWRP1RX`, archetype cost-curve, falsifier horizon
 2027-12, three observable kill criteria). The 2026-07-19 session landed
-the RKLB/Iridium handoff items: ADR-0012 (tiered universe, PR #57) and
-the Market Phase Scheduler service (PR #56). Next: NRC news-feed source
-(regulator leg), source-class independence taxonomy (spec first), then
-the Intelligence Department Month 2 seeds.
+eight PRs (#56–63): the RKLB/Iridium handoff items (ADR-0012 tiered
+universe, Market Phase Scheduler), the regulator leg (Federal Register
+API — nrc.gov RSS proved Akamai bot-blocked, verified before building),
+the KI-007 auditability fix, the source-class independence taxonomy
+(spec, then same-day enforcement in the triangulation rule), and the
+News Analyzer spec. The funnel now triangulates on originating
+institutions, not feed names, and every pre-synthesis decision leaves a
+queryable trace. Next: News Analyzer service card (spec + Alpaca vendor
+accepted by merge), then the Filing Processor spec.
 
 ## Main branch state
 
-Merged on `main` through PR #57. Highlights since the spine-close status:
+Merged on `main` through PR #63. Highlights since the spine-close status:
 consumer groups (#37), strategy registry + state machine (#38), Strategy
 Librarian service (#40), Evaluator ruling — Framework #1 first, in-house
 walk-forward engine (#41), LLM tier client (#42), registry seed correction +
 Ollama runtime bump (#43), GPU swap + drift commit (#44–45), Tech Watcher
 ingest + synthesis + filter prompt v2 (#47–49), reorder ruling + gov
 sources + promotion workflow (#52–54), Market Phase Scheduler (#56),
-ADR-0012 tiered universe (#57). Full list in `recent-changes.md`.
+ADR-0012 tiered universe (#57), Federal Register regulator leg (#59),
+KI-007 audit trails (#60), source-class taxonomy spec + enforcement
+(#61, #63), News Analyzer spec (#62). Full list in `recent-changes.md`.
 
 ## Spine verification record
 
@@ -54,10 +61,11 @@ ADR-0012 tiered universe (#57). Full list in `recent-changes.md`.
   reconciliation to certify the rebuilt stack end to end.
 - **v2 re-filter ran 2026-07-18: 0/246 kept.** The five v1 false positives
   are gone, but the v1 borderline-real item was also rejected and cannot be
-  identified for a false-negative audit (KI-007 — pre-synthesis rejections
-  leave no trace; the re-filter overwrote v1 verdicts and the redeploy ate
-  the logs). The Qwen-quality verdict (DQ-006) now rests on spot-checking
-  v2 rejection reasons and on the next live batches' behavior.
+  identified for a false-negative audit (KI-007 — fixed in PR #60; that
+  batch's verdicts are gone for good, but every batch after the next
+  rebuild keeps its history). The Qwen-quality verdict (DQ-006) now rests
+  on spot-checking v2 rejection reasons and on the next live batches'
+  behavior.
 - **Fixture disarm verification:** `docker logs shrap_strategy_fixture`
   should show `"enabled": false` post-rebuild (belt-and-suspenders; the
   .env flip + rebuild happened in the 2026-07-17 session).
@@ -67,12 +75,18 @@ ADR-0012 tiered universe (#57). Full list in `recent-changes.md`.
   Alpaca every ~10s all night).
 - **Regime threshold watch:** v0.1 calibration is single-day evidence. A
   historical feature backfill would earn the thresholds.
-- **Market-Phase Scheduler (merged, PR #56 — deploy pending):** deploy
-  `market-phase` on the Dell, confirm the startup event and the first real
-  transitions on `operations.market-phase`, then certify across a full
-  weekend (verify `closed-day` Saturday/Sunday and `pre-open` Monday
-  04:00 ET). Consumers (regime sync skip, overnight research conductor,
-  briefing) come in later cards.
+- **Dell rebuild pending (one session covers everything merged today):**
+  `tech-watcher` rebuild picks up the Federal Register source (#59), the
+  KI-007 audit tables (#60, created by `ensure_schema` on boot), and the
+  taxonomy triangulation rule (#63); `market-phase` (#56) comes up new.
+  Then: confirm the market-phase startup event, watch the first real
+  transitions Monday, and certify across the next full weekend
+  (`closed-day` Sat/Sun, `pre-open` Monday 04:00 ET). Note the taxonomy
+  rule makes promotion strictly harder — if the funnel goes quiet, the
+  cluster log shows what it is holding and why.
+- **Market-phase consumers** (regime sync skip, overnight research
+  conductor, briefing) come in later cards; the News Analyzer spec (#62)
+  is the first committed consumer.
 - **ADR-0012 follow-ups (accepted 2026-07-19, unscheduled):** restructure
   `docs/universe/README.md` around the three tiers (the 50-name list
   becomes the Tier 3 launch proposal, still awaiting DQ-004 lock-in);
