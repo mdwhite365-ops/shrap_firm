@@ -20,9 +20,12 @@ from shrap.research.tech_watcher.synthesis import (
     Cluster,
     RelevantItem,
     build_clusters,
+    derive_origin,
     synthesis_pass,
     validate_candidate,
 )
+
+_HARD = {"sec-edgar", "usaspending", "federal-register"}
 
 # --- fakes ---------------------------------------------------------------------
 
@@ -205,7 +208,9 @@ async def test_filter_pass_appends_verdict_history() -> None:
 # --- clustering / triangulation ------------------------------------------------
 
 
-def _relevant(item_id: str, source: str, archetype: str) -> RelevantItem:
+def _relevant(
+    item_id: str, source: str, archetype: str, payload: dict[str, Any] | None = None
+) -> RelevantItem:
     return RelevantItem(
         item_id=item_id,
         source=source,
@@ -213,6 +218,8 @@ def _relevant(item_id: str, source: str, archetype: str) -> RelevantItem:
         title=f"title {item_id}",
         summary="s",
         reason="r",
+        origin=derive_origin(source, payload),
+        hard=source in _HARD,
     )
 
 
@@ -241,6 +248,87 @@ def test_triangulation_requires_two_source_classes() -> None:
     )
     assert single.promotable is False  # two items, one source class — not evidence
     assert triangulated.promotable is True
+
+
+def test_derive_origin_maps_sources_to_institutions() -> None:
+    assert derive_origin("sec-edgar", {}) == "issuer"
+    assert derive_origin("arxiv", None) == "research"
+    assert derive_origin("doe-newsroom", {}) == "gov:department-of-energy"
+    assert (
+        derive_origin("usaspending", {"awarding_agency": "Department of Energy"})
+        == "gov:department-of-energy"
+    )
+    assert (
+        derive_origin("federal-register", {"agencies": ["nuclear-regulatory-commission"]})
+        == "gov:nuclear-regulatory-commission"
+    )
+    # Missing payload fields and unknown feeds fall to unmapped, which
+    # never counts toward triangulation.
+    assert derive_origin("usaspending", {}) == "unmapped:usaspending"
+    assert derive_origin("some-new-feed", {}) == "unmapped:some-new-feed"
+
+
+def test_same_agency_via_two_feeds_is_one_leg() -> None:
+    # The DQ-007 motivating case: DOE press + DOE award must not promote.
+    cluster = Cluster(
+        archetype="energy-supply",
+        items=(
+            _relevant("doe-news:1", "doe-newsroom", "energy-supply"),
+            _relevant(
+                "usaspending:2",
+                "usaspending",
+                "energy-supply",
+                payload={"awarding_agency": "Department of Energy"},
+            ),
+        ),
+    )
+    assert cluster.origins == ("gov:department-of-energy",)
+    assert cluster.promotable is False
+
+
+def test_press_plus_arxiv_has_no_hard_leg() -> None:
+    cluster = Cluster(
+        archetype="energy-supply",
+        items=(
+            _relevant("doe-news:1", "doe-newsroom", "energy-supply"),
+            _relevant("arxiv:2", "arxiv", "energy-supply"),
+        ),
+    )
+    assert len(cluster.origins) == 2
+    assert cluster.promotable is False  # marketing-plus-hype pair
+
+
+def test_two_agencies_with_hard_leg_promote() -> None:
+    cluster = Cluster(
+        archetype="energy-supply",
+        items=(
+            _relevant(
+                "usaspending:1",
+                "usaspending",
+                "energy-supply",
+                payload={"awarding_agency": "Department of Energy"},
+            ),
+            _relevant(
+                "fedreg:2",
+                "federal-register",
+                "energy-supply",
+                payload={"agencies": ["nuclear-regulatory-commission"]},
+            ),
+        ),
+    )
+    assert cluster.promotable is True
+
+
+def test_unmapped_origin_never_counts() -> None:
+    cluster = Cluster(
+        archetype="compute-substrate",
+        items=(
+            _relevant("edgar:1", "sec-edgar", "compute-substrate"),
+            _relevant("mystery:2", "some-new-feed", "compute-substrate"),
+        ),
+    )
+    assert cluster.origins == ("issuer",)
+    assert cluster.promotable is False  # one counted origin, despite two feeds
 
 
 # --- validator -----------------------------------------------------------------
@@ -294,6 +382,7 @@ def _relevant_row(item_id: str, source: str, archetype: str) -> dict[str, Any]:
         "title": f"title {item_id}",
         "summary": "s",
         "filter_result": json.dumps({"relevant": True, "archetype": archetype, "reason": "signal"}),
+        "payload": json.dumps({}),
     }
 
 
