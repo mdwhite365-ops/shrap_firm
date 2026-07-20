@@ -112,6 +112,77 @@ Department, §Intelligence Department interface.
 | Qdrant: `world_changer_corpus` | Semantic search | Embeddings of prior candidate descriptions and source evidence |
 | Repo: `docs/research/world-changer-archetypes.md` | File read | Allowed candidate archetypes (e.g. "compute substrate shift", "manufacturing process node jump", "biology platform technology", "energy supply discontinuity") |
 
+## Source-class independence taxonomy (v1, 2026-07-19)
+
+Added when the deployed slice grew from two feeds (EDGAR, arXiv) to five
+(USASpending, DOE newsroom, Federal Register). The two-source triangulation
+rule counts *legs of independent evidence*, and with five feeds the feed
+name is no longer a safe proxy for independence: a DOE newsroom item and a
+DOE award are one institution speaking twice about the same program, and
+must not fake two-leg triangulation.
+
+**The independence unit is the originating institution, not the ingest
+feed.** Each raw item maps deterministically to an origin:
+
+| Ingest source | Origin | Hardness |
+|---|---|---|
+| `sec-edgar` | `issuer` (v1: one bucket for all issuers — see open question 1) | hard |
+| `arxiv` | `research` | soft |
+| `usaspending` | `gov:<awarding agency>` (from the award record) | hard |
+| `doe-newsroom` | `gov:department-of-energy` | soft |
+| `federal-register` | `gov:<agency slug>` (from the FR document's agency; NRC at launch) | hard |
+
+Two `gov:` origins are the same leg iff the agency matches: DOE press +
+DOE award is **one** leg; DOE award + NRC Federal Register notice is two.
+
+**Hardness** separates facts with legal or financial consequence (issuer
+filings, obligated awards, regulator actions) from narrative and claims
+without committed capital (agency press, preprints).
+
+**Triangulation rule v1.** A cluster is promotable iff:
+
+1. its items span **>= 2 distinct origins**, and
+2. **at least one leg is hard**.
+
+Consequences worth stating plainly: DOE press + DOE award no longer
+promotes (one origin). Agency press + arXiv no longer promotes (no hard
+leg — that is the marketing-plus-hype pair). EDGAR + arXiv still promotes
+(hard issuer leg + research leg), which is the pair the funnel was built
+on. Two agencies' press releases alone never promote.
+
+`mike-seed` candidates are outside this taxonomy: they enter via the
+promotion CLI without triangulation, and their `source_class` records that
+provenance honestly.
+
+**Rule for future sources:** every new ingest-source card must extend this
+table (origin mapping + hardness) in the same PR. A source without a
+declared origin does not count toward triangulation.
+
+**Open questions (Mike rules by merge, or defers to follow-ups):**
+
+1. *Per-issuer granularity for EDGAR.* Two different companies' filings
+   are arguably two independent actors placing weight. v1 keeps one
+   `issuer` bucket — conservative (fewer promotions), and per-item issuer
+   extraction is not yet parsed from the feed. Revisit with full-text
+   ingestion.
+2. *Procedural regulator noise.* Federal Register hardness assumes
+   substantive actions (license applications/renewals, rules). Sunshine
+   Act meeting notices and paperwork-renewal notices are technically hard
+   class but carry no archetype signal; the bulk filter is expected to
+   drop them. If they leak through and complete triangulations, demote
+   procedural FR document types to soft in a follow-up.
+3. *arXiv hardness.* Preprints stay soft even from major labs. If a
+   peer-reviewed or replicated result should ever count hard, that is a
+   deliberate future change, not a default.
+
+**Implementation note (spec-first).** The deployed v0 code counts distinct
+feed names (`Cluster.source_classes`). This section is the contract for
+the follow-up code card: derive origin + hardness per item (the needed
+fields are already in item payloads) and replace the promotable predicate
+with rules 1–2. Until that card ships, the deployed rule remains
+feed-name-based and this taxonomy governs interpretation at the review
+page.
+
 ## Processing
 
 1. **Ingest cursor advance.** For each source class, advance the per-source
@@ -125,7 +196,9 @@ Department, §Intelligence Department interface.
 3. **Cluster and triangulate.** Daily pass: cluster the relevant new items
    by topic + entity. A cluster is promotable to a candidate proposal only
    if it draws on >=2 independent source classes (e.g., a 10-K plus a
-   conference keynote, or an arXiv paper plus a patent filing). Single-
+   conference keynote, or an arXiv paper plus a patent filing).
+   Independence is defined by the source-class independence taxonomy
+   above — origins and hardness, not ingest feed names. Single-
    source clusters are recorded but do not become proposals — this is the
    primary defense against marketing-driven false positives.
 4. **Synthesize candidate (cloud LLM).** For each promotable cluster, the
