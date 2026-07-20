@@ -70,6 +70,21 @@ CREATE TABLE IF NOT EXISTS research.world_changer_evidence (
 )
 """.strip()
 
+# KI-007: every cluster the triangulation stage considers leaves a row —
+# synthesized, deferred by the max-proposals cap, or held single-source.
+# Without this, a cluster killed before synthesis had no persistent trace.
+CREATE_CLUSTER_LOG_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS research.tech_watcher_cluster_log (
+    batch_id TEXT NOT NULL,
+    ran_at TIMESTAMPTZ NOT NULL,
+    archetype TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    source_classes JSONB NOT NULL,
+    item_ids JSONB NOT NULL,
+    PRIMARY KEY (batch_id, archetype)
+)
+""".strip()
+
 CREATE_BATCHES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS research.tech_watcher_batches (
     batch_id TEXT PRIMARY KEY,
@@ -101,6 +116,13 @@ INSERT_EVIDENCE_SQL = """
 INSERT INTO research.world_changer_evidence (candidate_id, item_id, source_class, note)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (candidate_id, item_id) DO NOTHING
+""".strip()
+
+INSERT_CLUSTER_LOG_SQL = """
+INSERT INTO research.tech_watcher_cluster_log (
+    batch_id, ran_at, archetype, outcome, source_classes, item_ids
+)
+VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
 """.strip()
 
 INSERT_BATCH_SQL = """
@@ -159,6 +181,7 @@ class PostgresCandidateStore:
             await conn.execute(ADD_DECIDED_AT_COLUMN_SQL)
             await conn.execute(ADD_DECISION_NOTE_COLUMN_SQL)
             await conn.execute(CREATE_EVIDENCE_TABLE_SQL)
+            await conn.execute(CREATE_CLUSTER_LOG_TABLE_SQL)
             await conn.execute(CREATE_BATCHES_TABLE_SQL)
 
     async def last_batch_at(self) -> datetime | None:
@@ -222,6 +245,27 @@ class PostgresCandidateStore:
                     await conn.execute(
                         INSERT_EVIDENCE_SQL, candidate_id, item_id, source_class, note
                     )
+
+    async def record_cluster(
+        self,
+        *,
+        batch_id: str,
+        ran_at: datetime,
+        archetype: str,
+        outcome: str,
+        source_classes: list[str],
+        item_ids: list[str],
+    ) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                INSERT_CLUSTER_LOG_SQL,
+                batch_id,
+                ran_at,
+                archetype,
+                outcome,
+                json.dumps(source_classes, separators=(",", ":")),
+                json.dumps(item_ids, separators=(",", ":")),
+            )
 
     async def insert_batch(
         self,

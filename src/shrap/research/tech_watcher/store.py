@@ -56,6 +56,26 @@ ON research.raw_source_items (fetched_at)
 WHERE filtered_at IS NULL
 """.strip()
 
+# KI-007: append-only verdict log so a re-filter never destroys the prior
+# prompt version's verdicts. `filter_result` on the item stays the current
+# state; this table is the history re-filter comparisons query.
+CREATE_FILTER_VERDICT_HISTORY_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS research.filter_verdict_history (
+    item_id TEXT NOT NULL,
+    prompt_version INTEGER NOT NULL,
+    relevant BOOLEAN NOT NULL,
+    archetype TEXT,
+    reason TEXT,
+    model TEXT NOT NULL,
+    decided_at TIMESTAMPTZ NOT NULL
+)
+""".strip()
+
+CREATE_FILTER_VERDICT_HISTORY_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS filter_verdict_history_item_idx
+ON research.filter_verdict_history (item_id, decided_at DESC)
+""".strip()
+
 CREATE_INGEST_CURSORS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS research.ingest_cursors (
     source TEXT PRIMARY KEY,
@@ -123,6 +143,8 @@ class PostgresRawItemStore:
             await conn.execute(CREATE_RAW_ITEMS_SOURCE_INDEX_SQL)
             await conn.execute(CREATE_RAW_ITEMS_UNPROCESSED_INDEX_SQL)
             await conn.execute(ADD_FILTER_RESULT_COLUMN_SQL)
+            await conn.execute(CREATE_FILTER_VERDICT_HISTORY_TABLE_SQL)
+            await conn.execute(CREATE_FILTER_VERDICT_HISTORY_INDEX_SQL)
             await conn.execute(CREATE_INGEST_CURSORS_TABLE_SQL)
 
     async def upsert_batch(

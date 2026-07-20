@@ -176,6 +176,32 @@ async def test_filter_pass_scores_and_marks_each_item() -> None:
     assert stored["archetype"] == "compute-substrate"
 
 
+async def test_filter_pass_appends_verdict_history() -> None:
+    pool = FakePool()
+    from shrap.research.tech_watcher.filter import (
+        FILTER_PROMPT_VERSION,
+        INSERT_VERDICT_HISTORY_SQL,
+        SELECT_UNFILTERED_SQL,
+    )
+
+    pool.conn.fetch_results[SELECT_UNFILTERED_SQL] = [
+        {"item_id": "arxiv:1", "source": "arxiv", "kind": "cs.LG", "title": "t", "summary": None},
+    ]
+    llm = FakeLLM(['{"relevant": false, "archetype": null, "reason": "nope"}'])
+
+    await filter_pass(pool, llm)  # type: ignore[arg-type]
+
+    history = [args for sql, args in pool.conn.executed if sql == INSERT_VERDICT_HISTORY_SQL]
+    assert len(history) == 1
+    assert history[0][0] == "arxiv:1"
+    assert history[0][1] == FILTER_PROMPT_VERSION
+    assert history[0][2] is False
+    # History lands before the in-place mark: a crash between the two
+    # re-scores the item instead of losing the verdict.
+    executed_sql = [sql for sql, _ in pool.conn.executed]
+    assert executed_sql.index(INSERT_VERDICT_HISTORY_SQL) < executed_sql.index(MARK_FILTERED_SQL)
+
+
 # --- clustering / triangulation ------------------------------------------------
 
 
@@ -320,6 +346,56 @@ async def test_synthesis_pass_persists_invalid_candidate_as_rejected() -> None:
     assert len(inserts) == 1
     assert inserts[0][3] == "rejected"  # status column
     assert "confidence" in str(inserts[0][12])  # rejection_reason
+
+
+async def test_synthesis_pass_logs_every_cluster_disposition() -> None:
+    pool = FakePool()
+    from shrap.research.tech_watcher.candidates import INSERT_CLUSTER_LOG_SQL
+    from shrap.research.tech_watcher.synthesis import SELECT_RELEVANT_UNSYNTHESIZED_SQL
+
+    pool.conn.fetch_results[SELECT_RELEVANT_UNSYNTHESIZED_SQL] = [
+        _relevant_row("arxiv:1", "arxiv", "compute-substrate"),
+        _relevant_row("edgar:2", "sec-edgar", "compute-substrate"),
+        _relevant_row("arxiv:3", "arxiv", "bio-mechanism"),  # single-source hold
+    ]
+    llm = FakeLLM([json.dumps(_good_candidate())])
+    redis = FakeRedis()
+
+    await synthesis_pass(pool, llm, redis)  # type: ignore[arg-type]
+
+    logged = [args for sql, args in pool.conn.executed if sql == INSERT_CLUSTER_LOG_SQL]
+    outcomes = {args[2]: args[3] for args in logged}
+    assert outcomes == {
+        "compute-substrate": "synthesized",
+        "bio-mechanism": "held-single-source",
+    }
+    held = next(args for args in logged if args[2] == "bio-mechanism")
+    assert json.loads(str(held[5])) == ["arxiv:3"]  # the held item is identifiable
+
+
+async def test_synthesis_pass_logs_deferred_beyond_cap() -> None:
+    pool = FakePool()
+    from shrap.research.tech_watcher.candidates import INSERT_CLUSTER_LOG_SQL
+    from shrap.research.tech_watcher.synthesis import SELECT_RELEVANT_UNSYNTHESIZED_SQL
+
+    pool.conn.fetch_results[SELECT_RELEVANT_UNSYNTHESIZED_SQL] = [
+        _relevant_row("arxiv:1", "arxiv", "compute-substrate"),
+        _relevant_row("edgar:2", "sec-edgar", "compute-substrate"),
+        _relevant_row("edgar:5", "sec-edgar", "compute-substrate"),
+        _relevant_row("arxiv:3", "arxiv", "bio-mechanism"),
+        _relevant_row("edgar:4", "sec-edgar", "bio-mechanism"),
+    ]
+    llm = FakeLLM([json.dumps(_good_candidate())])
+    redis = FakeRedis()
+
+    await synthesis_pass(pool, llm, redis, max_proposals=1)  # type: ignore[arg-type]
+
+    logged = [args for sql, args in pool.conn.executed if sql == INSERT_CLUSTER_LOG_SQL]
+    outcomes = {args[2]: args[3] for args in logged}
+    assert outcomes == {
+        "compute-substrate": "synthesized",  # 2 source classes, 3 items: ranks first
+        "bio-mechanism": "deferred-max-proposals",
+    }
 
 
 # --- review page ---------------------------------------------------------------

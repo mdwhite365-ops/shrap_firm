@@ -7,6 +7,11 @@ judgment turn. Items are marked ``filtered_at`` either way; relevant ones
 carry the archetype key and reason in ``filter_result`` for the clustering
 step. An unparseable model response counts as not-relevant and is logged —
 the funnel's bias is to drop, never to invent.
+
+Every verdict is also appended to ``research.filter_verdict_history``,
+stamped with the prompt version (KI-007): a re-filter overwrites the item's
+current ``filter_result`` but never the history, so cross-prompt-version
+comparisons stay queryable after the fact.
 """
 
 from __future__ import annotations
@@ -96,6 +101,13 @@ SET filtered_at = $2, filter_result = $3::jsonb
 WHERE item_id = $1
 """.strip()
 
+INSERT_VERDICT_HISTORY_SQL = """
+INSERT INTO research.filter_verdict_history (
+    item_id, prompt_version, relevant, archetype, reason, model, decided_at
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+""".strip()
+
 
 class AsyncConnection(Protocol):
     async def execute(self, sql: str, *args: object) -> object: ...
@@ -180,11 +192,25 @@ async def filter_pass(
             think=False,
         )
         verdict = parse_filter_response(item.item_id, result.content)
+        decided_at = datetime.now(UTC)
         async with pool.acquire() as conn:
+            # History row first (KI-007): a crash between the two leaves the
+            # item unfiltered — it gets re-scored, and the extra history row
+            # is harmless. The reverse order would lose the verdict.
+            await conn.execute(
+                INSERT_VERDICT_HISTORY_SQL,
+                item.item_id,
+                FILTER_PROMPT_VERSION,
+                verdict.relevant,
+                verdict.archetype,
+                verdict.reason,
+                result.model,
+                decided_at,
+            )
             await conn.execute(
                 MARK_FILTERED_SQL,
                 item.item_id,
-                datetime.now(UTC),
+                decided_at,
                 json.dumps(
                     {
                         "relevant": verdict.relevant,
