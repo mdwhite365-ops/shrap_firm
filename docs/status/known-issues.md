@@ -50,7 +50,9 @@ One residual, tracked in `current-sprint.md` open work: retry-backoff for system
 
 ## KI-007 — Pre-synthesis funnel rejections leave no persistent trace
 
-**Status:** Open. Found 2026-07-18 during the v2 re-filter audit.
+**Status:** Fix shipped 2026-07-19 (append-only `research.filter_verdict_history`
++ per-pass `research.tech_watcher_cluster_log`); pending Dell deploy and first
+live-batch verification. Found 2026-07-18 during the v2 re-filter audit.
 
 The Tech Watcher's rejection graveyard (`research.world_changers`, status
 `rejected`) only records candidates that reach synthesis. A cluster killed
@@ -65,7 +67,12 @@ v1 item could not be identified to audit whether v2 rejected it on principle
 re-filter comparison existed for. This violates "the denominator is never
 hidden" and principle 8 (audit everything).
 
-**Mitigation (candidate card):** persist cluster-stage rejections as
-graveyard rows before synthesis, and retain filter verdict history per
-prompt version (append, don't overwrite) so re-filter comparisons are
-queryable after the fact.
+**Mitigation (shipped 2026-07-19):** every filter verdict appends a row to
+`research.filter_verdict_history` stamped with prompt version and model —
+re-filters overwrite the item's current `filter_result` but never the
+history. Every cluster the triangulation stage considers writes a
+disposition row (`synthesized` / `deferred-max-proposals` /
+`held-single-source`) with its item ids to
+`research.tech_watcher_cluster_log` before any synthesis LLM call, so a
+hold or a mid-batch crash still leaves a queryable trace. The next
+re-filter comparison can name its borderline items instead of losing them.

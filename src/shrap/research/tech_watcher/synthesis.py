@@ -5,7 +5,9 @@ Pipeline over relevant, not-yet-synthesized items:
 1. **Cluster** — v0 clusters by archetype key from the filter verdict.
    Coarse but deterministic; LLM topic/entity clustering is a later
    refinement recorded in the spec.
-2. **Triangulate** — a cluster is promotable only with >=2 independent
+2. **Triangulate** — every cluster's disposition is logged per pass to
+   ``research.tech_watcher_cluster_log`` (KI-007 — pre-synthesis holds
+   used to leave no trace). A cluster is promotable only with >=2 independent
    source classes (the spec's primary defense against marketing-driven
    false positives). Single-source clusters stay unsynthesized and wait:
    they re-enter every batch until a second source class corroborates or
@@ -264,6 +266,25 @@ async def synthesis_pass(
     promotable = [c for c in clusters if c.promotable]
     promotable.sort(key=lambda c: (len(c.source_classes), len(c.items)), reverse=True)
     to_synthesize = promotable[:max_proposals]
+
+    # KI-007: log every cluster's disposition before any LLM call, so a
+    # triangulation hold or a crash mid-batch still leaves a queryable trace.
+    synthesized_archetypes = {c.archetype for c in to_synthesize}
+    for cluster in clusters:
+        if cluster.archetype in synthesized_archetypes:
+            outcome = "synthesized"
+        elif cluster.promotable:
+            outcome = "deferred-max-proposals"
+        else:
+            outcome = "held-single-source"
+        await store.record_cluster(
+            batch_id=batch_id,
+            ran_at=ran_at,
+            archetype=cluster.archetype,
+            outcome=outcome,
+            source_classes=list(cluster.source_classes),
+            item_ids=[i.item_id for i in cluster.items],
+        )
 
     proposed = 0
     rejected = 0
