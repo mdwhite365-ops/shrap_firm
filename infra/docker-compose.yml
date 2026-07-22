@@ -644,3 +644,47 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # News Analyzer - Intelligence Department news feed. Pulls the Alpaca news
+  # API (data host, IEX/Benzinga) for the Tier 3 names, materiality-scores
+  # each item on the local LLM tier (escalating material items), and
+  # publishes intelligence.signal events. Cadence follows the market phase
+  # (operations.market-phase). Both LLM tiers env-route to Ollama in the seed
+  # (Mike's local-only ruling 2026-07-15) — deployment routing, not a
+  # registry change (docs/infrastructure/llm-registry.md).
+  # -------------------------------------------------------------------------
+  news-analyzer:
+    build:
+      context: ../
+      dockerfile: infra/news-analyzer.Dockerfile
+    container_name: shrap_news_analyzer
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NEWS_ANALYZER_REDIS_URL: "redis://redis:6379/0"
+      NEWS_ANALYZER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      NEWS_ANALYZER_ALPACA_API_KEY: "${ALPACA_API_KEY}"
+      NEWS_ANALYZER_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      NEWS_ANALYZER_SYMBOLS: "${NEWS_ANALYZER_SYMBOLS:-SPY,QQQ,IWM,HYG,TLT,AAPL,NVDA,TSLA,LMT}"
+      NEWS_ANALYZER_ESCALATION_THRESHOLD: "2"
+      NEWS_ANALYZER_PUBLISH_THRESHOLD: "1"
+      NEWS_ANALYZER_ACTIVE_INTERVAL_SECONDS: "600"
+      NEWS_ANALYZER_IDLE_INTERVAL_SECONDS: "3600"
+      NEWS_ANALYZER_LOG_LEVEL: "INFO"
+      # Local-only LLM routing (Mike's ruling 2026-07-15): both tiers this
+      # agent uses are env-routed to the Dell's Ollama. Deployment routing,
+      # not a registry change — see docs/infrastructure/llm-registry.md.
+      SHRAP_LLM_OLLAMA_URL: "http://ollama:11434"
+      SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "qwen3.5:9b-q4_K_M"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - shrap_net

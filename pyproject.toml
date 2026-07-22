@@ -38,6 +38,7 @@ decision-maker = ["pydantic-settings>=2.4"]
 strategy-fixture = ["pydantic-settings>=2.4"]
 strategy-librarian = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 tech-watcher = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
+news-analyzer = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 market-phase = ["pydantic-settings>=2.4", "pandas-market-calendars>=4.4"]
 spine-smoke = ["asyncpg>=0.29"]
 
@@ -55,6 +56,7 @@ shrap-strategy-fixture = "shrap.agents.research.strategy_fixture.__main__:main"
 shrap-strategy-librarian = "shrap.agents.research.strategy_librarian.__main__:main"
 shrap-tech-watcher = "shrap.agents.research.tech_watcher.__main__:main"
 shrap-tech-watcher-review = "shrap.research.tech_watcher.review:main"
+shrap-news-analyzer = "shrap.agents.intelligence.news_analyzer.__main__:main"
 shrap-market-phase = "shrap.agents.operations.market_phase.__main__:main"
 shrap-tech-watcher-promote = "shrap.research.tech_watcher.promotion:main"
 
