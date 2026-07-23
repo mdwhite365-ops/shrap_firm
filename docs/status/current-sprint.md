@@ -96,9 +96,13 @@ Filing Processor backfill CLI (#71). Full list in `recent-changes.md`.
 
 ## Open work
 
-- **Monday 2026-07-20 open:** the after-hours smoke order (2026-07-17
-  16:59 ET) fills; confirm `execution.order.filled` + clean
-  reconciliation to certify the rebuilt stack end to end.
+- **2026-07-20 smoke fill: confirmed.** The after-hours smoke order
+  (2026-07-17 16:59 ET) filled at the open — SPY x1 @ 747.85, order
+  `6573fb37`, 13:33:07Z, full correlation chain intact, three minutes
+  after market-phase published `open`. Residual: the nightly
+  reconciliation verdict for that session was never captured in these
+  docs — pull `operations.reconciliation-completed` once and record
+  `clean=True` to formally close the rebuilt-stack certification.
 - **v2 re-filter ran 2026-07-18: 0/246 kept.** The five v1 false positives
   are gone, but the v1 borderline-real item was also rejected and cannot be
   identified for a false-negative audit (KI-007 — fixed in PR #60; that
@@ -115,15 +119,14 @@ Filing Processor backfill CLI (#71). Full list in `recent-changes.md`.
   Alpaca every ~10s all night).
 - **Regime threshold watch:** v0.1 calibration is single-day evidence. A
   historical feature backfill would earn the thresholds.
-- **Dell rebuild pending (one session covers everything merged today):**
-  `tech-watcher` rebuild picks up the Federal Register source (#59), the
-  KI-007 audit tables (#60, created by `ensure_schema` on boot), and the
-  taxonomy triangulation rule (#63); `market-phase` (#56) comes up new.
-  Then: confirm the market-phase startup event, watch the first real
-  transitions Monday, and certify across the next full weekend
-  (`closed-day` Sat/Sun, `pre-open` Monday 04:00 ET). Note the taxonomy
-  rule makes promotion strictly harder — if the funnel goes quiet, the
-  cluster log shows what it is holding and why.
+- **#56–63 Dell rebuild: done 2026-07-19/20** (initial `up -d --build`
+  left tech-watcher on the old image — `--force-recreate` required and
+  now standard). Verified live 2026-07-20: market-phase published the
+  real `open` 279 ms after the 13:30:00Z boundary, and the rebuilt
+  tech-watcher fetched the Federal Register (200 OK) with
+  `fed_register_agencies` loaded. The taxonomy rule makes promotion
+  strictly harder — if the funnel goes quiet, the cluster log shows
+  what it is holding and why.
 - **Market-phase consumers** (regime sync skip, overnight research
   conductor, briefing) come in later cards; the News Analyzer service (#65)
   and Filing Processor service (#68) are the first deployed consumers.
