@@ -1,6 +1,6 @@
 # Current sprint status
 
-**Last updated:** 2026-07-19 (late night)
+**Last updated:** 2026-07-23 (afternoon)
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
@@ -21,14 +21,51 @@ universe, Market Phase Scheduler), the regulator leg (Federal Register
 API — nrc.gov RSS proved Akamai bot-blocked, verified before building),
 the KI-007 auditability fix, the source-class independence taxonomy
 (spec, then same-day enforcement in the triangulation rule), and the
-News Analyzer spec. The funnel now triangulates on originating
-institutions, not feed names, and every pre-synthesis decision leaves a
-queryable trace. Next: News Analyzer service card (spec + Alpaca vendor
-accepted by merge), then the Filing Processor spec.
+News Analyzer spec.
+
+**The 2026-07-22/23 session landed seven more PRs (#65–71): the
+Intelligence Department's Month 2 seeds are both live, and the ADR-0012
+follow-ups from 2026-07-19 are closed out.** News Analyzer service (PR
+#65) publishes materiality-scored signals on `intelligence.signal` —
+local scoring (`local-classification`) with cloud escalation
+(`cloud-default`) for material items, market-phase-driven cadence,
+append-only verdict history (KI-007) — running today on a placeholder
+nine-symbol set (the Regime Classifier's default) pending Tier 3 state.
+Filing Processor spec and service (PR #66, #68) do the same for Tier 3
+8-Ks: full-text fetch from EDGAR, per-item-code materiality scoring,
+`signal_type: "filing"`, a placeholder AAPL/NVDA/TSLA/LMT roster keyed
+by CIK, and a new shared `src/shrap/intelligence/market_phase.py`
+module that the News Analyzer now imports too — its container needs
+recreating at the next deploy. The universe README was restructured
+around the ADR-0012 tiers (PR #67 — the 50-name list is now framed as
+the Tier 3 launch proposal; DQ-004 lock-in still open), and the
+Universe Curator spec was rewritten from derived-only consumer to Tier
+2/3 owner + transition-event publisher (PR #69 — accepted by merge:
+`research.universe_tiers` as the Tier 3 store, events-as-history via
+the Audit Logger, no auto-add path, eviction lands back in Discovery;
+open question on record: only 6 of the 50 launch names have behavioral
+profiles, grandfather-or-gate ruling pending). The Pre-Trade Checker
+gained its Tier 3 membership check (PR #70) — flag-gated on
+`PRE_TRADE_CHECKER_TIER3_ENFORCEMENT` (default false), fail-closed
+(`TIER3_STATE_UNAVAILABLE` on any query failure, never cached), the
+tier literal `'active'` pinned for the Curator's first implementation
+card to match, gated ahead of the rate guardrails, and the checker
+gained an asyncpg pool + DSN. **Do not flip the Tier 3 enforcement flag**
+until the Curator's launch-list load populates `research.universe_tiers`
+— flipping now vetoes every order, including the smoke. The Filing
+Processor backfill CLI (PR #71) followed:
+`shrap-filing-processor-backfill`, docker-exec pattern on the
+`shrap-tech-watcher-promote` precedent, `--rescore` appends new
+verdict-history rows rather than overwriting (KI-007). Process note: all
+seven cards were built by delegated Opus/Sonnet subagents, with the
+orchestrator reviewing, gating, and opening PRs — Mike's 2026-07-22 cost
+policy. Next: the Dell deploy session for #65/#68/#70, then the
+Universe Curator service card once DQ-004 and the profile-coverage
+ruling land.
 
 ## Main branch state
 
-Merged on `main` through PR #63. Highlights since the spine-close status:
+Merged on `main` through PR #71. Highlights since the spine-close status:
 consumer groups (#37), strategy registry + state machine (#38), Strategy
 Librarian service (#40), Evaluator ruling — Framework #1 first, in-house
 walk-forward engine (#41), LLM tier client (#42), registry seed correction +
@@ -37,7 +74,10 @@ ingest + synthesis + filter prompt v2 (#47–49), reorder ruling + gov
 sources + promotion workflow (#52–54), Market Phase Scheduler (#56),
 ADR-0012 tiered universe (#57), Federal Register regulator leg (#59),
 KI-007 audit trails (#60), source-class taxonomy spec + enforcement
-(#61, #63), News Analyzer spec (#62). Full list in `recent-changes.md`.
+(#61, #63), News Analyzer spec + service (#62, #65), Filing Processor spec
++ service (#66, #68), universe README tier restructure (#67), Universe
+Curator spec rewrite (#69), Pre-Trade Tier 3 membership check (#70),
+Filing Processor backfill CLI (#71). Full list in `recent-changes.md`.
 
 ## Spine verification record
 
@@ -56,9 +96,13 @@ KI-007 audit trails (#60), source-class taxonomy spec + enforcement
 
 ## Open work
 
-- **Monday 2026-07-20 open:** the after-hours smoke order (2026-07-17
-  16:59 ET) fills; confirm `execution.order.filled` + clean
-  reconciliation to certify the rebuilt stack end to end.
+- **2026-07-20 smoke fill: confirmed.** The after-hours smoke order
+  (2026-07-17 16:59 ET) filled at the open — SPY x1 @ 747.85, order
+  `6573fb37`, 13:33:07Z, full correlation chain intact, three minutes
+  after market-phase published `open`. Residual: the nightly
+  reconciliation verdict for that session was never captured in these
+  docs — pull `operations.reconciliation-completed` once and record
+  `clean=True` to formally close the rebuilt-stack certification.
 - **v2 re-filter ran 2026-07-18: 0/246 kept.** The five v1 false positives
   are gone, but the v1 borderline-real item was also rejected and cannot be
   identified for a false-negative audit (KI-007 — fixed in PR #60; that
@@ -75,24 +119,31 @@ KI-007 audit trails (#60), source-class taxonomy spec + enforcement
   Alpaca every ~10s all night).
 - **Regime threshold watch:** v0.1 calibration is single-day evidence. A
   historical feature backfill would earn the thresholds.
-- **Dell rebuild pending (one session covers everything merged today):**
-  `tech-watcher` rebuild picks up the Federal Register source (#59), the
-  KI-007 audit tables (#60, created by `ensure_schema` on boot), and the
-  taxonomy triangulation rule (#63); `market-phase` (#56) comes up new.
-  Then: confirm the market-phase startup event, watch the first real
-  transitions Monday, and certify across the next full weekend
-  (`closed-day` Sat/Sun, `pre-open` Monday 04:00 ET). Note the taxonomy
-  rule makes promotion strictly harder — if the funnel goes quiet, the
-  cluster log shows what it is holding and why.
+- **#56–63 Dell rebuild: done 2026-07-19/20** (initial `up -d --build`
+  left tech-watcher on the old image — `--force-recreate` required and
+  now standard). Verified live 2026-07-20: market-phase published the
+  real `open` 279 ms after the 13:30:00Z boundary, and the rebuilt
+  tech-watcher fetched the Federal Register (200 OK) with
+  `fed_register_agencies` loaded. The taxonomy rule makes promotion
+  strictly harder — if the funnel goes quiet, the cluster log shows
+  what it is holding and why.
 - **Market-phase consumers** (regime sync skip, overnight research
-  conductor, briefing) come in later cards; the News Analyzer spec (#62)
-  is the first committed consumer.
-- **ADR-0012 follow-ups (accepted 2026-07-19, unscheduled):** restructure
-  `docs/universe/README.md` around the three tiers (the 50-name list
-  becomes the Tier 3 launch proposal, still awaiting DQ-004 lock-in);
-  update the Universe Curator spec from derived-only consumer to Tier 2/3
-  owner + transition-event publisher; Pre-Trade Checker Tier 3 membership
-  check card (needs a Tier 3 data source decision).
+  conductor, briefing) come in later cards; the News Analyzer service (#65)
+  and Filing Processor service (#68) are the first deployed consumers.
+- **Dell deploy pending (one session, #65–71):** force-recreate
+  `filing-processor` (new service), `pre-trade-checker` (picks up the
+  asyncpg pool), and `news-analyzer` (picks up the shared `market_phase`
+  import) — the Tier 3 enforcement flag stays off regardless.
+- **Market-phase weekend certification due 2026-07-25/26:** the service
+  deployed 2026-07-19 has already shown it survives a restart; the
+  `closed-day` Sat/Sun + `pre-open` Monday cycle is the remaining
+  certification step.
+- **Blocked on Mike:** DQ-004 lock-in and the 6-of-50 profile-coverage
+  ruling (Universe Curator spec, open questions) gate the Curator's first
+  implementation card (`research.universe_tiers` +
+  `research.universe_staging` stores, the four transition events, the
+  Mike approval CLI, and the launch-list load) — which in turn is what
+  allows flipping `PRE_TRADE_CHECKER_TIER3_ENFORCEMENT`.
 
 ## Local credentials policy
 

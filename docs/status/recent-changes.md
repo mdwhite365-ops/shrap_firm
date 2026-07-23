@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-19 (late night)
+**Last updated:** 2026-07-23 (afternoon)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -109,18 +109,61 @@
   payloads, new `Cluster.promotable` predicate, unmapped origins never
   count. DOE press + DOE award can no longer fake triangulation
   (regression-tested).
+- PR #65 — News Analyzer service: materiality-scored signals on
+  `intelligence.signal`, local scoring (`local-classification`) with
+  cloud escalation (`cloud-default`) for material items, market-phase-
+  driven cadence, append-only `intelligence.news_verdict_history`
+  (KI-007), placeholder nine-symbol set (SPY/QQQ/IWM/HYG/TLT/AAPL/NVDA/
+  TSLA/LMT — the Regime Classifier's default) pending Tier 3 state.
+- PR #66 — Filing Processor spec (Intelligence Month 2 seed #2): Tier 3
+  8-K full-text fetch from EDGAR, per-item-code materiality scoring with
+  item-code priors, `signal_type: "filing"`.
+- PR #67 — Universe README restructured around ADR-0012's three tiers;
+  the 50-name list reframed as the Tier 3 launch proposal, still
+  awaiting DQ-004 lock-in.
+- PR #68 — Filing Processor service: implements the #66 spec against a
+  placeholder AAPL/NVDA/TSLA/LMT roster (CIK-keyed); introduced the
+  shared `src/shrap/intelligence/market_phase.py` helpers, which the
+  News Analyzer now imports too (its container needs recreating at the
+  next deploy).
+- PR #69 — Universe Curator spec rewritten from derived-only consumer to
+  Tier 2/3 owner + transition-event publisher (ADR-0012). Accepted by
+  merge: `research.universe_tiers` as the Tier 3 store, events-as-history
+  via the Audit Logger, no auto-add path, eviction lands back in
+  Discovery. Open question on record: only 6 of the 50 launch names have
+  behavioral profiles — grandfather-or-gate ruling pending.
+- PR #70 — Pre-Trade Checker Tier 3 membership check (ADR-0012):
+  flag-gated on `PRE_TRADE_CHECKER_TIER3_ENFORCEMENT` (default false),
+  fail-closed (`TIER3_STATE_UNAVAILABLE` on any query failure, never
+  cached), tier literal `'active'` pinned for the Curator's first
+  implementation card to match, gated ahead of the rate guardrails. The
+  checker gained an asyncpg pool + DSN setting. **Do not flip the flag**
+  until the Curator's launch-list load populates
+  `research.universe_tiers` — flipping now vetoes every order, including
+  the smoke.
+- PR #71 — Filing Processor backfill CLI (deferred from #68):
+  `shrap-filing-processor-backfill`, docker-exec pattern on the
+  `shrap-tech-watcher-promote` precedent; `--rescore` appends new
+  verdict-history rows rather than overwriting (KI-007).
 
 ## Open
 
-- Next cards: **News Analyzer service** (spec #62 accepted — Alpaca
-  vendor, Tier 3 names, market-phase cadence), **Filing Processor spec**
-  (Intelligence Month 2 seed #2), then Infrastructure Mapper. The
-  taxonomy code card (#63) closed the regulator-leg + taxonomy items
-  from the 2026-07-18 ruling order.
-- Dell is current through PR #54 (rebuilt 2026-07-18 night). PRs #56–63
-  await one rebuild session: tech-watcher (FR source, KI-007 tables,
-  taxonomy rule) + market-phase (new service). Command block in the
-  session notes; expect the funnel to promote more strictly after.
+- Next cards: the **Universe Curator service card** (first
+  implementation: `research.universe_tiers` + `research.universe_staging`
+  stores, the four transition events, the Mike approval CLI, and the
+  launch-list load) is blocked on Mike — DQ-004 lock-in and the 6-of-50
+  profile-coverage ruling (Universe Curator spec, open questions) both
+  gate it, and it in turn gates flipping
+  `PRE_TRADE_CHECKER_TIER3_ENFORCEMENT`. Infrastructure Mapper is next in
+  the prior queue behind it.
+- Dell rebuild: the #56–63 session (tech-watcher FR source/KI-007
+  tables/taxonomy rule + market-phase new service) deployed 2026-07-19;
+  market-phase has already shown it survives a restart, and weekend
+  certification (`closed-day` Sat/Sun, `pre-open` Monday) is due
+  2026-07-25/26. A new session is now pending for #65–71: force-recreate
+  `filing-processor` (new), `pre-trade-checker` (asyncpg pool), and
+  `news-analyzer` (picks up the shared `market_phase` import) — one
+  session; the Tier 3 enforcement flag stays off regardless.
 
 ## Funnel candidate log
 
