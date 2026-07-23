@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
+from shrap.intelligence.filing_processor.client import item_id_from_accession
 from shrap.intelligence.filing_processor.scorer import FilingVerdict
 
 CREATE_INTELLIGENCE_SCHEMA_SQL = "CREATE SCHEMA IF NOT EXISTS intelligence"
@@ -102,6 +103,21 @@ ORDER BY fetched_at
 LIMIT $2
 """.strip()
 
+# Backfill CLI: explicit accession list / filing-date range instead of the
+# cursor. Same read-only table, same source/kind filter.
+SELECT_CANDIDATES_BY_ACCESSION_SQL = """
+SELECT item_id, title, url, external_ts, fetched_at
+FROM research.raw_source_items
+WHERE source = 'sec-edgar' AND kind = '8-K' AND item_id = ANY($1)
+""".strip()
+
+SELECT_CANDIDATES_BY_DATE_RANGE_SQL = """
+SELECT item_id, title, url, external_ts, fetched_at
+FROM research.raw_source_items
+WHERE source = 'sec-edgar' AND kind = '8-K' AND external_ts >= $1 AND external_ts < $2
+ORDER BY external_ts
+""".strip()
+
 SELECT_FILING_CURSOR_SQL = """
 SELECT last_fetched_at FROM intelligence.filing_cursor WHERE feed = $1
 """.strip()
@@ -134,6 +150,22 @@ ORDER BY discovered_at
 LIMIT $1
 """.strip()
 
+# Backfill CLI: pending-fetch filings scoped to an explicit accession list.
+SELECT_PENDING_FETCH_BY_ACCESSION_SQL = """
+SELECT accession, cik, symbol, filing_url
+FROM intelligence.filings
+WHERE fetched_at IS NULL AND accession = ANY($1)
+ORDER BY discovered_at
+LIMIT $2
+""".strip()
+
+# Backfill CLI: current fetch/score progress per accession (skip decision).
+SELECT_FILING_STATES_SQL = """
+SELECT accession, fetched_at, scored_at
+FROM intelligence.filings
+WHERE accession = ANY($1)
+""".strip()
+
 MARK_FILING_FETCHED_SQL = """
 UPDATE intelligence.filings
 SET full_text = $2, item_codes = $3::jsonb, fetched_at = $4
@@ -146,6 +178,16 @@ FROM intelligence.filings
 WHERE fetched_at IS NOT NULL AND scored_at IS NULL
 ORDER BY fetched_at
 LIMIT $1
+""".strip()
+
+# Backfill CLI: fetched filings scoped to an explicit accession list,
+# regardless of ``scored_at`` — the CLI has already decided, via --rescore,
+# which accessions belong in this set (store never re-derives the skip).
+SELECT_SCORABLE_BY_ACCESSION_SQL = """
+SELECT accession, symbol, title, company, filing_date, item_codes, full_text
+FROM intelligence.filings
+WHERE fetched_at IS NOT NULL AND accession = ANY($1)
+ORDER BY fetched_at
 """.strip()
 
 INSERT_FILING_VERDICT_HISTORY_SQL = """
@@ -231,6 +273,15 @@ class ScorableFiling:
     full_text: str
 
 
+@dataclass(frozen=True, slots=True)
+class FilingState:
+    """Current fetch/score progress for one accession (backfill skip decision)."""
+
+    accession: str
+    fetched_at: datetime | None
+    scored_at: datetime | None
+
+
 def _decode_str_list(value: object) -> tuple[str, ...]:
     if isinstance(value, str):
         try:
@@ -248,6 +299,46 @@ def _as_dt(value: object) -> datetime | None:
 
 def _as_str(value: object) -> str | None:
     return None if value is None else str(value)
+
+
+def _candidate_rows(rows: Sequence[Mapping[str, Any]]) -> list[CandidateRow]:
+    return [
+        CandidateRow(
+            item_id=str(row["item_id"]),
+            title=_as_str(row["title"]),
+            url=_as_str(row["url"]),
+            filing_date=_as_dt(row["external_ts"]),
+            fetched_at=_as_dt(row["fetched_at"]),
+        )
+        for row in rows
+    ]
+
+
+def _pending_fetch_rows(rows: Sequence[Mapping[str, Any]]) -> list[PendingFetch]:
+    return [
+        PendingFetch(
+            accession=str(row["accession"]),
+            cik=str(row["cik"]),
+            symbol=str(row["symbol"]),
+            filing_url=_as_str(row["filing_url"]),
+        )
+        for row in rows
+    ]
+
+
+def _scorable_filing_rows(rows: Sequence[Mapping[str, Any]]) -> list[ScorableFiling]:
+    return [
+        ScorableFiling(
+            accession=str(row["accession"]),
+            symbol=str(row["symbol"]),
+            title=_as_str(row["title"]),
+            company=_as_str(row["company"]),
+            filing_date=_as_dt(row["filing_date"]),
+            item_codes=_decode_str_list(row["item_codes"]),
+            full_text="" if row["full_text"] is None else str(row["full_text"]),
+        )
+        for row in rows
+    ]
 
 
 class PostgresFilingStore:
@@ -280,16 +371,26 @@ class PostgresFilingStore:
 
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(SELECT_CANDIDATE_FILINGS_SQL, since, limit)
-        return [
-            CandidateRow(
-                item_id=str(row["item_id"]),
-                title=_as_str(row["title"]),
-                url=_as_str(row["url"]),
-                filing_date=_as_dt(row["external_ts"]),
-                fetched_at=_as_dt(row["fetched_at"]),
-            )
-            for row in rows
-        ]
+        return _candidate_rows(rows)
+
+    async def select_candidates_by_accessions(
+        self, accessions: Sequence[str]
+    ) -> list[CandidateRow]:
+        """Read Tech Watcher 8-K rows for an explicit accession list (backfill)."""
+
+        item_ids = [item_id_from_accession(a) for a in accessions]
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_CANDIDATES_BY_ACCESSION_SQL, item_ids)
+        return _candidate_rows(rows)
+
+    async def select_candidates_by_date_range(
+        self, since: datetime, until: datetime
+    ) -> list[CandidateRow]:
+        """Read Tech Watcher 8-K rows filed in ``[since, until)`` (backfill)."""
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_CANDIDATES_BY_DATE_RANGE_SQL, since, until)
+        return _candidate_rows(rows)
 
     async def record_and_advance(
         self,
@@ -332,15 +433,32 @@ class PostgresFilingStore:
     async def select_pending_fetch(self, limit: int) -> list[PendingFetch]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(SELECT_PENDING_FETCH_SQL, limit)
-        return [
-            PendingFetch(
+        return _pending_fetch_rows(rows)
+
+    async def select_pending_fetch_by_accession(
+        self, accessions: Sequence[str], limit: int
+    ) -> list[PendingFetch]:
+        """Pending-fetch filings scoped to an explicit accession list (backfill)."""
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_PENDING_FETCH_BY_ACCESSION_SQL, list(accessions), limit)
+        return _pending_fetch_rows(rows)
+
+    async def select_filing_states(self, accessions: Sequence[str]) -> dict[str, FilingState]:
+        """Current fetch/score progress per accession (backfill skip decision)."""
+
+        if not accessions:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_FILING_STATES_SQL, list(accessions))
+        return {
+            str(row["accession"]): FilingState(
                 accession=str(row["accession"]),
-                cik=str(row["cik"]),
-                symbol=str(row["symbol"]),
-                filing_url=_as_str(row["filing_url"]),
+                fetched_at=_as_dt(row["fetched_at"]),
+                scored_at=_as_dt(row["scored_at"]),
             )
             for row in rows
-        ]
+        }
 
     async def mark_fetched(
         self,
@@ -361,18 +479,15 @@ class PostgresFilingStore:
     async def select_unscored(self, limit: int) -> list[ScorableFiling]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(SELECT_UNSCORED_FILINGS_SQL, limit)
-        return [
-            ScorableFiling(
-                accession=str(row["accession"]),
-                symbol=str(row["symbol"]),
-                title=_as_str(row["title"]),
-                company=_as_str(row["company"]),
-                filing_date=_as_dt(row["filing_date"]),
-                item_codes=_decode_str_list(row["item_codes"]),
-                full_text="" if row["full_text"] is None else str(row["full_text"]),
-            )
-            for row in rows
-        ]
+        return _scorable_filing_rows(rows)
+
+    async def select_scorable_by_accession(self, accessions: Sequence[str]) -> list[ScorableFiling]:
+        """Fetched filings scoped to an explicit accession list, regardless of
+        ``scored_at`` (backfill CLI; see :data:`SELECT_SCORABLE_BY_ACCESSION_SQL`)."""
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_SCORABLE_BY_ACCESSION_SQL, list(accessions))
+        return _scorable_filing_rows(rows)
 
     async def append_verdict(
         self,
@@ -418,11 +533,17 @@ __all__ = [
     "INSERT_FILING_VERDICT_HISTORY_SQL",
     "MARK_FILING_FETCHED_SQL",
     "MARK_FILING_SCORED_SQL",
+    "SELECT_CANDIDATES_BY_ACCESSION_SQL",
+    "SELECT_CANDIDATES_BY_DATE_RANGE_SQL",
     "SELECT_CANDIDATE_FILINGS_SQL",
+    "SELECT_FILING_STATES_SQL",
+    "SELECT_PENDING_FETCH_BY_ACCESSION_SQL",
     "SELECT_PENDING_FETCH_SQL",
+    "SELECT_SCORABLE_BY_ACCESSION_SQL",
     "SELECT_UNSCORED_FILINGS_SQL",
     "UPSERT_FILING_CURSOR_SQL",
     "CandidateRow",
+    "FilingState",
     "PendingFetch",
     "PendingFiling",
     "PostgresFilingStore",
