@@ -15,11 +15,13 @@ from typing import Any, Protocol, cast
 import structlog
 from redis.asyncio import Redis
 
+from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher, PublishedEvent, ReceivedEvent
 from shrap.events.groups import GroupEventSubscriber, RedisGroupClient
 from shrap.risk_compliance.pre_trade import PreTradeChecker, RiskPolicy
 from shrap.risk_compliance.rate_limit import RateLimitConfig, RateLimitRedis, RedisRateLimiter
+from shrap.risk_compliance.tier3_membership import Tier3MembershipGate
 
 log = structlog.get_logger(__name__)
 
@@ -85,32 +87,55 @@ def build_risk_decision_payload(event: ReceivedEvent, policy: RiskPolicy) -> dic
     return payload
 
 
+def _downgrade_to_veto(decision_payload: dict[str, Any], reason_code: str, note: str) -> None:
+    """Flip an already-approved decision to a veto with ``reason_code``.
+
+    Shared by the stateful gates (Tier 3 membership, rate guardrails) that run
+    after the pure policy check and can only ever tighten an approval.
+    """
+
+    decision_payload["approved"] = False
+    decision_payload["reason_code"] = reason_code
+    decision_payload["reason"] = reason_code
+    decision_payload["approved_quantity"] = 0
+    decision_payload.pop("approved_intent_payload", None)
+    reasons = decision_payload.get("reasons")
+    if isinstance(reasons, list):
+        reasons.append(note)
+
+
 async def process_intent_event(
     redis: RedisStreamClient,
     event: ReceivedEvent,
     policy: RiskPolicy,
     produced_by: str = PRODUCED_BY,
     rate_limiter: RedisRateLimiter | None = None,
+    tier3_gate: Tier3MembershipGate | None = None,
 ) -> PublishedEvent:
-    """Run the pure pre-trade check (plus rate guardrails) and publish the result.
+    """Run the pure pre-trade check (plus stateful gates) and publish the result.
 
-    Rate limits apply after the deterministic policy check and only to
-    already-approved intents: an intent the policy would veto never consumes
-    a rate slot.
+    The stateful gates apply after the deterministic policy check and only to
+    already-approved intents: an intent the policy would veto never consults
+    Tier 3 state or consumes a rate slot. Tier 3 membership is checked before
+    the rate guardrail so a non-tradeable ticker never claims a rate slot.
     """
 
     decision_payload = build_risk_decision_payload(event, policy)
+    if decision_payload["approved"] and tier3_gate is not None:
+        ticker = str(decision_payload.get("ticker", ""))
+        tier3_veto = await tier3_gate.check(ticker)
+        if tier3_veto is not None:
+            _downgrade_to_veto(decision_payload, tier3_veto, f"tier-3 gate: {tier3_veto}")
+            log.warning(
+                "pre_trade_checker.tier3_vetoed",
+                intent_event_id=event.envelope.event_id,
+                ticker=ticker,
+                reason=tier3_veto,
+            )
     if decision_payload["approved"] and rate_limiter is not None:
         rate_veto = await rate_limiter.acquire(str(decision_payload.get("ticker", "")))
         if rate_veto is not None:
-            decision_payload["approved"] = False
-            decision_payload["reason_code"] = rate_veto
-            decision_payload["reason"] = rate_veto
-            decision_payload["approved_quantity"] = 0
-            decision_payload.pop("approved_intent_payload", None)
-            reasons = decision_payload.get("reasons")
-            if isinstance(reasons, list):
-                reasons.append(f"rate guardrail: {rate_veto}")
+            _downgrade_to_veto(decision_payload, rate_veto, f"rate guardrail: {rate_veto}")
             log.warning(
                 "pre_trade_checker.rate_vetoed",
                 intent_event_id=event.envelope.event_id,
@@ -134,6 +159,7 @@ async def poll_once(
     count: int,
     block_ms: int,
     rate_limiter: RedisRateLimiter | None = None,
+    tier3_gate: Tier3MembershipGate | None = None,
     retry_delay_seconds: float = 0.0,
 ) -> int:
     """Read one batch of decision intents and publish risk decisions.
@@ -154,7 +180,9 @@ async def poll_once(
     processed = 0
     for event in events:
         try:
-            result = await process_intent_event(redis, event, policy, rate_limiter=rate_limiter)
+            result = await process_intent_event(
+                redis, event, policy, rate_limiter=rate_limiter, tier3_gate=tier3_gate
+            )
             await subscriber.ack(event)
             processed += 1
             log.info(
@@ -196,6 +224,7 @@ async def run_loop(
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
     rate_limiter: RedisRateLimiter | None = None,
+    tier3_gate: Tier3MembershipGate | None = None,
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
 ) -> None:
@@ -223,6 +252,7 @@ async def run_loop(
                 count=count,
                 block_ms=block_ms,
                 rate_limiter=rate_limiter,
+                tier3_gate=tier3_gate,
                 retry_delay_seconds=retry_delay_seconds,
             )
             if processed:
@@ -244,6 +274,9 @@ async def run(
     block_ms: int = 5000,
     retry_delay_seconds: float = 1.0,
     rate_limit_config: RateLimitConfig | None = None,
+    tier3_enforcement: bool = False,
+    postgres_dsn: str = "",
+    tier3_cache_ttl_seconds: float = 30.0,
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
 ) -> None:
@@ -258,6 +291,7 @@ async def run(
         block_ms=block_ms,
         group=group,
         consumer=consumer or group,
+        tier3_enforcement=tier3_enforcement,
         rate_limit=(
             {
                 "max_orders_per_day": rate_limit_config.max_orders_per_day,
@@ -279,6 +313,25 @@ async def run(
         if rate_limit_config
         else None
     )
+    # Tier 3 enforcement is opt-in (ADR-0012). When off, the rule is skipped
+    # entirely and no Postgres connection is opened — the permissive default is
+    # an explicit human choice, logged once here. When on, the gate fails closed
+    # on any Tier 3 state error (see tier3_membership.Tier3MembershipGate).
+    pool: Any = None
+    tier3_gate: Tier3MembershipGate | None = None
+    if tier3_enforcement:
+        log.info(
+            "pre_trade_checker.tier3_enforcement_on",
+            cache_ttl_seconds=tier3_cache_ttl_seconds,
+            note="rejecting any ticker not currently in Tier 3; unavailable state fails closed",
+        )
+        pool = await create_asyncpg_pool(postgres_dsn)
+        tier3_gate = Tier3MembershipGate(pool, ttl_seconds=tier3_cache_ttl_seconds)
+    else:
+        log.info(
+            "pre_trade_checker.tier3_enforcement_off",
+            note="Tier 3 membership filter disabled by config; no tier-membership vetoes",
+        )
     try:
         await run_loop(
             cast(RedisStreamClient, redis),
@@ -289,11 +342,14 @@ async def run(
             block_ms=block_ms,
             retry_delay_seconds=retry_delay_seconds,
             rate_limiter=rate_limiter,
+            tier3_gate=tier3_gate,
             group=group,
             consumer=consumer,
         )
     finally:
         await redis.aclose()
+        if pool is not None:
+            await pool.close()
         log.info("pre_trade_checker.stopped")
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import socket
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shrap.risk_compliance.pre_trade import RiskPolicy
@@ -13,6 +13,10 @@ from shrap.risk_compliance.rate_limit import RateLimitConfig
 
 _DEFAULT_REDIS_URL = "redis" + "://" + "redis" + ":6379/0"
 _DEFAULT_ALLOWED_UNIVERSE = "AAPL,NVDA,QQQ,SPY,TSLA,LMT"
+
+
+def _default_postgres_dsn() -> str:
+    return "postgresql://shrap:shrap@postgres:5432/shrap"
 
 
 class Settings(BaseSettings):
@@ -33,6 +37,14 @@ class Settings(BaseSettings):
     kill_switch_active: bool = False
     max_orders_per_day: int = 10
     symbol_cooldown_seconds: int = 300
+    # Tier 3 membership enforcement (ADR-0012). Default off: nothing populates
+    # research.universe_tiers until the Universe Curator's first card lands and
+    # DQ-004 locks the launch list — enforcing against an empty table would
+    # reject every order, including the live smoke path. Flipping this on is an
+    # explicit human decision; once on, unavailable tier state fails closed.
+    tier3_enforcement: bool = False
+    postgres_dsn: SecretStr = Field(default_factory=lambda: SecretStr(_default_postgres_dsn()))
+    tier3_cache_ttl_seconds: float = 30.0
     start_id: str = "0-0"
     count: int = 100
     block_ms: int = 5000
@@ -74,6 +86,11 @@ class Settings(BaseSettings):
             symbol_cooldown_seconds=self.symbol_cooldown_seconds,
         )
 
+    def postgres_dsn_value(self) -> str:
+        """Return the DB DSN for connection setup without exposing it in repr/logs."""
+
+        return self.postgres_dsn.get_secret_value()
+
     def redacted(self) -> dict[str, object]:
         """Return a log-safe settings snapshot."""
 
@@ -86,6 +103,9 @@ class Settings(BaseSettings):
             "kill_switch_active": self.kill_switch_active,
             "max_orders_per_day": self.max_orders_per_day,
             "symbol_cooldown_seconds": self.symbol_cooldown_seconds,
+            "tier3_enforcement": self.tier3_enforcement,
+            "postgres_dsn": "***",
+            "tier3_cache_ttl_seconds": self.tier3_cache_ttl_seconds,
             "start_id": self.start_id,
             "count": self.count,
             "block_ms": self.block_ms,
