@@ -59,6 +59,7 @@ shrap-tech-watcher = "shrap.agents.research.tech_watcher.__main__:main"
 shrap-tech-watcher-review = "shrap.research.tech_watcher.review:main"
 shrap-news-analyzer = "shrap.agents.intelligence.news_analyzer.__main__:main"
 shrap-filing-processor = "shrap.agents.intelligence.filing_processor.__main__:main"
+shrap-filing-processor-backfill = "shrap.agents.intelligence.filing_processor.backfill:main"
 shrap-market-phase = "shrap.agents.operations.market_phase.__main__:main"
 shrap-tech-watcher-promote = "shrap.research.tech_watcher.promotion:main"
 

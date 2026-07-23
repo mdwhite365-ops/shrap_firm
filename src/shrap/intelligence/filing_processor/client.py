@@ -109,6 +109,16 @@ def accession_from_item_id(item_id: str) -> str | None:
     return accession or None
 
 
+def item_id_from_accession(accession: str) -> str:
+    """Build the Tech Watcher ``edgar:`` item id for an accession number.
+
+    Inverse of :func:`accession_from_item_id`; used by the backfill CLI to look
+    up specific accessions in ``research.raw_source_items`` by their item id.
+    """
+
+    return f"{_ITEM_ID_PREFIX}{accession}"
+
+
 def parse_cik(url: str | None) -> str | None:
     """Resolve the registrant CIK from an EDGAR Archives index URL."""
 
@@ -221,6 +231,7 @@ __all__ = [
     "derive_headline",
     "extract_item_codes",
     "filing_txt_url",
+    "item_id_from_accession",
     "parse_cik",
     "parse_roster",
     "split_item_sections",

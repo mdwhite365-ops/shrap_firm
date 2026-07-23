@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
@@ -110,11 +111,19 @@ class FilingStore(Protocol):
 
     async def select_pending_fetch(self, limit: int) -> list[PendingFetch]: ...
 
+    async def select_pending_fetch_by_accession(
+        self, accessions: Sequence[str], limit: int
+    ) -> list[PendingFetch]: ...
+
     async def mark_fetched(
         self, accession: str, full_text: str, item_codes: list[str], fetched_at: datetime
     ) -> None: ...
 
     async def select_unscored(self, limit: int) -> list[ScorableFiling]: ...
+
+    async def select_scorable_by_accession(
+        self, accessions: Sequence[str]
+    ) -> list[ScorableFiling]: ...
 
     async def append_verdict(
         self,
@@ -213,6 +222,34 @@ def _verdict_row(verdict: FilingVerdict, model: str) -> dict[str, Any]:
     }
 
 
+def match_candidate(candidate: CandidateRow, roster: Tier3Roster) -> PendingFiling | None:
+    """Resolve one Tech Watcher candidate row to a Tier 3 pending filing, or ``None``.
+
+    Shared by the live poll pass and the backfill CLI
+    (:mod:`shrap.intelligence.filing_processor.backfill`) so Tier 3 CIK
+    resolution (spec Processing step 2) has exactly one implementation.
+    Non-matching items are dropped here — never upstream at ingest (ADR-0012).
+    """
+
+    accession = accession_from_item_id(candidate.item_id)
+    if accession is None:
+        return None
+    cik = parse_cik(candidate.url)
+    symbol = roster.ticker_for(cik)
+    if symbol is None:
+        return None  # not a Tier 3 name — dropped here, never upstream at ingest
+    return PendingFiling(
+        accession=accession,
+        cik=cik or "",
+        symbol=symbol,
+        title=candidate.title,
+        company=derive_company(candidate.title),
+        filing_url=candidate.url,
+        filing_date=candidate.filing_date,
+        payload={"item_id": candidate.item_id, "url": candidate.url},
+    )
+
+
 async def poll_pass(store: FilingStore, config: FilingRunConfig, now: datetime) -> PollCounts:
     """Discover Tier 3-matched 8-Ks and record them as pending filings.
 
@@ -228,24 +265,9 @@ async def poll_pass(store: FilingStore, config: FilingRunConfig, now: datetime) 
     for candidate in candidates:
         if candidate.fetched_at is not None and (max_ts is None or candidate.fetched_at > max_ts):
             max_ts = candidate.fetched_at
-        accession = accession_from_item_id(candidate.item_id)
-        if accession is None:
-            continue
-        symbol = config.roster.ticker_for(parse_cik(candidate.url))
-        if symbol is None:
-            continue  # not a Tier 3 name — dropped here, never upstream at ingest
-        pendings.append(
-            PendingFiling(
-                accession=accession,
-                cik=parse_cik(candidate.url) or "",
-                symbol=symbol,
-                title=candidate.title,
-                company=derive_company(candidate.title),
-                filing_url=candidate.url,
-                filing_date=candidate.filing_date,
-                payload={"item_id": candidate.item_id, "url": candidate.url},
-            )
-        )
+        pending = match_candidate(candidate, config.roster)
+        if pending is not None:
+            pendings.append(pending)
     recorded = await store.record_and_advance(config.feed, pendings, max_ts, len(candidates), now)
     return PollCounts(seen=len(candidates), matched=len(pendings), recorded=recorded)
 
@@ -255,15 +277,25 @@ async def fetch_pass(
     http: HTTPClient,
     store: FilingStore,
     config: FilingRunConfig,
+    *,
+    accessions: frozenset[str] | None = None,
 ) -> FetchCounts:
     """Fetch full text for pending filings and extract declared item codes.
 
     A 429/403 backs off — it stops the pass and retries next tick — rather than
     hammering EDGAR in-pass. Any other fetch failure leaves that filing pending
     for the next pass; nothing is lost.
+
+    ``accessions``, when given (the backfill CLI), scopes the pass to exactly
+    those already-recorded filings instead of the service's own
+    ``fetch_max_items``-bounded queue; the pending-fetch definition
+    (``fetched_at IS NULL``) and throttle are unchanged either way.
     """
 
-    pending = await store.select_pending_fetch(config.fetch_max_items)
+    if accessions is None:
+        pending = await store.select_pending_fetch(config.fetch_max_items)
+    else:
+        pending = await store.select_pending_fetch_by_accession(list(accessions), len(accessions))
     fetched = 0
     failed = 0
     for index, filing in enumerate(pending):
@@ -303,6 +335,8 @@ async def score_pass(
     llm: CompletionClient,
     publisher: Publisher,
     config: FilingRunConfig,
+    *,
+    accessions: frozenset[str] | None = None,
 ) -> ScoreCounts:
     """Score each fetched filing's item sections, escalate, and publish.
 
@@ -310,9 +344,17 @@ async def score_pass(
     scored (KI-007), so a crash mid-filing re-scores it rather than losing the
     verdict. An LLM failure propagates and stops the pass (systemic — likely
     Ollama down); the still-unscored filings resume next pass.
+
+    ``accessions``, when given (the backfill CLI), scopes the pass to exactly
+    those already-fetched filings regardless of ``scored_at`` — the backfill
+    CLI decides, via ``--rescore``, which accessions belong in that set; this
+    pass never re-derives the skip decision.
     """
 
-    filings = await store.select_unscored(config.score_max_items)
+    if accessions is None:
+        filings = await store.select_unscored(config.score_max_items)
+    else:
+        filings = await store.select_scorable_by_accession(list(accessions))
     filings_scored = 0
     items_scored = 0
     published = 0
@@ -551,6 +593,7 @@ __all__ = [
     "ScoreCounts",
     "build_signal_payload",
     "fetch_pass",
+    "match_candidate",
     "poll_pass",
     "run",
     "run_loop",
