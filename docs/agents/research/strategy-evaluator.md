@@ -85,11 +85,11 @@ Department, §Strategy lifecycle, §Promotion stages.
 | PostgreSQL: `market_data.*` | Query | Historical OHLCV (1m, 5m, daily), corporate actions, halts |
 | PostgreSQL: `intelligence.regime_history` | Query | Labeled regime windows for stratified reporting |
 | PostgreSQL: `research.world_changers` | Query | Current status of each world-changer anchor |
-| PostgreSQL: `research.bottlenecks` | Query | Current binding status of each bottleneck anchor |
+| PostgreSQL: `research.bottlenecks` | Query | Current binding status of each bottleneck anchor (deferred — Bottleneck Scout unbuilt, table has no rows; see Sprint scope 2026-07-23) |
 | Redis: queue `research.eval.queue` | Job pull | Pending evaluation, refit, and kill-review jobs |
 | Redis: `research.world-changer.thesis-broken` | Event | Triggers kill-review enqueue |
-| Redis: `research.bottleneck.no-longer-binding` | Event | Triggers kill-review enqueue |
-| Redis: `research.infra.graph.node-failed` | Event | Triggers kill-review enqueue |
+| Redis: `research.bottleneck.no-longer-binding` | Event | Triggers kill-review enqueue (deferred — emitter unbuilt; see Sprint scope 2026-07-23) |
+| Redis: `research.infra.graph.node-failed` | Event | Triggers kill-review enqueue (deferred — emitter unbuilt; see Sprint scope 2026-07-23) |
 | Repo: `docs/research/eval-protocol.md` | File read | Authoritative test protocol — versioned |
 
 ## Processing
@@ -271,6 +271,11 @@ with three job-type branches (evaluation, refit, kill-review).
    anchor-freshness gate (Processing step 2) is load-bearing under ADR-0007;
    evaluating unanchored strategies was rejected in favor of building the
    funnel top-down so anchors are real from the first evaluation.
+
+   > **Superseded 2026-07-23 (Mike's ruling) — see "Resequencing" below.**
+   > Item 1's sequencing constraint no longer holds. Item 2 (backtest
+   > engine) is unaffected and remains in force as written.
+
 2. **Backtest engine: in-house walk-forward** (numpy/pandas expanding-window
    over `market_data.*`), deterministic, no new dependencies. VectorBT PRO
    is re-scoped as a gated upgrade — the gate is evaluation volume or
@@ -279,12 +284,54 @@ with three job-type branches (evaluation, refit, kill-review).
    VectorBT PRO as the Evaluator engine are updated when the Evaluator
    implementation card lands.
 
+**Resequencing (Mike's ruling, 2026-07-23) — supersedes item 1 above:**
+
+Proceed to the Evaluator now, ahead of Infrastructure Mapper and Bottleneck
+Scout. Recorded honestly, the motivation is need, not impatience: the
+paper-trading spine is certified end-to-end but has no strategy source —
+the Strategy Fixture is disarmed — so the firm cannot demonstrate whether
+the funnel-to-paper path works or doesn't until a real strategy flows
+through evaluation to paper trading. The 2026-07-15 ruling's substance is
+also only partly overridden, not discarded: the funnel now exists and has
+produced the firm's first promoted world-changer anchor (mass-manufactured
+fission cost-curve crossing, promoted 2026-07-18), so anchor-freshness
+(Processing step 2) is checkable against real state for
+world-changer-anchored strategies — which is exactly what item 1 was
+protecting. It is not yet checkable for the bottleneck leg, because
+Bottleneck Scout is unbuilt and `research.bottlenecks` has no rows to
+check against. The adjusted first-card scope holds that line rather than
+faking it:
+
+- **Anchor-freshness gate wires to `research.world_changers` ONLY.** The
+  `research.bottlenecks` leg is deferred until the Bottleneck Scout
+  exists. Consequently the `bottleneck-rotation` archetype is **not
+  evaluable yet** — spec hygiene (Processing step 1) rejects it with an
+  explicit reason until that table exists. This is fail-closed, consistent
+  with the spec's bias.
+- **`research.infra.graph.node-failed` and
+  `research.bottleneck.no-longer-binding` kill-review triggers are
+  likewise deferred** — their emitters (Infrastructure Mapper, Bottleneck
+  Scout) don't exist yet. `research.world-changer.thesis-broken` is in
+  scope.
+- **First strategy proposals may be Mike-seeded.** The spec already lists
+  Mike as a proposal source (see Trigger); the Hypothesis Generator is not
+  a prerequisite for the first card.
+- **Data prerequisite:** a `market_data.daily_bars` historical store +
+  backfill card is in flight (branch `phase1/market-data-daily-store`) —
+  the Evaluator first card builds on it.
+
 Phase scope (relative to Framework #1 completion, not calendar months):
 
 - First card: Walk-forward + trade-count gate + realistic costs + verdict
   pipeline + promotion to paper. Anchor-freshness check wired to
   `research.world_changers` and `research.bottlenecks` tables (which exist
   by then).
+
+  > **Superseded 2026-07-23:** per the resequencing ruling above, the
+  > first card wires `research.world_changers` only. The
+  > `research.bottlenecks` leg, and any archetype or trigger that depends
+  > on it, is deferred until Bottleneck Scout exists.
+
 - Then: PBO, DSR, CPCV, regime-stratified reports. Kill-review pipeline
   consuming all three thesis-broken event types. Halt event wired to paper
   runner.
