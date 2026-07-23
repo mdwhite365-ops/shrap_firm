@@ -688,3 +688,50 @@ services:
         condition: service_started
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Filing Processor - Intelligence Department 8-K deep read. Polls the Tech
+  # Watcher's research.raw_source_items table for sec-edgar 8-K rows, resolves
+  # each to the Tier 3 roster by CIK, fetches full filing text from EDGAR
+  # Archives (descriptive SEC User-Agent, polite throttle), splits by declared
+  # 8-K item code, materiality-scores each item on the local LLM tier
+  # (escalating material items), and publishes intelligence.signal events.
+  # Reads the Tech Watcher's table but never writes it; own poll cursor.
+  # Cadence follows the market phase (operations.market-phase). Both LLM tiers
+  # env-route to Ollama in the seed (Mike's local-only ruling 2026-07-15).
+  # -------------------------------------------------------------------------
+  filing-processor:
+    build:
+      context: ../
+      dockerfile: infra/filing-processor.Dockerfile
+    container_name: shrap_filing_processor
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      FILING_PROCESSOR_REDIS_URL: "redis://redis:6379/0"
+      FILING_PROCESSOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      # Tier 3 roster, TICKER:CIK keyed by CIK (EDGAR resolution is CIK-based).
+      # Placeholder launch names until the Universe Curator owns Tier 3 state.
+      FILING_PROCESSOR_ROSTER: "${FILING_PROCESSOR_ROSTER:-AAPL:320193,NVDA:1045810,TSLA:1318605,LMT:936468}"
+      FILING_PROCESSOR_SEC_USER_AGENT: "${FILING_PROCESSOR_SEC_USER_AGENT:-shrap-firm/0.1 filing-processor (mdwhite365@gmail.com)}"
+      FILING_PROCESSOR_ESCALATION_THRESHOLD: "2"
+      FILING_PROCESSOR_PUBLISH_THRESHOLD: "1"
+      FILING_PROCESSOR_ACTIVE_INTERVAL_SECONDS: "600"
+      FILING_PROCESSOR_IDLE_INTERVAL_SECONDS: "3600"
+      FILING_PROCESSOR_LOG_LEVEL: "INFO"
+      # Local-only LLM routing (Mike's ruling 2026-07-15): both tiers this
+      # agent uses are env-routed to the Dell's Ollama. Deployment routing,
+      # not a registry change — see docs/infrastructure/llm-registry.md.
+      SHRAP_LLM_OLLAMA_URL: "http://ollama:11434"
+      SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "qwen3.5:9b-q4_K_M"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - shrap_net
