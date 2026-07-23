@@ -2,245 +2,342 @@
 
 **Department:** Research
 **LLM tier:** `local-classification` for rationale summarization and profile-staleness
-narrative generation only. All add/remove decision logic is deterministic — no
+narrative generation only. All tier-state decision logic is deterministic — no
 LLM is in the approval path. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
 **Status:** Draft
-**Date:** 2026-05-30
+**Date:** 2026-05-30 (rewritten for ADR-0012, 2026-07-23)
 **Author:** Mike White
-**Version:** 0.1 (draft)
+**Version:** 0.2 (draft)
+
+> **Honest status:** no Universe Curator service exists. Nothing in this spec
+> is deployed. This document describes the accepted model — ADR-0012's tier
+> ownership — ahead of implementation, so that the implementation cards, the
+> Pre-Trade Checker's pending Tier 3 membership check, and the Intelligence
+> agents' roster reads all build against one contract. Where the spec names
+> stores or CLIs, they are proposals awaiting Mike's ruling (see Open
+> questions), not deployed reality.
 
 ## Purpose
 
-Under ADR-0010, the firm's tradable universe is a **merged universe from
-multiple contributing research sources**, not a derived-only graph from
-Infrastructure Mapper. The Universe Curator is the agent that turns approved
-universe proposals into an actual, version-controlled active universe state —
-gated by Mike's approval policy and accompanied by per-ticker profile
-maintenance.
+Under ADR-0012, the universe is three tiers, not one list. Tier 1
+(Discovery) is the market itself — everything the ingest sources see, with
+no per-name state and no owner beyond the ingest agents. Tier 2 (Watch) is
+the unbounded, evidence-gated set of names elevated out of discovery. Tier 3
+(Active) is the hard-capped, tradeable set with full per-name treatment. The
+Universe Curator **owns Tier 2 and Tier 3 state** and is the sole publisher
+of the four tier-transition events. It holds no Tier 1 state — there is
+none to hold.
 
-This agent maintains the launch Universe plus additions and removals proposed
-by approved research sources. Framework #1 Infrastructure Mapper graph deltas
-are one source. Future forced-proxy agents, Structural Analysis watch-list
-updates, and later ADR-approved thesis frameworks may also propose universe
-changes. Curator applies source-aware policy, stages or executes the change,
-and emits events the rest of the firm subscribes to.
+The lineage matters and is superseded, not erased. ADR-0010 corrected
+ADR-0007's derived-only framing: the universe is merged from multiple
+approved sources — Framework #1 funnel candidates, Forced-Proxy candidates,
+Structural Analysis names, the launch list — with the Curator as maintainer.
+ADR-0012 keeps that merged-universe idea and gives it structure: multiple
+approved sources still feed the Curator, but membership now has explicit
+tiers, evidence gates on entry, Mike's approval on everything tradeable, and
+an event-recorded transition for every move between tiers.
 
-Why it exists separately from contributing research sources: separation of
-concerns. Each research framework's job is to discover candidates under its
-own mechanism. The Universe Curator's job is to be the single source of truth
-for "what is Shrap allowed to trade right now," to enforce the approval
-policy, and to keep per-ticker profiles fresh. Conflating proposal generation
-with active-universe state would mean every research discovery edit touches
-trading state, which is exactly the failure mode Mike's approval policy is
-meant to prevent.
+Why the firm needs this agent: the audit trail must answer "why is this
+name tradeable" the same way it answers "why did the system trade"
+(ADR-0012). Without a single owner of tier state, tradeability is implicit
+in config files scattered across agents — which is exactly today's interim
+condition: the News Analyzer and Filing Processor specs both carry env-var
+placeholder rosters with an explicit note to switch to the Curator's Tier 3
+state once it exists, and the Pre-Trade Checker's Tier 3 membership check is
+a pending card blocked on a data-source decision. The Curator is the agent
+that turns tier membership into one queryable, event-audited state.
 
 What this agent cannot do, stated clearly:
 
-- It cannot evaluate whether a ticker *should* be proposed by a thesis
-  framework — that is the proposing source's job. Curator validates payloads,
-  source authority, liquidity/tradability policy, and approval requirements.
+- It cannot decide Tier 3 membership. Mike approves **all** Tier 3 changes
+  — promotions and evictions. The Curator assembles proposals, annotates
+  consequences, and executes Mike's decision. It proposes; it never decides.
+- It cannot evaluate whether a name *should* be elevated — that is the
+  proposing mechanism's job (funnel, Forced-Proxy framework, Structural
+  Analysis, or Mike). The Curator validates evidence, invariants, and
+  authority.
 - It cannot decide a ticker has alpha — that is Hypothesis Generator +
   Strategy Evaluator.
-- It cannot auto-approve a removal under any circumstance. Removals always
-  require Mike. This is intentional: removing a ticker can halt active
-  paper-stage strategies, and that consequence demands a human.
+- It cannot apply tier filters at ingest or discovery time — no agent may
+  (ADR-0012: "the tiers bound cost, not curiosity"). Tier filters live only
+  where per-name cost is incurred.
 - It cannot refresh stale profiles on its own. It flags them; refreshing is
-  a Mike-directed or scheduled job that goes back through Infra Mapper.
+  a Mike-directed or source-directed job.
 
 ## Trigger
 
-- **Schedule:**
-  - Daily 06:00 ET: scan all active tickers for profile staleness; emit
-    `universe.profile-stale` events for those that match staleness rules.
-  - Daily 08:00 ET: scan the staging table for high-confidence adds whose
-    24h hold has elapsed; auto-add per policy.
-- **Event:** Subscribes to:
-  - `research.infra.universe.proposed-add` from Infrastructure Mapper.
-  - `research.infra.universe.proposed-remove` from Infrastructure Mapper.
-  - Future ADR-approved source streams such as forced-proxy or structural-analysis universe proposals.
-  - `mike.universe.decision` (Mike's manual approve/reject for staged items).
-- **On-demand:** Mike-initiated force-add, force-remove, or
-  force-mark-stale, each requiring Mike's identifier in the envelope.
+- **Event:** Subscribes to elevation-proposal streams from approved
+  mechanisms as they come to exist:
+  - Framework #1 funnel candidates (Infrastructure Mapper — not yet built;
+    stream name fixed at that implementation card, conforming to ADR-0006).
+  - Forced-Proxy staging (ADR-0011 — **reserved, unwritten**; the mechanism
+    is named here because ADR-0012 names it, but nothing can stage through
+    it until ADR-0011 exists).
+  - Structural Analysis findings (department is month 3-4; no agent specs
+    exist yet).
+- **Schedule:** Daily watch-expiry sweep over Tier 2. Later scope: daily
+  profile-staleness scan over Tier 3.
+- **On-demand:** Mike, via the approval CLI — seed a watch entry, stage or
+  decide a promotion/eviction, extend or expire a watch entry.
 
 ## Cross-references
 
-**Depends on:** approved universe-proposal sources (Infrastructure Mapper first, future sources by ADR),
-Mike (sole approver for low-confidence adds and any remove), per-ticker
-profile docs under `docs/universe/<ticker>.md`.
-**Depended on by:** Hypothesis Generator (filters proposals against
-`universe.active`), Strategy Evaluator (anchor-freshness check uses active
-membership), Decision Maker, Risk Officer, Daily Briefing Agent.
-**Related ADRs:** ADR-0006 (envelope), ADR-0007 (Research thesis).
+**Depends on:** approved elevation mechanisms (Infrastructure Mapper when
+built; Forced-Proxy per ADR-0011, reserved; Structural Analysis, month 3-4;
+Mike seeding — the only mechanism that exists today), Mike (sole approver of
+all Tier 3 membership changes), per-ticker profiles under
+`docs/universe/<ticker>.md`, Strategy Librarian (consequence annotation),
+ADR-0006 event library.
+**Depended on by:** Pre-Trade Checker (pending Tier 3 membership check —
+blocked on the data-source decision this spec proposes; see open question
+1), News Analyzer and Filing Processor (both hold env placeholder rosters
+flagged for replacement by Curator Tier 3 state), Hypothesis Generator and
+Strategy Evaluator (Tier 3 is the strategy-eligible set), Structural
+Analysis (reads Tier 2 + Tier 3 per ADR-0012 — findings on watch names are
+promotion evidence), Decision Maker, Risk Officer, Daily Briefing Agent.
+**Related ADRs:** ADR-0012 (tiered universe — the authority for this spec),
+ADR-0010 (merged universe — superseded framing, retained lineage), ADR-0006
+(envelope and stream naming), ADR-0011 (Forced-Proxy — reserved), ADR-0009
+(LLM tiers).
 **Related architecture sections:** `docs/02-architecture.md` §Research
-Department, §Universe lifecycle.
+Department; `docs/universe/README.md` (tier definitions and Tier 3 launch
+proposal, DQ-004).
 
 ## Inputs
 
 | Source | Type | Description |
 |---|---|---|
-| Redis: `research.infra.universe.proposed-add` | Event | New ticker proposal: `{ticker, graph_id, layer_id, confidence, evidence_refs, proposer_run_id}` |
-| Redis: `research.infra.universe.proposed-remove` | Event | Removal proposal: `{ticker, reason, graph_id, evidence_refs}`. Reason is one of `node-failed`, `graph-deprecated`, `behavior-divergence` |
-| Redis: `mike.universe.decision` | Event | `{staging_id, decision: approve|reject, note}` |
-| PostgreSQL: `universe.active` | Query | Current active tradable set |
-| PostgreSQL: `universe.staging` | Query | Pending additions/removals awaiting Mike or hold elapse |
-| PostgreSQL: `universe.history` | Query | Append-only audit trail of all transitions |
-| Repo: `docs/universe/<ticker>.md` | File read | Per-ticker profile (last-refreshed date, behavior summary, graph memberships) |
-| PostgreSQL: `market_data.ticker_behavior` | Query | Recent volatility, ADV, correlation profile (used for divergence checks) |
+| Redis: funnel candidate stream | Event | Tradable-instrument candidates from Framework #1 graphs. Does not exist yet — Infrastructure Mapper is unbuilt; the v0.1 `research.infra.universe.proposed-*` names are superseded and will be re-fixed at that card under ADR-0006 naming |
+| Redis: Forced-Proxy staging stream | Event | Reserved for ADR-0011. Unwritten — named only because ADR-0012 lists the mechanism |
+| Redis: Structural Analysis findings stream | Event | Month 3-4. Watch-name findings accumulate on Tier 2 records as promotion evidence |
+| CLI: Mike decisions and seeds | Command | Watch seeds, promotion/eviction stagings and decisions, watch extensions (see open question 2 for the mechanism's shape) |
+| PostgreSQL: `research.universe_tiers` | Query | Current Tier 2/3 membership (proposed store — open question 1) |
+| PostgreSQL: `research.universe_staging` | Query | Pending Tier 3 proposals awaiting Mike |
+| Repo: `docs/universe/<ticker>.md` | File read | Per-ticker behavioral profiles; existence is a promotion prerequisite |
+| Repo: `docs/universe/README.md` | File read | Tier definitions and the Tier 3 launch proposal (DQ-004) |
 
 ## Processing
 
-### Proposed-add handling
+### Tier 2 entry (watch-added)
 
-1. **Validate payload.** Required fields present; `proposer_run_id` exists in
-   the proposing source's run log; confidence is a probability in [0, 1]; source-specific identifiers are live. Reject malformed events with `universe.proposal.rejected`.
-2. **Dedupe.** If the ticker is already in `universe.active` for the same
-   `(graph_id, layer_id)`, drop as no-op. If it is active under a different
-   graph/layer, record the additional membership and emit
-   `universe.membership.expanded` — no staging needed.
-3. **Apply policy.**
-   - Confidence > 0.90: stage with `auto_add_at = now + 24h` and emit
-     `universe.staged` with `policy=auto-pending-hold`. During the 24h hold,
-     a Mike rejection or any subsequent contradictory event from Infra
-     Mapper cancels the staging.
-   - Confidence ≤ 0.90: stage with `requires_mike=true` and emit
-     `universe.staged` with `policy=mike-required`. No hold timer.
-4. **Daily hold sweep (08:00 ET).** For each row with `auto_add_at` in the
-   past and no cancellation: move to `universe.active`, write to
-   `universe.history`, emit `universe.added`. The Implementation Agent may
-   **not** mutate `universe.active` or `universe.staging` directly without
-   Mike's explicit approval — only this agent's processing path can.
+1. **Validate the elevation.** The mechanism must be one of the four
+   approved kinds — `funnel-candidate`, `forced-proxy` (reserved until
+   ADR-0011), `structural-finding`, `mike-seed` — and the payload must
+   carry a resolvable `evidence_ref` into its canonical store plus **an
+   expiry or a falsifier**. An entry with neither is rejected: the
+   expiry/falsifier requirement is the soft cap the Curator enforces —
+   watch entries that stop earning attention age out. Malformed or
+   unauthorized proposals emit `research.universe-proposal-rejected`.
+2. **Dedupe.** If the name is already in Tier 2, the new evidence accrues
+   to the existing watch record (ADR-0012's "accumulating structural
+   findings") — no transition occurred, so no transition event. If the
+   name is already in Tier 3, membership is a no-op; the evidence is
+   routed to the name's profile maintenance notes.
+3. **Record and publish.** Insert the watch record into
+   `research.universe_tiers` and emit `research.universe-watch-added`.
 
-### Proposed-remove handling
+### Watch expiry sweep (daily)
 
-1. **Validate payload** as above.
-2. **Stage as mike-required, always.** No removal is ever auto-approved.
-   Emit `universe.staged` with `policy=mike-required` and `kind=remove`.
-3. **Annotate consequence.** Query Strategy Librarian for all live or
-   paper-stage strategies referencing this ticker; attach the list to the
-   staging row and to the event payload. Mike sees the impact before
-   approving.
-4. **On Mike approval:** move to removed state, emit `universe.removed` with
-   the consequence list. Strategy Evaluator's existing thesis-broken handler
-   is responsible for demoting affected strategies — Curator does not demote
-   strategies directly, it only emits the universe-level event.
-5. **On Mike rejection:** drop staging row, emit
-   `universe.proposal.rejected` with note.
+1. Entries past their expiry with no renewal (new recorded evidence, or an
+   explicit Mike extension) are expired: state updated, and
+   `research.universe-watch-expired` emitted with reason `expired`.
+2. Entries whose falsifier has been recorded as observed — by the proposing
+   source or by Mike (see open question 4 on who watches falsifiers) — are
+   expired immediately with reason `falsified`.
 
-### Mike-decision handling
+### Tier 3 promotion (proposal → Mike decision)
 
-1. Look up the staging row by `staging_id`. If absent or already resolved,
-   emit `universe.decision.ignored` with reason.
-2. Apply the decision atomically: either promote staging to active (add) /
-   removed (remove), or drop staging.
-3. Emit the appropriate terminal event (`universe.added`, `universe.removed`,
-   or `universe.proposal.rejected`).
+1. **Assemble the case.** A promotion proposal is staged from a watch
+   record — by the Curator surfacing an earned candidate, or by Mike
+   directly. Deterministic gate checks before staging:
+   - A behavioral profile exists under `docs/universe/<ticker>.md`
+     (prerequisite per ADR-0012; see open question 3 for what "exists"
+     must mean given today's profile coverage).
+   - Cap headroom. Tier 3 is hard-capped at 50 at launch. At cap, the
+     proposal must name an eviction candidate — promotion may force
+     eviction.
+   - Consequence annotation: query the Strategy Librarian for live or
+     paper-stage strategies referencing the name (and the eviction
+     candidate, if paired); attach the list so Mike sees impact before
+     deciding.
+2. **Wait for Mike.** The staged proposal sits in
+   `research.universe_staging` until Mike decides. There is no auto path
+   and no hold-timer path — the v0.1 24-hour auto-add hold is gone.
+   Mike approves all Tier 3 membership changes.
+3. **On approval:** update `research.universe_tiers`, emit
+   `research.universe-promoted`; if an eviction is paired, emit
+   `research.universe-evicted` for the evicted name and record the
+   eviction criteria on its profile.
+4. **On rejection:** resolve the staging row with Mike's note. The watch
+   entry remains in Tier 2 with its expiry clock running.
 
-### Profile staleness scan (daily 06:00 ET)
+### Tier 3 eviction
 
-For each ticker in `universe.active`, mark stale if **any** of:
+1. Eviction criteria are the ADR-0012 three: **profile decay, liquidity
+   loss, thesis falsified**. The Curator surfaces eviction candidates with
+   evidence (later scope: an automated behavior-divergence scan); Mike
+   decides, as with promotion.
+2. On approval: emit `research.universe-evicted` and write the eviction
+   criteria into the name's profile maintenance notes. Eviction always
+   lands in Discovery. If the name still merits attention, a fresh Tier 2
+   entry is created with its own evidence and expiry — this keeps the
+   watch-entry invariant uniform: every Tier 2 record has evidence and an
+   expiry or falsifier, with no grandfathered exceptions.
 
-- `last_refreshed_at` more than 30 days ago.
-- `market_data.ticker_behavior` shows a >50% change in 30-day realized vol,
-  or a >0.3 absolute change in correlation to its primary graph layer
-  benchmark, since the profile was last written.
-- The ticker has been referenced in a kill-confirmed strategy in the last
-  14 days (the profile may have contributed to the bad proposal).
+### Transition event contract
 
-For each stale ticker, emit `universe.profile-stale` with the specific
-reasons matched. The LLM tier (Local) is used here only to produce a
-human-readable one-line rationale per event. The match itself is
-deterministic.
+Every transition event carries, inside the ADR-0006 envelope, at minimum:
+
+```
+{ticker, source_tier, destination_tier, mechanism, evidence_ref}
+```
+
+`mechanism` is one of `funnel-candidate | forced-proxy | structural-finding
+| mike-seed`. `evidence_ref` points at the canonical evidence record —
+a `research.world_changers` candidate, a structural findings row (future),
+an `intelligence.filings` accession, or a Mike-seed note recorded at CLI
+time — per the ADR-0006 payload-by-reference rule. This is the contract
+that lets the audit trail answer "why is this name tradeable": walk the
+name's transition events, dereference the evidence.
+
+### Profile staleness scan (later scope, retained from v0.1)
+
+Daily deterministic scan over Tier 3: flag profiles older than 30 days,
+behavioral divergence beyond thresholds, or reference in a kill-confirmed
+strategy within 14 days. Emits `research.universe-profile-stale` (renamed
+from v0.1's `universe.profile-stale` for ADR-0006 stream-naming
+conformance). Thresholds remain uncalibrated guesses, as in v0.1.
 
 ## Outputs
 
 | Destination | Type | Description |
 |---|---|---|
-| Redis stream: `universe.staged` | Event | `{staging_id, ticker, kind: add|remove, policy, rationale, consequence}` |
-| Redis stream: `universe.added` | Event | `{ticker, graph_id, layer_id, source: auto|mike}` |
-| Redis stream: `universe.removed` | Event | `{ticker, reason, affected_strategies}` |
-| Redis stream: `universe.membership.expanded` | Event | Already-active ticker gained an additional graph membership |
-| Redis stream: `universe.profile-stale` | Event | `{ticker, reasons, last_refreshed_at}` |
-| Redis stream: `universe.proposal.rejected` | Event | Malformed, contradicted, or Mike-rejected proposals |
-| Redis stream: `universe.decision.ignored` | Event | Mike decision for an unknown or already-resolved staging row |
-| PostgreSQL: `universe.active` | Insert / delete | Single source of truth for current tradable set |
-| PostgreSQL: `universe.staging` | Insert / update / delete | Pending proposals |
-| PostgreSQL: `universe.history` | Append-only insert | Full audit trail of every transition with envelope reference |
+| Redis stream: `research.universe-watch-added` | Event | Tier 1 → 2. Elevation with mechanism and evidence reference |
+| Redis stream: `research.universe-watch-expired` | Event | Tier 2 → 1. Reason `expired` or `falsified` |
+| Redis stream: `research.universe-promoted` | Event | Tier 2 → 3. Mike-approved, always |
+| Redis stream: `research.universe-evicted` | Event | Tier 3 → 1. Mike-approved, always; criteria recorded on the profile |
+| Redis stream: `research.universe-proposal-rejected` | Event | Malformed or unauthorized elevations, and Mike rejections. A spec-level addition beyond ADR-0012's four transition events: the deny path must be as auditable as the allow path (the Tech Watcher's kill-graveyard precedent) |
+| Redis stream: `research.universe-profile-stale` | Event | Later scope; deterministic staleness flags on Tier 3 profiles |
+| PostgreSQL: `research.universe_tiers` | Insert / update | Current Tier 2/3 membership — the proposed read model (open question 1) |
+| PostgreSQL: `research.universe_staging` | Insert / update | Pending Tier 3 proposals and their dispositions |
+| Repo: `docs/universe/<ticker>.md` | File write | Eviction criteria and evidence notes into profile maintenance sections |
 
-Every event carries the ADR-0006 envelope.
+Every event carries the ADR-0006 envelope. The four transition events and
+their payload fields are fixed by ADR-0012; this spec may not narrow them.
 
 ## LangGraph structure
 
-Not used. Deterministic policy logic implemented as a Python event consumer
-with three handlers (add, remove, decision) plus two scheduled scans
-(staleness, hold-sweep). The optional rationale-text LLM call is a side
-output, not in the decision path.
+Not used. Deterministic event consumer plus a decision CLI and scheduled
+sweeps. The optional rationale-text LLM call (`local-classification`) is a
+side output on events, never in the decision path.
 
 ## State
 
 | What | Store | Notes |
 |---|---|---|
-| Active universe | PostgreSQL `universe.active` | Keyed by ticker; multi-membership tracked in `universe.memberships` |
-| Pending proposals | PostgreSQL `universe.staging` | Keyed by `staging_id`; resolved rows are moved to history |
-| Audit trail | PostgreSQL `universe.history` | Append-only; every transition references the triggering event ID |
-| Per-ticker profile refresh state | Repo `docs/universe/<ticker>.md` + `universe.profile_state` table | Profile doc is source of truth; table caches `last_refreshed_at` for fast scans |
+| Current tier membership | PostgreSQL `research.universe_tiers` | Proposed (open question 1). One row per name currently in Tier 2 or 3: ticker, CIK, tier, mechanism, `evidence_ref`, `entered_at`, expiry/falsifier (Tier 2), profile path (Tier 3). CIK is carried because the Filing Processor's roster read requires it |
+| Staged Tier 3 proposals | PostgreSQL `research.universe_staging` | Pending Mike decisions; resolved rows retain their disposition and note |
+| Transition history | Event streams → `ops.audit_events` | The four transition events **are** the history. The Audit Logger's append-only capture is the durable query surface; the Curator keeps no separate history table. Rebuilding `research.universe_tiers` = replaying the transition events |
+| Eviction criteria, evidence notes | Repo `docs/universe/<ticker>.md` | Human-readable side of the audit trail; the profile is where "why did this name leave" lives |
 
 ## Failure behavior
 
-1. **Containment.** Curator bugs split into two categories. **Failing open**
-   (auto-adding a ticker that should have required Mike) widens the
-   actionable universe and can let Hypothesis Generator propose strategies
-   on it — but the Evaluator still gates promotion and real-money is
-   hard-blocked. **Failing closed** (rejecting valid adds, or failing to
-   stage removes) shrinks or staleness-pollutes the universe — annoying,
-   not dangerous. Bias toward fail-closed: when in doubt, do not auto-add.
-2. **Replay safety.** Safe. All state transitions are event-sourced through
-   `universe.history`. Idempotency key on `(event_id, kind)` prevents
-   double-application of re-delivered events. Replaying the event log
-   reconstructs current `universe.active`.
-3. **Degraded operation.** The firm can run without Curator indefinitely
-   at the cost of a frozen universe. Hypothesis Generator continues to
-   propose against the last-known active set; Evaluator continues to gate;
-   no new tickers enter, no stale flags are raised. If Curator is down
-   >7 days, Mike should manually freeze Infra Mapper's proposal stream to
-   prevent staging-table buildup on recovery.
+1. **Containment.** The dangerous direction is a polluted Tier 3: a name
+   becoming order-eligible without Mike's approval. The design blocks it
+   structurally — Tier 3 mutations happen only in the Mike-decision path,
+   there is no auto-promotion, and the Pre-Trade Checker independently
+   rejects any ticker not in Tier 3 once its check ships. A Curator bug
+   therefore fails toward the safe direction: wrongly expired watch entries
+   or a frozen tier state shrink the firm's attention, which is annoying,
+   not dangerous. Bias fail-closed throughout: when in doubt, do not
+   record the elevation, do not stage the promotion.
+2. **Replay safety.** Safe. Every state transition is paired with a
+   published event; idempotency on `(event_id)` prevents double-apply of
+   re-delivered events; replaying the transition-event history
+   reconstructs `research.universe_tiers` exactly.
+3. **Degraded operation.** The firm runs indefinitely without the Curator
+   at the cost of frozen tiers. Discovery continues (Tier 1 has no
+   Curator dependency), the Pre-Trade Checker keeps enforcing the
+   last-known Tier 3, and Intelligence agents keep their last roster.
+   What stops: new watch entries queue unrecorded, and the expiry sweep
+   stops enforcing the soft cap — watch entries overstay, a bounded cost
+   creep. If the Curator is down more than 7 days, Mike should pause
+   elevation-proposal sources to prevent intake buildup on recovery.
 
 ## Sprint scope
 
-- Month 2: Add-proposal handling (both auto and mike-required paths),
-  `universe.active` source of truth, basic audit trail. Removal handling
-  staged-mike-required only.
-- Month 3: Profile staleness scan with the three documented match rules.
-  Consequence annotation on remove proposals (Strategy Librarian
-  integration). 24h hold sweep.
-- Month 4: Behavior-divergence detection on `market_data.ticker_behavior`.
-  Rationale-text LLM side output. Replay-from-log self-check.
+Staged realistically — no Curator service exists today, and most elevation
+sources are themselves unbuilt:
+
+- **First implementation card** (unscheduled; after DQ-004 lock-in):
+  `research.universe_tiers` + `research.universe_staging` stores, the four
+  transition events, and the Mike approval CLI (seed / promote / evict /
+  extend / expire). Load the locked Tier 3 launch list through the event
+  path itself — one `research.universe-promoted` per name, mechanism
+  `mike-seed`, `evidence_ref` pointing at the DQ-004 lock-in decision — so
+  day-one membership is as audit-answerable as everything after it.
+- **Immediately unblocked downstream:** the Pre-Trade Checker Tier 3
+  membership check card (pending open question 1's ruling), and the News
+  Analyzer / Filing Processor roster switch from env placeholders to
+  Curator state.
+- **Later cards:** elevation intake from the funnel (needs Infrastructure
+  Mapper) and Structural Analysis (month 3-4); the daily watch-expiry
+  sweep; the profile staleness scan; automated behavior-divergence
+  eviction candidates. Automation follows the state store, not the other
+  way around.
 
 ## Deferred
 
-- Cross-asset universe (options, futures, crypto) — equities only for sprint.
-- Automatic profile refresh — refresh remains a Mike-directed or source-directed
-  job, depending on which research framework owns the ticker rationale.
-- Ticker tiering / priority weights within the active set — Risk Officer
-  handles sizing, Curator only tracks membership.
-- Any direct demotion of strategies — that authority stays with the
-  Strategy Evaluator.
+- Cross-asset universe (options, futures, direct crypto) — equities and
+  ETFs only for the sprint.
+- Automatic profile refresh — flagging stays with the Curator; refreshing
+  stays a Mike-directed or source-directed job.
+- Priority weights within Tier 3 — Risk Officer handles sizing; the
+  Curator tracks membership only.
+- Any direct demotion of strategies on eviction — the Curator emits the
+  universe-level event; the Strategy Evaluator's thesis-broken handling
+  owns strategy consequences.
+- Tier 2 news/filing coverage — tracked as open questions in the News
+  Analyzer and Filing Processor specs, decided with this agent's cards.
+- Forced-Proxy staging mechanics — reserved until ADR-0011 is written.
 
 ## Open questions
 
-- **Auto-add confidence threshold (>0.90):** Default guess. Blocks:
-  universe-growth rate calibration. Owner: Mike, after first 20 proposals.
-- **24h hold duration:** Long enough for Mike to veto in a normal workday,
-  short enough that high-confidence graph discoveries propagate quickly.
-  Blocks: nothing immediate. Owner: Mike, after first month.
-- **Staleness threshold (30 days, 50% vol delta, 0.3 correlation delta):**
-  All three are guesses without empirical calibration. Blocks: false-alarm
-  rate on `universe.profile-stale`. Owner: Mike + Infra Mapper owner.
-- **What happens if Infra Mapper proposes adding a ticker already in
-  `universe.removed` history with a Mike-rejection note?** Currently
-  re-stages as mike-required regardless of confidence. May want a cooldown.
-  Blocks: ping-pong between Mapper and Curator. Owner: Mike.
-- **Should a contradictory `proposed-remove` arriving during a 24h
-  auto-add hold cancel the add, or stage a remove on top?** Currently
-  cancels the add (treat as Mapper retracting itself). Blocks: edge-case
-  semantics. Owner: Mike + Infra Mapper owner.
+- **Tier 3 store shape for the Pre-Trade Checker:** this spec proposes
+  PostgreSQL `research.universe_tiers` as the current-membership read
+  model — queried by the Pre-Trade Checker with a short-TTL in-process
+  cache — with the transition-event stream (durably captured in
+  `ops.audit_events`) as the audit history. Alternatives: a Redis-derived
+  local view in the risk gate (no new dependency in the order path, but
+  derived state inside the gate), or a config snapshot (deterministic but
+  stale between deploys). The Postgres read model is recommended because
+  it is one source of truth, the Intelligence rosters need the same read
+  anyway, and the event stream already carries the history. Blocks: the
+  Pre-Trade Checker Tier 3 membership check card, which is explicitly
+  waiting on this decision. Owner: Mike, before that card starts.
+- **Mike-approval mechanism shape:** CLI in the Curator container
+  (`shrap-universe-promote`, on the `shrap-tech-watcher-promote`
+  precedent, PR #54) versus a review-page-driven flow (the
+  `shrap-tech-watcher-review` precedent). Spec default: CLI first, page
+  later — the CLI is the smaller card and the promote/kill precedent
+  already works. Blocks: the first implementation card. Owner: Mike.
+- **Behavioral-profile prerequisite vs. today's coverage:** promotion
+  requires an existing profile, but profiles exist for only 6 of the 50
+  proposed launch names (SPY, QQQ, TSLA, NVDA, AAPL, LMT under
+  `docs/universe/`), and those are explicitly draft-quality seeds. Does
+  the launch-list load grandfather the other 44 pending profile
+  backfill, or does lock-in wait on profiles? And what minimum bar makes
+  a profile count as "existing" for future Tier 2 promotions? Blocks:
+  the launch-list load and the first real promotion. Owner: Mike.
+- **Falsifier observation ownership:** expiry dates are deterministic,
+  but who detects that a Tier 2 falsifier *fired* — the proposing
+  source's re-scan (the Tech Watcher precedent for kill criteria), the
+  Curator, or Mike? Spec default: the proposing source owns its
+  falsifiers and reports observations; the Curator acts on them. Blocks:
+  completeness of the expiry sweep. Owner: Mike + proposing-source
+  owners, as each source's card lands.
+- **Default watch expiry duration:** entries with a falsifier but no
+  date need a default TTL; 90 days is a guess with no calibration
+  behind it. Blocks: nothing now. Owner: Mike, after the first month of
+  live watch entries.
