@@ -29,8 +29,16 @@ from redis.asyncio import Redis
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
-from shrap.events import Envelope, EventPublisher, RedisPublisher, normalize_redis_fields
+from shrap.events import EventPublisher, RedisPublisher
 from shrap.intelligence.market_data import AlpacaMarketDataSettings
+from shrap.intelligence.market_phase import (
+    DEFAULT_ACTIVE_INTERVAL_SECONDS,
+    DEFAULT_IDLE_INTERVAL_SECONDS,
+    STREAM_MARKET_PHASE,
+    PhaseRedis,
+    interval_for_phase,
+    read_latest_phase,
+)
 from shrap.intelligence.news_analyzer.client import NEWS_SOURCE, AlpacaNewsClient, NewsItem
 from shrap.intelligence.news_analyzer.scorer import (
     NEWS_PROMPT_VERSION,
@@ -54,14 +62,11 @@ SIGNAL_TYPE = "news"
 
 STREAM_INTELLIGENCE_SIGNAL = "intelligence.signal"
 STREAM_INGESTION_HEARTBEAT = "ingestion.heartbeat"
-STREAM_MARKET_PHASE = "operations.market-phase"
 
-# Phases that keep the fast (active) cadence; everything else — including an
-# unknown or absent phase — falls back to active, so we never go quiet during
-# a session because the scheduler stream was briefly unreadable.
-PHASE_IDLE = frozenset({"overnight", "closed-day"})
-DEFAULT_ACTIVE_INTERVAL_SECONDS = 600.0
-DEFAULT_IDLE_INTERVAL_SECONDS = 3600.0
+# Market-phase cadence (interval_for_phase / read_latest_phase / PhaseRedis /
+# the interval defaults and STREAM_MARKET_PHASE) lives in
+# ``shrap.intelligence.market_phase`` and is shared with the Filing Processor;
+# re-exported here so callers and tests keep importing it from this module.
 
 
 class NewsSource(Protocol):
@@ -112,12 +117,6 @@ class Publisher(Protocol):
     ) -> object: ...
 
 
-class PhaseRedis(Protocol):
-    async def xrevrange(
-        self, name: str, max: str = "+", min: str = "-", count: int | None = None
-    ) -> Any: ...
-
-
 @dataclass(frozen=True, slots=True)
 class NewsRunConfig:
     """Symbols and knobs for the News Analyzer passes."""
@@ -147,40 +146,6 @@ class ScoreCounts:
     relevant: int
     published: int
     escalated: int
-
-
-def interval_for_phase(phase: str | None, active_seconds: float, idle_seconds: float) -> float:
-    """Map a market phase to a poll interval; idle phases poll hourly."""
-
-    if phase in PHASE_IDLE:
-        return idle_seconds
-    return active_seconds
-
-
-async def read_latest_phase(redis: PhaseRedis) -> str | None:
-    """Return the latest ``operations.market-phase`` phase, or None.
-
-    Any failure (empty stream, malformed envelope, Redis error) returns None
-    so the caller falls back to the active cadence.
-    """
-
-    try:
-        entries = await redis.xrevrange(STREAM_MARKET_PHASE, count=1)
-    except Exception:
-        log.warning("news_analyzer.phase_read_failed")
-        return None
-    if not entries:
-        return None
-    _redis_id, fields = entries[0]
-    try:
-        envelope = Envelope.from_redis_fields(normalize_redis_fields(fields))
-    except Exception:
-        log.warning("news_analyzer.malformed_phase_event_skipped")
-        return None
-    if envelope.payload is None:
-        return None
-    phase = envelope.payload.get("phase")
-    return str(phase) if phase is not None else None
 
 
 def build_signal_payload(item: ScorableItem, verdict: MaterialityVerdict) -> dict[str, Any]:
