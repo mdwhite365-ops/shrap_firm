@@ -23,6 +23,9 @@ def main() -> None:
             block_ms=settings.block_ms,
             retry_delay_seconds=settings.retry_delay_seconds,
             rate_limit_config=settings.rate_limit_config(),
+            tier3_enforcement=settings.tier3_enforcement,
+            postgres_dsn=settings.postgres_dsn_value(),
+            tier3_cache_ttl_seconds=settings.tier3_cache_ttl_seconds,
             group=settings.service_name,
             consumer=settings.instance_id,
         )

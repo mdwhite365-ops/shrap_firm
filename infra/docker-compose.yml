@@ -370,6 +370,12 @@ services:
       PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE: "${PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE:-false}"
       PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY: "${PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY:-10}"
       PRE_TRADE_CHECKER_SYMBOL_COOLDOWN_SECONDS: "${PRE_TRADE_CHECKER_SYMBOL_COOLDOWN_SECONDS:-300}"
+      # Tier 3 membership enforcement (ADR-0012). Default off until the
+      # Universe Curator's first card populates research.universe_tiers and
+      # DQ-004 locks the launch list; on + unavailable state fails closed.
+      PRE_TRADE_CHECKER_TIER3_ENFORCEMENT: "${PRE_TRADE_CHECKER_TIER3_ENFORCEMENT:-false}"
+      PRE_TRADE_CHECKER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      PRE_TRADE_CHECKER_TIER3_CACHE_TTL_SECONDS: "${PRE_TRADE_CHECKER_TIER3_CACHE_TTL_SECONDS:-30.0}"
       PRE_TRADE_CHECKER_START_ID: "0-0"
       PRE_TRADE_CHECKER_COUNT: "100"
       PRE_TRADE_CHECKER_BLOCK_MS: "5000"
@@ -377,6 +383,8 @@ services:
       PRE_TRADE_CHECKER_LOG_LEVEL: "INFO"
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - shrap_net
