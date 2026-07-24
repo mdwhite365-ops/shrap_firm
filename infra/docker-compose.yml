@@ -743,3 +743,34 @@ services:
         condition: service_started
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Market Data backfill - shared infrastructure, run on demand (NOT started
+  # by default; gated behind the "tools" profile). Fetches historical daily
+  # bars from Alpaca's data API (IEX feed, adjustment=all) and upserts them
+  # into market_data.daily_bars, the Strategy Evaluator's backtest data
+  # prerequisite (also usable for the Regime Classifier's threshold backfill).
+  # Run pattern:
+  #   docker compose run --rm market-data \
+  #     shrap-market-data-backfill --tickers AAPL,MSFT --since 2021-01-01
+  # Reads the bare ALPACA_* data-host credentials from .env (data-host
+  # read-only, same names as the Regime Classifier / News Analyzer use).
+  # -------------------------------------------------------------------------
+  market-data:
+    build:
+      context: ../
+      dockerfile: infra/market-data.Dockerfile
+    container_name: shrap_market_data
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      MARKET_DATA_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      MARKET_DATA_FEED: "iex"
+      MARKET_DATA_ADJUSTMENT: "all"
+      MARKET_DATA_LOG_LEVEL: "INFO"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
