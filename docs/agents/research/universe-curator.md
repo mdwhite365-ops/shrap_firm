@@ -5,18 +5,22 @@
 narrative generation only. All tier-state decision logic is deterministic — no
 LLM is in the approval path. See `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
-**Status:** Draft
-**Date:** 2026-05-30 (rewritten for ADR-0012, 2026-07-23)
+**Status:** Accepted
+**Date:** 2026-05-30 (rewritten for ADR-0012, 2026-07-23; first implementation card landed 2026-07-24)
 **Author:** Mike White
-**Version:** 0.2 (draft)
+**Version:** 0.3
 
-> **Honest status:** no Universe Curator service exists. Nothing in this spec
-> is deployed. This document describes the accepted model — ADR-0012's tier
-> ownership — ahead of implementation, so that the implementation cards, the
-> Pre-Trade Checker's pending Tier 3 membership check, and the Intelligence
-> agents' roster reads all build against one contract. Where the spec names
-> stores or CLIs, they are proposals awaiting Mike's ruling (see Open
-> questions), not deployed reality.
+> **Honest status:** the Universe Curator's first implementation card has
+> landed (`phase1/universe-curator-service`): the `research.universe_tiers`
+> and `research.universe_staging` stores, the five tier-transition events, the
+> `shrap-universe-promote` approval CLI, the launch-list load, and the daily
+> watch-expiry sweep service. Open questions 1–3 below are resolved. What is
+> not yet done: deploying the service to the Dell and running the launch load
+> in prod, the Pre-Trade Checker's Tier 3 membership check card (now unblocked
+> by the read model this card ships), and the Intelligence agents' roster
+> switch from env placeholders to Curator state. Elevation intake from the
+> funnel and Structural Analysis, the profile-staleness scan, and automated
+> eviction candidates remain later cards (see Sprint scope).
 
 ## Purpose
 
@@ -304,32 +308,34 @@ sources are themselves unbuilt:
 
 ## Open questions
 
-- **Tier 3 store shape for the Pre-Trade Checker:** this spec proposes
-  PostgreSQL `research.universe_tiers` as the current-membership read
-  model — queried by the Pre-Trade Checker with a short-TTL in-process
-  cache — with the transition-event stream (durably captured in
-  `ops.audit_events`) as the audit history. Alternatives: a Redis-derived
-  local view in the risk gate (no new dependency in the order path, but
-  derived state inside the gate), or a config snapshot (deterministic but
-  stale between deploys). The Postgres read model is recommended because
-  it is one source of truth, the Intelligence rosters need the same read
-  anyway, and the event stream already carries the history. Blocks: the
-  Pre-Trade Checker Tier 3 membership check card, which is explicitly
-  waiting on this decision. Owner: Mike, before that card starts.
-- **Mike-approval mechanism shape:** CLI in the Curator container
-  (`shrap-universe-promote`, on the `shrap-tech-watcher-promote`
-  precedent, PR #54) versus a review-page-driven flow (the
-  `shrap-tech-watcher-review` precedent). Spec default: CLI first, page
-  later — the CLI is the smaller card and the promote/kill precedent
-  already works. Blocks: the first implementation card. Owner: Mike.
-- **Behavioral-profile prerequisite vs. today's coverage:** promotion
-  requires an existing profile, but profiles exist for only 6 of the 50
-  proposed launch names (SPY, QQQ, TSLA, NVDA, AAPL, LMT under
-  `docs/universe/`), and those are explicitly draft-quality seeds. Does
-  the launch-list load grandfather the other 44 pending profile
-  backfill, or does lock-in wait on profiles? And what minimum bar makes
-  a profile count as "existing" for future Tier 2 promotions? Blocks:
-  the launch-list load and the first real promotion. Owner: Mike.
+- **Tier 3 store shape for the Pre-Trade Checker:** **RESOLVED 2026-07-23
+  (accepted via PR #70).** PostgreSQL `research.universe_tiers` is the
+  current-membership read model — queried by the Pre-Trade Checker with
+  `SELECT tier FROM research.universe_tiers WHERE ticker = $1` behind a
+  short-TTL in-process cache, tradeable literal `active` — with the
+  transition-event stream (durably captured in `ops.audit_events`) as the
+  audit history. The alternatives (a Redis-derived view inside the gate, a
+  config snapshot) were rejected: the Postgres read model is one source of
+  truth, the Intelligence rosters need the same read anyway, and the event
+  stream already carries the history. The Curator's first implementation card
+  writes exactly this table and literal; the gate is a read-only consumer.
+- **Mike-approval mechanism shape:** **RESOLVED 2026-07-23 (this card).**
+  A CLI in the Curator container — `shrap-universe-promote`, on the
+  `shrap-tech-watcher-promote` precedent (PR #54) — with subcommands seed /
+  stage / approve / reject / extend / expire / load-launch-list. Every Tier 3
+  mutation happens only through an explicit CLI decision; there is no auto
+  path. A review-page-driven flow (`shrap-tech-watcher-review` precedent)
+  remains a possible later addition, not a blocker.
+- **Behavioral-profile prerequisite vs. today's coverage:** **RESOLVED
+  2026-07-23 (Mike).** The launch-list load grandfathers the 44 names without
+  a seed profile straight into Tier 3; lock-in does not wait on profiles
+  (backfill is pending). The six seed-profiled names (SPY, QQQ, TSLA, NVDA,
+  AAPL, LMT) carry their `profile_path`; the other 44 carry `NULL`, which is
+  the grandfathered marker. The profile-exists prerequisite applies **only to
+  future Tier 2 → 3 promotions**, not to the launch load — the CLI's `stage`
+  gate enforces it there. The operational bar for "profile exists" is
+  file-existence of `docs/universe/<ticker>.md` at stage time; a stricter
+  minimum-quality bar is deferred (still Mike's call, no longer blocking).
 - **Falsifier observation ownership:** expiry dates are deterministic,
   but who detects that a Tier 2 falsifier *fired* — the proposing
   source's re-scan (the Tech Watcher precedent for kill criteria), the
