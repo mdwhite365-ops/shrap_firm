@@ -1,9 +1,9 @@
 # Universe: Discovery, Watch, and Active Tiers
 
-**Document version:** 0.2 (draft)
-**Last updated:** 2026-07-22
+**Document version:** 0.2
+**Last updated:** 2026-07-23
 **Owner:** Mike White
-**Status:** Draft — Tier 3 launch proposal awaiting Mike's lock-in (DQ-004, see `docs/status/decision-queue.md`)
+**Status:** Tier 3 launch list locked by Mike 2026-07-23 (DQ-004, see `docs/status/decision-queue.md`) — loaded through the Universe Curator's event path
 
 > **TIERED MODEL — see ADR-0012 (2026-07-19).**
 >
@@ -16,10 +16,13 @@
 > multiple approved sources rather than a single derived graph; ADR-0012
 > refines that merged-universe idea into the three-tier structure below.
 >
-> **What is and isn't built:** this document describes the accepted model,
-> not deployed reality — no Universe Curator service exists, Tier 2 has no
-> state store, and the Pre-Trade Checker's Tier 3 membership check is a
-> pending card.
+> **What is and isn't built:** the Universe Curator's first implementation
+> card has landed — the `research.universe_tiers` / `research.universe_staging`
+> stores, the five tier-transition events, the `shrap-universe-promote` CLI,
+> and the launch-list load (mechanism `mike-seed`, evidence the DQ-004 lock-in).
+> Still pending: deploying the Curator service to the Dell and running the
+> launch load in prod, and the Pre-Trade Checker's Tier 3 membership check
+> (unblocked by this card's read model).
 
 ## Purpose
 
@@ -145,9 +148,9 @@ Every Tier 3 member has a profile under `docs/universe/<ticker>.md` following `_
 
 Profiles are starting points. The Universe Curator Agent — once operational — proposes refinements as evidence accumulates. Mike approves material changes. Seed profiles are explicitly draft-quality and labeled as such.
 
-## Tier 3 launch proposal (awaiting lock-in — DQ-004 in docs/status/decision-queue.md)
+## Tier 3 launch list (locked by Mike 2026-07-23 — DQ-004 in docs/status/decision-queue.md)
 
-This is a draft for Mike's review. The categories and counts are designed to support the strategy archetypes the system intends to run; specific tickers within each category are debatable. The Universe Curator Agent will propose substitutions over time, but the initial set must be locked in by Mike before the system trades against Tier 3 membership.
+Mike locked this list as proposed on 2026-07-23 (DQ-004). The categories and counts support the strategy archetypes the system intends to run; the Universe Curator Agent will propose substitutions over time, but this is the day-one Tier 3 set the system trades against. The 44 names without a seed behavioral profile are grandfathered into Tier 3 under the same ruling — the profile prerequisite applies only to future Tier 2 promotions, not to the launch load (the six profiled names are SPY, QQQ, TSLA, NVDA, AAPL, LMT). The list below is the code constant's ground truth: `src/shrap/research/universe_curator/launch_list.py` is cross-checked against these tables by a test.
 
 **Counts:** 12 ETFs + 8 mega-cap tech + 10 high-retail-interest + 6 defense + 10 liquid mid-caps + 4 crypto exposure = 50.
 
@@ -242,13 +245,12 @@ Several names sit in multiple buckets functionally; the table-level assignment i
 
 ### What the Tier 3 proposal is and isn't
 
-This is a draft proposed by a subagent based on the vision document, Mike's prior trading history, and standard market-structure reasoning. It is not:
+This list was proposed by a subagent based on the vision document, Mike's prior trading history, and standard market-structure reasoning, and locked by Mike on 2026-07-23 (DQ-004). Even locked, it is not:
 
-- Lock-in. Mike must review and approve before the system trades against it (DQ-004).
 - Optimized. No formal screening was applied; selection was reasoned, not optimized over a screener.
 - Permanent. The Universe Curator Agent will propose substitutions as evidence accumulates, and Tier 2 promotions/evictions will move names in and out over time per the tier model above. Names that fail to provide trade frequency, behave unrecognizably, or lose liquidity will be candidates for replacement.
 
-Items where Mike's review is specifically requested:
+The review items below were the open questions at proposal time; Mike considered them and locked the list as proposed (no substitutions), leaving these as the natural first candidates for the Curator's quarterly review:
 
 1. **Defense bucket sizing.** 6 names is a defensible count given concentration and contract-data overlap, but Mike may prefer 8 (adding KTOS for drones/space and BA for the commercial/defense split) or 4 (cutting LDOS and LHX as less primary-source-readable).
 2. **High-retail-interest names.** GME and AMC have meme-era staying power but may have lost the persistent option-flow density that justified their inclusion. Mike's call: keep both, swap one, or cut both?

@@ -1,16 +1,8 @@
 # Decision queue
 
-**Last updated:** 2026-07-18
+**Last updated:** 2026-07-23
 
 ## Active decisions
-
-### DQ-004 — Universe lock-in
-
-**Question:** Confirm or revise the proposed 50-name list in `docs/universe/README.md`.
-
-**Current state:** The list is drafted and treated as locked by the constraints, but Mike has not explicitly signed off on the names. No deployed agent consumes the universe yet, so there is no operational forcing function — the Hypothesis Generator will be the first consumer.
-
-**Recommendation:** Rule before the Hypothesis Generator card starts.
 
 ### DQ-005 — Regime Classifier calibration ownership
 
@@ -29,6 +21,18 @@
 **Recommendation:** Keep open. The 2026-07-18 spot-check (10 random v2 rejections) passed — reasons coherent, impostor-class papers rejected on the right grounds — so the rejection direction looks sound. Ship the KI-007 verdict-history fix and judge the keep direction on the next few live batches; a real world-changer signal should eventually triangulate across EDGAR + arXiv, which the filter can't silently suppress on both legs.
 
 ## Resolved decisions
+
+- **DQ-004 — Universe lock-in.** Resolved 2026-07-23 by Mike. Ruling: the
+  50-name list in `docs/universe/README.md` is locked as proposed — no
+  substitutions. The 44 launch names without a seed behavioral profile are
+  grandfathered into Tier 3 anyway (profile backfill pending); the
+  profile-exists prerequisite applies only to future Tier 2 → 3 promotions,
+  not to the launch load. Loaded through the Universe Curator's event path —
+  one `research.universe-promoted` per name, mechanism `mike-seed`, evidence
+  the DQ-004 lock-in — by the Curator's first implementation card
+  (`phase1/universe-curator-service`). The review items recorded in the README
+  (defense sizing, GME/AMC, crypto design, mid-cap selection, ETF count) were
+  considered and left as the Curator's first quarterly-review candidates.
 
 - **DQ-007 — Research source coverage vs Mapper ordering.** Resolved
   2026-07-18 by Mike. Motivating case: Valar Atomics' Ward 250 criticality
