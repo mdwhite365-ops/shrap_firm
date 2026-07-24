@@ -743,3 +743,34 @@ services:
         condition: service_started
     networks:
       - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Universe Curator - Research Department. Owns Tier 2 (Watch) and Tier 3
+  # (Active) universe state under ADR-0012: research.universe_tiers (the
+  # Pre-Trade Checker's tradeability read model) and research.universe_staging
+  # (pending Tier 3 proposals). Sole publisher of the five tier-transition
+  # events. The container runs the daily watch-expiry sweep; Mike's decisions
+  # go through `docker compose exec universe-curator shrap-universe-promote ...`
+  # (seed / stage / approve / reject / extend / expire / load-launch-list).
+  # No LLM, no broker credentials. Sole writer of the tier tables.
+  # -------------------------------------------------------------------------
+  universe-curator:
+    build:
+      context: ../
+      dockerfile: infra/universe-curator.Dockerfile
+    container_name: shrap_universe_curator
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      UNIVERSE_CURATOR_REDIS_URL: "redis://redis:6379/0"
+      UNIVERSE_CURATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      UNIVERSE_CURATOR_SWEEP_INTERVAL_SECONDS: "86400"
+      UNIVERSE_CURATOR_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
