@@ -770,6 +770,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
   # Market Data backfill - shared infrastructure, run on demand (NOT started
   # by default; gated behind the "tools" profile). Fetches historical daily
   # bars from Alpaca's data API (IEX feed, adjustment=all) and upserts them
