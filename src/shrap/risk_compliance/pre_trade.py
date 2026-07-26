@@ -18,6 +18,7 @@ class RiskPolicy:
     """Initial Month-1 pre-trade policy."""
 
     allowed_universe: set[str]
+    universe_check_enabled: bool = True
     max_quantity_per_order: int = 1
     kill_switch_active: bool = False
 
@@ -103,7 +104,7 @@ class PreTradeChecker:
                 reasons=["Risk policy kill switch is active."],
             )
 
-        if ticker not in self._policy.allowed_universe:
+        if self._policy.universe_check_enabled and ticker not in self._policy.allowed_universe:
             return PreTradeDecision(
                 approved=False,
                 reason_code="TICKER_NOT_IN_UNIVERSE",

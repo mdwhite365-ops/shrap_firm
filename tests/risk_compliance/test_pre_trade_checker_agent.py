@@ -83,6 +83,37 @@ class StopAfterRiskDecisionsRedis(FakeRedis):
         return redis_id
 
 
+class FakeTierConn:
+    """fetchrow fake over research.universe_tiers keyed by Tier 3 membership."""
+
+    def __init__(self, members: set[str]) -> None:
+        self._members = {m.upper() for m in members}
+
+    async def fetchrow(self, sql: str, *args: object) -> dict[str, Any] | None:
+        return {"tier": "active"} if str(args[0]).upper() in self._members else None
+
+
+class FakeTierAcquire:
+    def __init__(self, conn: FakeTierConn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> FakeTierConn:
+        return self._conn
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        return None
+
+
+class FakeTierPool:
+    """Read-only Tier 3 pool fake, mirroring the tier3_membership test pattern."""
+
+    def __init__(self, members: set[str]) -> None:
+        self._conn = FakeTierConn(members)
+
+    def acquire(self) -> FakeTierAcquire:
+        return FakeTierAcquire(self._conn)
+
+
 def subscriber_for(redis: FakeRedis) -> GroupEventSubscriber:
     return GroupEventSubscriber(
         redis,  # type: ignore[arg-type]
@@ -396,3 +427,94 @@ async def test_run_loop_exits_cleanly_when_stop_signal_is_set() -> None:
     )
 
     assert stop.is_set()
+
+
+def test_couple_universe_gate_disables_allowlist_when_tier3_on() -> None:
+    from shrap.risk_compliance.pre_trade_checker_agent import couple_universe_gate
+
+    base = RiskPolicy(allowed_universe={"AAPL"}, max_quantity_per_order=2, kill_switch_active=True)
+    coupled = couple_universe_gate(base, True)
+
+    assert coupled.universe_check_enabled is False
+    # Every other field is carried over untouched.
+    assert coupled.allowed_universe == {"AAPL"}
+    assert coupled.max_quantity_per_order == 2
+    assert coupled.kill_switch_active is True
+
+
+def test_couple_universe_gate_keeps_allowlist_when_tier3_off() -> None:
+    from shrap.risk_compliance.pre_trade_checker_agent import couple_universe_gate
+
+    base = RiskPolicy(allowed_universe={"AAPL"}, max_quantity_per_order=2)
+    coupled = couple_universe_gate(base, False)
+
+    assert coupled.universe_check_enabled is True
+    assert coupled.allowed_universe == {"AAPL"}
+    assert coupled.max_quantity_per_order == 2
+    assert coupled.kill_switch_active is False
+
+
+@pytest.mark.asyncio
+async def test_process_intent_event_approves_tier3_member_outside_static_allowlist() -> None:
+    from shrap.events import Envelope, ReceivedEvent
+    from shrap.risk_compliance.pre_trade_checker_agent import (
+        STREAM_RISK_APPROVED,
+        process_intent_event,
+    )
+    from shrap.risk_compliance.tier3_membership import Tier3MembershipGate
+
+    redis = FakeRedis()
+    await publish_intent(redis, paper_intent(ticker="RKLB", quantity=1, size_hint=1))
+    received = ReceivedEvent(
+        stream=STREAM_INTENT,
+        redis_stream_id="1-0",
+        envelope=Envelope.from_redis_fields(redis.calls[0][1]),
+    )
+    # RKLB is not in the static allowlist, but the allowlist is disabled and
+    # RKLB is in Tier 3, so the authoritative Tier 3 gate approves it.
+    policy = RiskPolicy(allowed_universe={"AAPL"}, universe_check_enabled=False)
+    gate = Tier3MembershipGate(FakeTierPool({"RKLB"}))
+
+    result = await process_intent_event(
+        redis,  # type: ignore[arg-type]
+        received,
+        policy,
+        tier3_gate=gate,
+    )
+
+    assert result.stream == STREAM_RISK_APPROVED
+    assert '"approved":true' in redis.calls[-1][1]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_process_intent_event_vetoes_non_tier3_ticker_with_tier3_reason() -> None:
+    from shrap.events import Envelope, ReceivedEvent
+    from shrap.risk_compliance.pre_trade_checker_agent import (
+        STREAM_RISK_VETOED,
+        process_intent_event,
+    )
+    from shrap.risk_compliance.tier3_membership import TICKER_NOT_IN_TIER3, Tier3MembershipGate
+
+    redis = FakeRedis()
+    await publish_intent(redis, paper_intent(ticker="RKLB", quantity=1, size_hint=1))
+    received = ReceivedEvent(
+        stream=STREAM_INTENT,
+        redis_stream_id="1-0",
+        envelope=Envelope.from_redis_fields(redis.calls[0][1]),
+    )
+    # Allowlist disabled and RKLB not in Tier 3: the Tier 3 gate vetoes, and the
+    # veto reason is the Tier 3 code, never the (now-unenforced) allowlist code.
+    policy = RiskPolicy(allowed_universe={"AAPL"}, universe_check_enabled=False)
+    gate = Tier3MembershipGate(FakeTierPool(set()))
+
+    result = await process_intent_event(
+        redis,  # type: ignore[arg-type]
+        received,
+        policy,
+        tier3_gate=gate,
+    )
+
+    assert result.stream == STREAM_RISK_VETOED
+    payload = redis.calls[-1][1]["payload"]
+    assert f'"reason":"{TICKER_NOT_IN_TIER3}"' in payload
+    assert "TICKER_NOT_IN_UNIVERSE" not in payload

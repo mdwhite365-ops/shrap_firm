@@ -83,6 +83,22 @@ so the order path does not hit Postgres per order.
   asymmetry is deliberate: flag off = permissive by explicit human choice;
   flag on + broken state = closed. Unavailable outcomes are never cached,
   so recovery is re-checked on the next order.
+- **Enabled: Tier 3 is the authoritative universe gate (Mike's 2026-07-24
+  ruling).** When enforcement is on, Tier 3 membership is the binding universe
+  gate and the static `allowed_universe` allowlist — a Month-1 stub loaded
+  from `PRE_TRADE_CHECKER_ALLOWED_UNIVERSE` — is no longer enforced: the base
+  `check()` skips its `TICKER_NOT_IN_UNIVERSE` rejection and delegates
+  eligibility entirely to the Tier 3 gate. Without this, only the
+  allowlist ∩ Tier 3 intersection would be tradeable, so the 50-name Tier 3
+  set could never trade past the 6-name Month-1 stub. The service couples the
+  two to a single flag in `run()` (`couple_universe_gate` sets
+  `RiskPolicy.universe_check_enabled = not tier3_enforcement`): the static
+  allowlist is disabled if and only if the Tier 3 gate is active, so there is
+  never a running loop with neither universe gate. Because the Tier 3 gate
+  itself fails closed on empty or unavailable state, disabling the static
+  allowlist opens no hole even during a Postgres outage. When enforcement is
+  **off**, the static allowlist stays the interim Month-1 guardrail exactly as
+  before.
 
 ## Outputs
 
@@ -108,7 +124,7 @@ The pure-function check has no persistence needs. Stream offsets persist in the 
 ## Sprint scope
 
 - Month 1 Card 3: Wire-only event-loop wrapper around the existing pure-function `PreTradeChecker`; publish approved/vetoed events with correlation and tests proving the signal-to-risk path.
-- Tier 3 membership check (ADR-0012): shipped flag-gated and **off by default**; flipping `PRE_TRADE_CHECKER_TIER3_ENFORCEMENT=true` waits on the Universe Curator's first implementation card populating `research.universe_tiers` (post DQ-004 lock-in). Until then the env-var `allowed_universe` remains the only ticker filter.
+- Tier 3 membership check (ADR-0012): shipped flag-gated and **off by default**; flipping `PRE_TRADE_CHECKER_TIER3_ENFORCEMENT=true` waits on the Universe Curator's first implementation card populating `research.universe_tiers` (post DQ-004 lock-in). While off, the env-var `allowed_universe` remains the only ticker filter; once on, Tier 3 membership supersedes it as the authoritative universe gate (see the Tier 3 membership rule).
 - Future cards: Position correlation, exposure limits, kill-switch state, daily-loss limits, execution handoff, and persistent risk decision tables.
 
 ## Deployability

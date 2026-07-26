@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from dataclasses import replace
 from typing import Any, Protocol, cast
 
 import structlog
@@ -264,6 +265,19 @@ async def run_loop(
             await asyncio.sleep(retry_delay_seconds)
 
 
+def couple_universe_gate(policy: RiskPolicy, tier3_enforcement: bool) -> RiskPolicy:
+    """Couple the static allowlist to Tier 3 enforcement.
+
+    When Tier 3 enforcement is on, Tier 3 membership is the authoritative
+    universe gate, so the static allowed_universe allowlist (a Month-1 stub)
+    is disabled — otherwise only the allowlist∩Tier-3 intersection would be
+    tradeable. Disabling is coupled to the SAME flag that builds the Tier 3
+    gate in run(), so the static allowlist is off if and only if the Tier 3
+    gate is active. There is never a running loop with neither universe gate.
+    """
+    return replace(policy, universe_check_enabled=not tier3_enforcement)
+
+
 async def run(
     redis_url: str,
     policy: RiskPolicy,
@@ -299,6 +313,25 @@ async def run(
             }
             if rate_limit_config
             else None
+        ),
+    )
+    # Couple the static allowlist to the SAME flag that builds the Tier 3 gate
+    # below (ADR-0012; Mike's 2026-07-24 ruling). When Tier 3 enforcement is on,
+    # Tier 3 membership is the authoritative universe gate and the Month-1 static
+    # allowlist is disabled here; when off, the allowlist stays the interim
+    # guardrail. Invariant: in any running loop, universe_check_enabled == False
+    # implies the Tier 3 gate is active — and that gate itself fails closed on
+    # empty/unavailable state (see tier3_membership.Tier3MembershipGate), so
+    # disabling the static allowlist opens no hole even during a DB outage.
+    policy = couple_universe_gate(policy, tier3_enforcement)
+    log.info(
+        "pre_trade_checker.universe_gate",
+        static_allowlist_enforced=policy.universe_check_enabled,
+        authoritative_gate=("static_allowlist" if policy.universe_check_enabled else "tier3"),
+        note=(
+            "static allowed_universe allowlist is the binding universe gate"
+            if policy.universe_check_enabled
+            else "static allowlist unenforced; Tier 3 membership is the universe gate"
         ),
     )
     stop = asyncio.Event()
@@ -361,6 +394,7 @@ __all__ = [
     "STREAM_RISK_APPROVED",
     "STREAM_RISK_VETOED",
     "build_risk_decision_payload",
+    "couple_universe_gate",
     "poll_once",
     "process_intent_event",
     "run",
