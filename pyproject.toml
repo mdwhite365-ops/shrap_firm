@@ -52,6 +52,7 @@ strategy-runner = [
     "pandas-market-calendars>=4.4",
 ]
 strategy-seed = ["asyncpg>=0.29"]
+infra-mapper = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 spine-smoke = ["asyncpg>=0.29"]
 
 [project.scripts]
