@@ -139,23 +139,146 @@ the seeded strategy → first verdict → Librarian lifecycle transition. That i
 the first real test of whether the firm can find edge at all, which is a more
 load-bearing question than the Tech Watcher's filter calibration.
 
+**The command block below replaces an earlier draft that would not have run.**
+Read against the code on 2026-07-27, that draft had four defects: it named a
+`strategy-seed` compose service that does not exist, backfilled
+`AAPL,MSFT,NVDA,SPY` when the seeded strategy trades **XLE and nothing else**,
+and skipped both of the pipeline's hard prerequisites. Corrected and verified
+chain:
+
+**Two gates the Evaluator checks before it will backtest anything**
+(`src/shrap/research/strategy_evaluator/pipeline.py`):
+
+1. **Tier-3 membership** (`_check_tickers_tradeable`, line 488). Every ticker
+   must be `active` in `research.universe_tiers` or it raises
+   `SpecHygieneError` and nothing runs. That table is **empty** — the
+   launch-list load has never been run on the Dell. This is no longer blocked:
+   DQ-004 was resolved 2026-07-23 and the 44 unprofiled names were
+   grandfathered in the same ruling, so `load-launch-list` is just an
+   un-run command now, not a pending decision.
+2. **Anchor freshness** (line 293). The strategy's world-changer must be
+   `promoted` in `research.world_changers`. **It is `proposed`** — the same
+   open item already logged below ("The Mapper's anchor thesis was never
+   promoted"). `first_strategy.py:52` claims "promoted 2026-07-18"; the
+   database disagrees, and the database is right.
+
+**The trap, and the reason `--dry-run` is not optional.** A dead anchor does
+*not* refuse. `map_verdict` returns `KILL / anchor-not-live` with
+`engine_ran=False` and zero trades (`verdict.py:61`), and a non-dry-run
+`commit()` **transitions the seed to `killed` on the registry**
+(`pipeline.py:376`). Because `shrap-strategy-seed load-first` is idempotent on
+`spec_hash`, it will then refuse to recreate the row — the firm's only
+strategy would be stuck killed, needing a manual registry transition to
+recover. That kill would also *look* like the milestone landing: a first
+verdict, persisted, with an evaluation card and published events. It would
+test nothing — the backtest never ran.
+
+## THE FIRST-VERDICT RUNBOOK — one session, six steps
+
+**Why this is the whole priority.** The sprint's *minimum* success criteria
+(`docs/00-vision.md:40`) are three items. Two are met: Mike's daily time is
+under two hours, and the audit trail is strong. The third — "the development
+department, research department, and trading floor are all functional" — has
+one gap. The Trading Floor is proven (9/9, autonomous signal→fill). Development
+is functional by substitution and ADR-0014 makes that honest. **Research has
+never completed a single loop.** This runbook closes it.
+
+Every argument below was verified against the code on 2026-07-27, including
+one that a previous draft got wrong: `candidate_id` on the promote CLI is
+**positional**, not `--candidate-id` (`promotion.py:314`).
+
+Run top to bottom in one sitting. Paste output back after each step.
+
 ```bash
-# 1. Confirm a strategy exists to evaluate
 cd /mnt/Archive/shrap/shrap_firm/infra
-sudo docker compose --profile tools run --rm strategy-seed shrap-strategy-seed list
 
-# 2. Backfill daily bars (dry-run first — it reports row counts without writing)
-sudo docker compose --profile tools run --rm market-data \
-  shrap-market-data-backfill --tickers AAPL,MSFT,NVDA,SPY --since 2021-01-01 --dry-run
+# ── STEP 1 ── Promote the anchor. Mike's decision, authorized 2026-07-27.
+# candidate_id is POSITIONAL. `research.world-changer-promoted` has zero
+# consumers, so nothing cascades — this only flips state and writes the event.
+sudo docker compose exec tech-watcher \
+  shrap-tech-watcher-promote promote 01KXVVPXDMB4HS1QNRPQWRP1RX \
+  --note "Promoted 2026-07-27 to unblock the Evaluator anchor gate for the firm's first verdict. Thesis and falsifiers unchanged. Open: archetype may be keystone-completion rather than cost-curve (ADR-0013 s7)."
+# EXPECT: a promoted decision line naming the candidate.
 
-# 3. Evaluate (dry-run computes the verdict without persisting or publishing)
+sudo docker compose exec tech-watcher shrap-tech-watcher-review
+# EXPECT: "Proposed: 0 · Promoted: 1"; decided_at and decision_note no longer NULL.
+
+# ── STEP 2 ── Populate research.universe_tiers. Idempotent; re-run = no-op.
+# Does NOT flip PRE_TRADE_CHECKER_TIER3_ENFORCEMENT, which stays false.
+sudo docker compose exec universe-curator shrap-universe-promote load-launch-list
+# EXPECT: "launch-list loaded: 50 promoted (...)" — or fewer if partially loaded.
+
+sudo docker compose exec universe-curator shrap-universe-promote list
+# EXPECT: XLE present with tier `active`. If XLE is missing, STOP — step 5 will refuse.
+
+# ── STEP 3 ── Seed the strategy. The seed CLI ships inside the evaluator
+# image; there is no strategy-seed service. Idempotent on spec_hash.
 sudo docker compose --profile tools run --rm strategy-evaluator \
-  shrap-strategy-evaluate --strategy-id <id from step 1> --dry-run
+  shrap-strategy-seed load-first
+# EXPECT: "loaded: 01KYGTRTTQA9X2B2E16N4SBPTG ... at status=hypothesis"
+#         or "already present: ... status=hypothesis — skipped".
+# IF it says status=killed: stop. The registry needs a manual transition
+# back to hypothesis; load-first will not recreate it.
+
+# ── STEP 4 ── Backfill XLE. The ONLY ticker the seed trades. The engine reads
+# a 5-year window; start earlier so MA(100) has warmup inside fold one.
+sudo docker compose --profile tools run --rm market-data \
+  shrap-market-data-backfill --tickers XLE --since 2020-01-01 --dry-run
+# EXPECT: "tickers=1 rows_fetched=~1600 rows_upserted=0 dry_run=True"
+# If rows_fetched is 0, the Alpaca data credentials are the problem, not the code.
+
+sudo docker compose --profile tools run --rm market-data \
+  shrap-market-data-backfill --tickers XLE --since 2020-01-01
+# EXPECT: rows_upserted matching rows_fetched, dry_run=False.
+
+# ── STEP 5 ── Evaluate. DRY RUN FIRST, ALWAYS.
+sudo docker compose --profile tools run --rm strategy-evaluator \
+  shrap-strategy-evaluate --strategy-id 01KYGTRTTQA9X2B2E16N4SBPTG --dry-run
+# READ THE ANCHOR LINE BEFORE ANYTHING ELSE.
+#   "Anchor: not live"  -> step 1 did not take. STOP. Do not drop --dry-run.
+#   "Anchor: live" + trades > 0 -> the engine ran. This is a real verdict.
+# Expected verdict: KILL / insufficient-trades. That is SUCCESS, see below.
+
+# ── STEP 6 ── Commit the verdict, and watch the Librarian react.
+sudo docker compose --profile tools run --rm strategy-evaluator \
+  shrap-strategy-evaluate --strategy-id 01KYGTRTTQA9X2B2E16N4SBPTG
+# EXPECT: evaluation_id=... transitioned=True to_stage=killed card=... streams=...
+
+sudo docker compose logs --tail 50 strategy-librarian
+# EXPECT: the Librarian consuming research.strategy.verdict and transitioning
+# the registry. This is the loop closing — it has idled since PR #40 waiting
+# for exactly this event.
 ```
 
-Verify the tools-profile service names against `infra/docker-compose.yml`
-before running — the Infra Mapper precedent is
-`docker compose --profile tools run --rm <svc> <cli>`.
+**How to read the result, and why a kill is the win.** The seed is a plain
+MA(20/100) crossover on one ETF; it flips position a handful of times over five
+years and cannot clear the 150-trade gate. Its own write-up
+(`docs/strategies/fission-costcurve-seed-v1.md`) predicts this.
+
+The distinction that matters is *which* kill:
+
+- `KILL / anchor-not-live` with `engine_ran=False` — **fake.** Nothing was
+  measured. The backtest never ran.
+- `KILL / insufficient-trades` with `engine_ran=True` — **real.** The engine
+  ran a full walk-forward, measured the strategy, and judged it. The Research
+  Department completed a loop for the first time.
+
+The second outcome is the milestone. Record it in `recent-changes.md` as such.
+
+**The one calibration question this raises, and it is Mike's.** `DEFAULT_MIN_TRADES
+= 150` (`engine.py:51`) is calibrated for the vision's fast layer — "fast loops,
+many trades." A multi-year structural thesis *cannot* produce 150 trades, so for
+Framework #1 the gate is not measuring overfitting risk; it is excluding the
+archetype categorically (KI-013). Setting an archetype-appropriate floor is
+legitimate. Setting it to whatever number lets this seed through is the
+"promoting noise" failure the vision warns about. Those look similar and are
+not. The ruling wants a rationale, not a number.
+
+**After the loop closes.** The remaining sprint weeks go to making it *repeat*
+without Mike — the Evaluator has no trigger and is tools-profile/manual-only,
+so nothing in Research is automatic regardless of how many lenses exist. That
+is the difference between "we did it once by hand" and "the Research Department
+is functional." Everything in ADR-0013 beyond merging it is Phase 2.
 
 **Open PRs at session end (none stacked, any merge order):**
 
@@ -172,7 +295,12 @@ criterion 3.
 
 ## Main branch state
 
-Merged on `main` through PR #71. Highlights since the spine-close status:
+Merged on `main` through PR #90 (#91 open). **PRs #72–80 were never recorded
+in either status doc** — that gap is why the pivot's command chain was drafted
+against a repo state that had already moved: the Evaluator, the Universe
+Curator service, the market-data store, the strategy seed, and the paper
+strategy runner all shipped in that window. Backfilled into
+`recent-changes.md`. Highlights since the spine-close status:
 consumer groups (#37), strategy registry + state machine (#38), Strategy
 Librarian service (#40), Evaluator ruling — Framework #1 first, in-house
 walk-forward engine (#41), LLM tier client (#42), registry seed correction +
@@ -285,12 +413,14 @@ observation log (#85). Full list in `recent-changes.md`.
   nodes are all `stale-evidence` (i.e. proposing zero names) raises nothing.
   Harmless while nothing consumes graph state; expensive once the weekly
   aggregation lands.
-- **Blocked on Mike:** DQ-004 lock-in and the 6-of-50 profile-coverage
-  ruling (Universe Curator spec, open questions) gate the Curator's first
-  implementation card (`research.universe_tiers` +
-  `research.universe_staging` stores, the four transition events, the
-  Mike approval CLI, and the launch-list load) — which in turn is what
-  allows flipping `PRE_TRADE_CHECKER_TIER3_ENFORCEMENT`.
+- ~~**Blocked on Mike:** DQ-004 lock-in and the 6-of-50 profile-coverage
+  ruling.~~ **Both resolved 2026-07-23** (DQ-004 in `decision-queue.md`; the 44
+  unprofiled names grandfathered by the same ruling, profile prerequisite
+  applying only to future Tier 2 promotions). The Curator's implementation
+  card **shipped** in PR #75/#76. What remains is purely operational: the
+  launch-list load has never been run on the Dell, so
+  `research.universe_tiers` is empty — which is what still blocks flipping
+  `PRE_TRADE_CHECKER_TIER3_ENFORCEMENT`, and what step 0 above fixes.
 
 ## Local credentials policy
 

@@ -1,5 +1,15 @@
 # Implementation Agent
 
+> **DESCOPED 2026-07-27 by ADR-0014.** Not built, and not planned for Phase 1.
+> Claude Code sessions on Mike's MacBook fill this role today, and did so for
+> every card from PR #7 onward. This spec is retained as a historical record and
+> as the Phase 2 starting point should local development autonomy be pursued.
+>
+> The reason it was never built is architectural, not a matter of priority: the
+> implementer is not a deployable agent. It is a human-initiated session on a
+> machine that is not the Dell, and it cannot be expressed as an ADR-0009 tier
+> alias. See ADR-0014 §3 (the three-tier compute boundary).
+
 **Department:** Development
 **LLM tier:** `cloud-default` as the driver model behind OpenHands SDK for routine
 non-protected-path work. **Escalates to `cloud-judgment-heavy` for any change touching a
