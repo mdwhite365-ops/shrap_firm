@@ -76,3 +76,49 @@ disposition row (`synthesized` / `deferred-max-proposals` /
 `research.tech_watcher_cluster_log` before any synthesis LLM call, so a
 hold or a mid-batch crash still leaves a queryable trace. The next
 re-filter comparison can name its borderline items instead of losing them.
+
+## KI-008 — The funnel's thesis memory depends on Mike typing it in
+
+**Status:** Open. Found 2026-07-27 while recording the Valar Atomics
+demonstration against the promoted fission thesis.
+
+`research.world_changer_observations` (PR #85) closed a real gap — thesis-level
+evidence previously had nowhere to live — but its only writer is Mike running
+`shrap-world-changer-observe add`. Nothing in the pipeline attaches an
+observation to a promoted thesis automatically. So the funnel's memory of what
+has happened to a live thesis is exactly as good as Mike's manual diligence,
+which inverts principle 6 (Mike is the architect, not the implementer) and
+principle 10 (Mike's time is the constraint). The store is correct; the feed is
+missing.
+
+The concrete case is sharper than a general complaint, because the ingest
+capability already exists. Valar Atomics' Ward 250 reached criticality
+2026-06-18 under the DOE Reactor Pilot Program — the motivating case for the
+DQ-007 reorder — and a public demonstration followed. Both bear on the promoted
+fission thesis (`01KXVVPXDMB4HS1QNRPQWRP1RX`). The gov-sources legs meant to
+catch exactly this shipped in PR #53 and are deployed. Valar is a *private*
+company, so it is invisible to the EDGAR leg and to the ticker-scoped News
+Analyzer and Filing Processor — but the DOE newsroom and USASpending legs do
+not depend on a ticker, and a DOE program participant should leave a trail in
+them.
+
+**Diagnostic first, card second.** Before building an auto-attach path,
+establish where the Valar signal actually went: query
+`research.tech_watcher_cluster_log` and `research.filter_verdict_history` for
+Valar / Reactor Pilot Program items. Four outcomes, four different fixes:
+
+- *Never ingested* → source coverage gap (which leg, and why).
+- *Ingested, filtered out* → filter prompt or model quality (folds into DQ-006).
+- *Held single-source* → the triangulation rule is correct but the second leg
+  is missing; consider whether a private-company thesis can ever triangulate
+  under the current taxonomy.
+- *Proposed and sitting unreviewed* → the review surface is the bottleneck,
+  not the ingest.
+
+**Mitigation (not yet built):** an auto-attach path writing pipeline hits to
+`world_changer_observations` for the theses they reference, with `bearing` and
+the kill-criterion link left unset for Mike rather than guessed — the falsifier
+judgement is the part that must not be automated away. A thesis-scoped
+watchlist (named entities, including private ones, attached to a promoted
+world-changer) is the likely shape, since ticker-scoped watching structurally
+cannot see a Valar.

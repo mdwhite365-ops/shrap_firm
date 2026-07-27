@@ -1,6 +1,6 @@
 # Current sprint status
 
-**Last updated:** 2026-07-23 (afternoon)
+**Last updated:** 2026-07-27
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
@@ -63,6 +63,51 @@ policy. Next: the Dell deploy session for #65/#68/#70, then the
 Universe Curator service card once DQ-004 and the profile-coverage
 ruling land.
 
+**The 2026-07-26/27 session closed the Infrastructure Mapper's Month-2
+scope (#81–85) and deployed it to the Dell.** Five cards: the graph schema
++ store (#81), the `shrap-infra-mapper` CLI + first hand-seeded graph
+(#82), the deterministic staleness pass (#83), a repair for seed evidence
+rows stamped with load time (#84), and the thesis observation log (#85).
+Three of the five produced findings rather than only code, and the findings
+are the point:
+
+1. **The universe gap (#82).** Mapping the promoted fission thesis onto the
+   closed layer-role taxonomy, the critical-path layers — `raw-inputs`
+   (uranium), `power-gen` (nuclear/SMR), `power-delivery` — have **no Tier-3
+   representation**. Rather than force a wrong-layer ticker in (the
+   Cisco-1999 trap the Mapper exists to prevent), the seed graph is
+   deliberately small: four hyperscalers on the `end-user` demand side, at
+   `low` confidence / `downstream-beneficiary`. The graph's own output says
+   the fission thesis is only weakly expressible in today's universe.
+2. **The false-fresh clock (#83/#84).** The staleness pass runs on evidence
+   `observed_at`, which exposed that #82's loader stamped *load* time — so
+   2024 procurement announcements looked days old and the first pass would
+   have reported a fully fresh graph. General property worth carrying to
+   every append-only store: **a max-based clock can absorb a too-old error
+   but never a too-new one**, because the spurious row keeps winning the
+   max. Repair required an in-place update, the one documented exception on
+   `graph_node_evidence`.
+3. **No home for thesis evidence (#85).** The funnel had two evidence stores
+   and neither could hold an observation about a *thesis*:
+   `graph_node_evidence` is per-ticker-per-layer, `world_changer_evidence`
+   is proposal-time provenance keyed on `item_id` with no observation date.
+   `research.world_changer_observations` is the ongoing log; every row
+   declares whether it bears on a declared kill criterion, and the summary
+   reports that count first, because a thesis accumulating supportive
+   observations that touch none of its falsifiers is collecting a story, not
+   being validated.
+
+**Live on the Dell 2026-07-27.** Restamp corrected 4 of 4 evidence rows
+(603–938 days older; AMZN's year-only ref floored conservatively to
+2024-01-01). The staleness pass then flagged all four nodes
+`active → stale-evidence`, and a second run reported `flagged stale: 0,
+unchanged: 4` with no writes — idempotence confirmed, so the pass is safe to
+schedule. **The graph now reads `(4 nodes, 0 active)`:** when the weekly
+aggregation card lands it unions the *active* ticker set, so this graph
+currently proposes **zero** universe names. That is the correct answer, not
+a bug — the one promoted thesis has no tradeable expression whose evidence
+has been confirmed within two years.
+
 ## Main branch state
 
 Merged on `main` through PR #71. Highlights since the spine-close status:
@@ -77,7 +122,9 @@ KI-007 audit trails (#60), source-class taxonomy spec + enforcement
 (#61, #63), News Analyzer spec + service (#62, #65), Filing Processor spec
 + service (#66, #68), universe README tier restructure (#67), Universe
 Curator spec rewrite (#69), Pre-Trade Tier 3 membership check (#70),
-Filing Processor backfill CLI (#71). Full list in `recent-changes.md`.
+Filing Processor backfill CLI (#71), Infra Mapper schema (#81), seed graph +
+CLI (#82), staleness pass (#83), seed-evidence repair (#84), thesis
+observation log (#85). Full list in `recent-changes.md`.
 
 ## Spine verification record
 
@@ -138,6 +185,27 @@ Filing Processor backfill CLI (#71). Full list in `recent-changes.md`.
   deployed 2026-07-19 has already shown it survives a restart; the
   `closed-day` Sat/Sun + `pre-open` Monday cycle is the remaining
   certification step.
+- **Valar Atomics: did the funnel see it?** (2026-07-27, KI-008.) Ward 250
+  reached criticality 2026-06-18 under the DOE Reactor Pilot Program — the
+  motivating case for the DQ-007 reorder — and a public demonstration
+  (reactor powering an NVIDIA DGX Spark) followed. Both bear on the promoted
+  fission thesis. The gov-sources legs meant to catch exactly this (DOE
+  newsroom + USASpending) shipped in PR #53 and are deployed, so the open
+  question is not *can* the firm see Valar but **did it, and where did the
+  signal go**. Check `shrap-tech-watcher-review` and
+  `research.tech_watcher_cluster_log` for Valar/DOE-program items and
+  whether they were filtered, held single-source, or never ingested. The
+  answer picks the fix: prompt, source coverage, or triangulation rule.
+- **Thesis observations are manual-only** (KI-008). `shrap-world-changer-observe`
+  is Mike's keyboard. Nothing attaches observations to a promoted thesis
+  automatically, which inverts principles 6 and 10. The auto-attach card is
+  the fix and should follow the Valar diagnostic above, since the diagnostic
+  determines what it needs to attach.
+- **Graphed-but-fully-stale is unmonitored.** The spec has the Health
+  Monitor surfacing "promoted but ungraphed" world-changers; a graph whose
+  nodes are all `stale-evidence` (i.e. proposing zero names) raises nothing.
+  Harmless while nothing consumes graph state; expensive once the weekly
+  aggregation lands.
 - **Blocked on Mike:** DQ-004 lock-in and the 6-of-50 profile-coverage
   ruling (Universe Curator spec, open questions) gate the Curator's first
   implementation card (`research.universe_tiers` +
@@ -175,3 +243,13 @@ web before deepening the funnel.
    an event trigger).
 4. Then the prior queue: Infrastructure Mapper, Bottleneck Scout,
    Hypothesis Generator, Evaluator.
+
+**Progress against that order (2026-07-27):** items 1–3 shipped
+(#53/#54, #65–71). Item 4's Infrastructure Mapper Month-2 scope is
+complete and deployed (#81–85). Remaining in the funnel: Bottleneck Scout
+(the component the entire Cisco-1999 defense rests on), Hypothesis
+Generator (closes the autonomy loop), Evaluator. The Valar diagnostic and
+the observation auto-attach card (KI-008) now sit ahead of Bottleneck
+Scout on the same "widen the web before deepening the funnel" logic that
+motivated the original reorder — the Scout consumes graph and thesis
+state, and both are currently fed by hand.
