@@ -25,6 +25,31 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 > clustering; single-source clusters wait unsynthesized until a second
 > source class corroborates (they are the `seen-not-proposed` population).
 
+> **Thesis observation log (2026-07-27).** The funnel had two evidence stores
+> and neither could hold an observation about a *thesis*. `graph_node_evidence`
+> (Infra Mapper) says why a ticker sits in a layer role — per-node.
+> `world_changer_evidence` (this agent) links a candidate to the *ingested
+> items* that produced it at proposal time: keyed `(candidate_id, item_id)`,
+> no observation date, no way to represent anything Mike saw himself. So a
+> real event bearing on a promoted thesis had nowhere to live. The trigger
+> case: a fission-startup demonstration that plainly bears on the promoted
+> fission thesis, but is evidence for *neither* a graph node nor a proposal.
+>
+> `research.world_changer_observations` (append-only) is the ongoing log, named
+> apart from the provenance table beside it — *what made us propose it* vs.
+> *what has happened since*. CLI: `shrap-world-changer-observe {add,list}`.
+>
+> **Every row declares whether it bears on a declared kill criterion**
+> (`kill_criterion_index`, `NULL` for none), and the summary reports that count
+> first, because a thesis accumulating supportive observations that touch none
+> of its falsifiers is not being validated — it is collecting a story. The
+> `list` view warns explicitly on three patterns: zero falsifier contact, all-soft
+> evidence, and supporting-with-no-contradicting. Hard/soft reuses the
+> source-class independence taxonomy in `synthesis.py`; a promotional
+> demonstration is soft by construction, and `--hard` is opt-in so a forgotten
+> flag understates rather than inflates. Dangling criterion indices are
+> rejected — a link pointing nowhere would fake falsifier coverage.
+
 ## Purpose
 
 The Tech Watcher is the top of the new three-step Research funnel
