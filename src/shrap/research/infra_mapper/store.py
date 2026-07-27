@@ -223,6 +223,24 @@ WHERE graph_id = $1
 GROUP BY ticker, layer_role
 """.strip()
 
+SELECT_EVIDENCE_FOR_GRAPH_SQL = """
+SELECT evidence_id, graph_id, ticker, layer_role, evidence_ref, source_class, observed_at
+FROM research.graph_node_evidence
+WHERE graph_id = $1
+ORDER BY ticker, layer_role, observed_at
+""".strip()
+
+# Deliberate exception to the append-only rule on graph_node_evidence. Staleness
+# reads MAX(observed_at), so a row stamped too *fresh* can never be corrected by
+# appending — the wrong row keeps winning the max. Correcting a false observation
+# date therefore requires an in-place update. Callers must target a single
+# evidence_id and record the correction in graph_node_history.
+UPDATE_EVIDENCE_OBSERVED_AT_SQL = """
+UPDATE research.graph_node_evidence
+SET observed_at = $2
+WHERE evidence_id = $1
+""".strip()
+
 
 class AsyncConnection(Protocol):
     async def execute(self, sql: str, *args: object) -> object: ...
@@ -357,6 +375,25 @@ class PostgresGraphStore:
             (str(row["ticker"]), str(row["layer_role"])): row["latest_observed_at"] for row in rows
         }
 
+    async def evidence_for_graph(self, graph_id: str) -> list[dict[str, Any]]:
+        """Every evidence row in one graph, oldest first per node."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_EVIDENCE_FOR_GRAPH_SQL, graph_id)
+        return [dict(row) for row in rows]
+
+    async def correct_evidence_observed_at(
+        self, *, evidence_id: str, observed_at: datetime
+    ) -> bool:
+        """Correct one evidence row's observation date.
+
+        The documented exception to append-only — see
+        ``UPDATE_EVIDENCE_OBSERVED_AT_SQL``. Only for repairing a date that was
+        recorded wrong, never for recording new evidence.
+        """
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(UPDATE_EVIDENCE_OBSERVED_AT_SQL, evidence_id, observed_at)
+        return str(result).endswith(" 1")
+
     async def insert_evidence(
         self,
         *,
@@ -404,7 +441,9 @@ __all__ = [
     "NODE_REMOVED",
     "NODE_STALE_EVIDENCE",
     "NODE_STATUSES",
+    "SELECT_EVIDENCE_FOR_GRAPH_SQL",
     "SELECT_LATEST_EVIDENCE_SQL",
+    "UPDATE_EVIDENCE_OBSERVED_AT_SQL",
     "AsyncPool",
     "PostgresGraphStore",
 ]

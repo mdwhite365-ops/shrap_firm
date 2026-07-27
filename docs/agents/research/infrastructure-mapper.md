@@ -48,6 +48,20 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 > moves nodes between `active` and `stale-evidence`; `pending-review`,
 > `downgraded`, and `removed` are owned by Mike's gate and by kill-criterion
 > evaluation, and reactivating them here would launder a kill decision.
+>
+> **Card 4 (repair).** The Dell loaded the seed graph on 2026-07-27 under
+> card-2 code, so its four evidence rows carry load time rather than the true
+> observation date. Because the load is idempotent-by-skip, card 3's loader fix
+> could not reach them. Note the general property this exposed: staleness reads
+> `MAX(observed_at)`, so an append-only evidence table can absorb a
+> too-*old* error but never a too-*new* one — a spuriously fresh row always wins
+> the max. Repair therefore requires an in-place update, the one documented
+> exception to append-only on `graph_node_evidence`. The
+> `restamp-seed-evidence` subcommand corrects only rows whose ticker, layer
+> role, *and* evidence ref match a declared seed node exactly (so later cards'
+> appended evidence is never clobbered) and writes a `graph_node_history` row
+> per correction, keeping the repair itself auditable.
+>
 > Still **deferred** to later cards: LLM-assisted layer/ticker enumeration
 > (which would build a rich AI-compute graph), actual evidence *refresh*
 > (fetching new filings — card 3 only measures age), kill-criterion
