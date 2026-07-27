@@ -196,19 +196,46 @@ Per-leg ingest as of 2026-07-27:
 | federal-register | 113 | 2026-05-01 | 2026-07-27 |
 | doe-newsroom | 16 | 2026-06-30 | 2026-07-26 |
 
-**USASpending has ingested nothing for 18 days** while every other leg is
-current. Nothing alerted; it was found only by manually querying per-leg
-volume during an unrelated diagnostic. A leg can die and the firm's only
-symptom is a funnel that quietly proposes less — indistinguishable from a
-market with less happening in it.
+**Correction (2026-07-27, same day).** The original entry read that table as
+"USASpending has ingested nothing for 18 days." That was wrong, and the error
+is worth keeping on the record because it is easy to repeat: for USASpending,
+`external_ts` is the award's *Start Date*, not the fetch time. Contract start
+dates are mostly historical — hence the 1978 minimum — so `max(external_ts)`
+says nothing about whether the leg is running. **Judging ingest liveness needs
+`fetched_at`; every other leg's `external_ts` happens to track publication
+closely enough that the distinction was invisible until a leg where it doesn't.**
 
-Secondary observations from the same query: DOE newsroom shows ~13 days of
-**ingest latency** (the 2026-07-06 criticality article was fetched
-2026-07-19), so that leg is running as a slow backfill rather than a live
-feed; and arXiv is 3 days behind the two current legs.
+The leg was alive. The real defect, found by calling the API directly, was
+worse: `time_period` matches **any transaction activity** in the window, so
+decades-old umbrella contracts qualify on a routine modification, and the
+API's default ordering favours the **largest** awards — which are exactly
+those. A plain 30-day DOE query returned the 1993 Lockheed ($48B), 2017 Sandia
+($42B) and 1999 UT-Battelle ($42B) national-lab management contracts. Page 1
+was a fixed set of ancient contracts that deduped to nothing on every pull, so
+the leg looked healthy while being **structurally blind to new awards**.
+
+Adding `date_type: "new_awards_only"` and sorting by `Start Date` desc returns
+3 DOE awards for the same window — including **$900M to American Centrifuge
+Operating (Centrus uranium enrichment) dated 2026-07-06**, a hard-source,
+dollar-denominated item sitting directly on the promoted fission thesis's
+critical path, in the `raw-inputs` layer the Infra Mapper flagged as having no
+representation. The funnel had never seen it. Fixed in the same-day card.
+
+Secondary observations from the original query still stand: DOE newsroom shows
+~13 days of **ingest latency** (the 2026-07-06 criticality article was fetched
+2026-07-19), so that leg runs as a slow backfill rather than a live feed; and
+arXiv is 3 days behind the two current legs.
+
+The issue itself stays open — nothing alerts on a leg that *does* die, and a
+silently-blind leg is exactly as invisible as a silently-dead one.
 
 **Mitigation (not yet built):** a per-leg freshness check with a Health
-Monitor alert when a leg's newest `external_ts` (or `fetched_at`) falls
-outside its expected cadence. The Infra Mapper's staleness pass is the
-working precedent — same shape, different table: a max-timestamp per group
-compared against a threshold, flagging when it goes cold.
+Monitor alert when a leg's newest **`fetched_at`** falls outside its expected
+cadence — `fetched_at`, not `external_ts`, per the correction above. The Infra
+Mapper's staleness pass is the working precedent: same shape, different table,
+a max-timestamp per group compared against a threshold.
+
+Worth adding a second check alongside it: a leg whose pulls return rows but
+insert **zero new** item_ids for N consecutive passes. That is the signature
+USASpending had, and a freshness check on `fetched_at` alone would have called
+it healthy.
