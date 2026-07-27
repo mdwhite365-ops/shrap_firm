@@ -66,10 +66,10 @@ via CLI (no trigger) · **Spec only** = spec written, no implementation ·
 
 | Agent | Department | Sprint month | Status |
 |---|---|---|---|
-| Spec Writer | Development | Month 1 | Not built |
-| Implementation Agent | Development | Month 1 | Spec only |
-| Code Reviewer | Development | Month 1 | Not built |
-| Deployment Agent | Development | Month 2 | Not built |
+| Spec Writer | Development | Month 1 | **Descoped** — ADR-0014; Claude Code fills this |
+| Implementation Agent | Development | Month 1 | **Descoped** — ADR-0014; spec retained as historical |
+| Code Reviewer | Development | Month 1 | **Descoped** — ADR-0014; Claude Code fills this |
+| Deployment Agent | ~~Development~~ Operations | post-loop-closure | Not built — retained per ADR-0014 §2 (`no-llm`) |
 | Regime Classifier | Research | Month 2 | **Deployed** (lives under Intelligence in code) |
 | Regime Researcher | Research | Month 3 | Not built |
 | Hypothesis Generator | Research | Month 2 | Spec only — ADR-0013 adds `technical-catalyst` |
@@ -118,9 +118,17 @@ firm runs 19 agents, not 11.
 | Market Phase Scheduler | Operations | **Deployed** |
 | Market Data backfill | Shared infra | **On-demand** |
 
-**Departments at zero agents:** Development (4 planned, Month 1),
-Structural Analysis (4, Month 3), Reporting (3, Alert Agent was Month 1),
-Platform (3, Cost Monitor was Month 1).
+**Departments at zero agents:** Structural Analysis (4, Month 3),
+Reporting (3, Alert Agent was Month 1), Platform (3, Cost Monitor was Month 1).
+Development is no longer counted — ADR-0014 descoped three of its four agents
+(Claude Code fills the role) and moved the fourth to Operations.
+
+**The three-tier compute boundary (ADR-0014 §3).** Every always-on agent must
+name which tier serves it. Tier 1 is local Ollama on the Dell (free, agent-
+initiated); Tier 2 is cloud inference by API from the Dell (metered, agent-
+initiated); Tier 3 is Claude Code on Mike's MacBook (human-initiated, **not
+addressable by any agent**). "It will use Claude" is not an available answer
+for a deployed agent — no autonomous capability may depend on Tier 3.
 
 ## Spec status
 
