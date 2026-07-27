@@ -146,6 +146,47 @@
   `shrap-tech-watcher-promote` precedent; `--rescore` appends new
   verdict-history rows rather than overwriting (KI-007).
 
+### Backfilled 2026-07-27 — the #72–80 gap
+
+These nine PRs merged on 2026-07-23/24 and were never written up here. The
+omission had a cost: the session-handoff command chain for the Evaluator pivot
+was drafted without them and named services, tickers, and prerequisites that
+the shipped code contradicts. Recorded now so the next chain is drafted against
+what exists.
+
+- PR #72 — Status closeout: 07-20 smoke fill confirmed (SPY @ 747.85, full
+  chain), #56–63 rebuild recorded with the `--force-recreate` lesson.
+- PR #73 — **Mike ruling 2026-07-23: Evaluator resequenced ahead of the
+  Mapper/Scout.** The decision that makes the current pivot a return to plan
+  rather than a new direction.
+- PR #74 — `market_data.daily_bars` store + Alpaca backfill CLI
+  (`shrap-market-data-backfill`), the Evaluator's data prerequisite. IEX feed,
+  `adjustment=all`, tools-profile `market-data` service.
+- PR #75 — **Universe Curator service** (ADR-0012): `research.universe_tiers` +
+  `research.universe_staging`, the tier-transition events, and
+  `shrap-universe-promote` (seed / stage / approve / reject / extend / expire /
+  `load-launch-list` / list). Long-running service — CLI runs via
+  `docker compose exec`, not the tools profile.
+- PR #76 — Curator compose fix: the #75 block omitted `networks: - shrap_net`,
+  so it joined the default network and could not resolve `postgres`
+  (`socket.gaierror`), which blocked the launch-list load. Added the network
+  and the `postgres` healthy dependency. **Same class of bug as the deploy
+  lessons in KI-001's neighborhood: the service existed and looked healthy
+  while being unable to reach its database.**
+- PR #77 — Tier 3 membership becomes the authoritative universe gate when
+  enforcement is on.
+- PR #78 — **Strategy Evaluator first card** + eval-protocol v0.1:
+  walk-forward (6 folds, 5-year window), realistic costs, friction stress,
+  verdict mapping, the deferred set. Gates: 150 trades, Sharpe floor 1.0.
+  Tools-profile `strategy-evaluator` service; `shrap-strategy-evaluate`.
+- PR #79 — `shrap-strategy-seed` + the fission cost-curve pipeline seed v1
+  write-up. **XLE only**, MA(20/100) crossover, anchored on the fission
+  world-changer, `strategy_id` `01KYGTRTTQA9X2B2E16N4SBPTG`. Honest framing:
+  a pipeline exerciser expected to be killed by the trade-count gate, not an
+  edge.
+- PR #80 — Paper strategy runner (`shrap-strategy-runner`), the consumer that
+  gives a promoted strategy somewhere to execute.
+
 ## Open
 
 - Next cards: the **Universe Curator service card** (first
