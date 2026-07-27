@@ -214,6 +214,15 @@ INSERT INTO research.graph_node_evidence (
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 """.strip()
 
+# Newest evidence per node — the clock the staleness pass runs on. The node row's
+# last_confirmed_evidence_ref is free text with no date, so age comes from here.
+SELECT_LATEST_EVIDENCE_SQL = """
+SELECT ticker, layer_role, MAX(observed_at) AS latest_observed_at
+FROM research.graph_node_evidence
+WHERE graph_id = $1
+GROUP BY ticker, layer_role
+""".strip()
+
 
 class AsyncConnection(Protocol):
     async def execute(self, sql: str, *args: object) -> object: ...
@@ -340,6 +349,14 @@ class PostgresGraphStore:
                 reason,
             )
 
+    async def latest_evidence_at(self, graph_id: str) -> dict[tuple[str, str], datetime]:
+        """Newest evidence timestamp per ``(ticker, layer_role)`` in one graph."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_LATEST_EVIDENCE_SQL, graph_id)
+        return {
+            (str(row["ticker"]), str(row["layer_role"])): row["latest_observed_at"] for row in rows
+        }
+
     async def insert_evidence(
         self,
         *,
@@ -387,6 +404,7 @@ __all__ = [
     "NODE_REMOVED",
     "NODE_STALE_EVIDENCE",
     "NODE_STATUSES",
+    "SELECT_LATEST_EVIDENCE_SQL",
     "AsyncPool",
     "PostgresGraphStore",
 ]

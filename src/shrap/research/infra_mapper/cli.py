@@ -10,6 +10,11 @@ Subcommands:
   ``research.graphs-initialized`` once and ``research.graphs-added`` per node,
   and writes append-only history + evidence rows.
 - ``list`` — show graphs and their node counts by layer role and status.
+- ``maintenance`` — deterministic staleness pass over every active graph:
+  flags nodes whose newest evidence is past the freshness threshold, recovers
+  nodes whose evidence has since been refreshed, and emits
+  ``research.graphs-updated`` per transition. ``--dry-run`` reports without
+  writing.
 """
 
 from __future__ import annotations
@@ -30,6 +35,10 @@ from shrap.research.infra_mapper.first_graph import (
     SEED_NODE_STATUS,
     SEED_NODES,
     SEED_WORLD_CHANGER_ID,
+)
+from shrap.research.infra_mapper.maintenance import (
+    DEFAULT_FRESHNESS_DAYS,
+    run_maintenance_pass,
 )
 from shrap.research.infra_mapper.store import GRAPH_ACTIVE, NODE_ACTIVE, PostgresGraphStore
 
@@ -79,7 +88,10 @@ async def load_seed_graph(store: PostgresGraphStore, redis: _RedisXAdd) -> str:
             layer_role=node.layer_role,
             evidence_ref=node.evidence_ref,
             source_class=node.evidence_source_class,
-            observed_at=_utcnow(),
+            # The date the evidence was observed, not the date we loaded it.
+            # Load-time stamps would make 2024 deals look brand new and the
+            # staleness pass would report a graph of aging refs as fresh.
+            observed_at=node.evidence_observed_at,
         )
         await store.record_history(
             history_id=str(ULID()),
@@ -151,6 +163,15 @@ async def _run(args: argparse.Namespace) -> str:
         await store.ensure_schema()
         if args.action == "load-seed-graph":
             return await load_seed_graph(store, cast(_RedisXAdd, redis))
+        if args.action == "maintenance":
+            report = await run_maintenance_pass(
+                store,
+                cast(_RedisXAdd, redis),
+                now=_utcnow(),
+                freshness_days=args.freshness_days,
+                dry_run=args.dry_run,
+            )
+            return report.render()
         return await render_list(store)
     finally:
         await redis.aclose()
@@ -178,6 +199,18 @@ def main() -> None:
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("load-seed-graph", help="Load the hand-seeded graph (idempotent)")
     sub.add_parser("list", help="Show graphs and their nodes")
+    maint = sub.add_parser("maintenance", help="Run the deterministic staleness pass")
+    maint.add_argument(
+        "--freshness-days",
+        type=int,
+        default=DEFAULT_FRESHNESS_DAYS,
+        help=f"Evidence freshness threshold in days (default: {DEFAULT_FRESHNESS_DAYS})",
+    )
+    maint.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report transitions without writing status, history, or events",
+    )
     args = parser.parse_args()
     print(asyncio.run(_run(args)))
 

@@ -24,6 +24,7 @@ hand-entered Month-2 seed pointers (company + deal + date), resolvable by a huma
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import NamedTuple
 
 from shrap.research.infra_mapper.store import (
@@ -31,6 +32,20 @@ from shrap.research.infra_mapper.store import (
     CRITICAL_DOWNSTREAM,
     NODE_ACTIVE,
 )
+
+
+def _evidence_date(year: int, month: int = 1, day: int = 1) -> datetime:
+    """Date an evidence ref was actually observed, floored to the start of the
+    period the ref names.
+
+    Seed refs carry varying precision: MSFT and GOOGL name an exact day, META
+    names a month, AMZN names only a year. Flooring to the start of the named
+    period is the conservative choice — it can only make evidence look older,
+    never fresher, so the staleness pass never understates age.
+    """
+
+    return datetime(year, month, day, tzinfo=UTC)
+
 
 # Fixed identity so reloads and the graph card always reference the same graph.
 SEED_GRAPH_ID = "01KYH0MAPFISSIONGRAPH0001A"
@@ -57,6 +72,7 @@ class SeedNode(NamedTuple):
     critical_path_status: str
     evidence_ref: str
     evidence_source_class: str
+    evidence_observed_at: datetime
     kill_criteria: tuple[str, ...]
 
 
@@ -64,6 +80,11 @@ class SeedNode(NamedTuple):
 # carries a real 2024 nuclear procurement as its evidence. All Tier-3 launch
 # names (mega-cap-tech). Downstream-beneficiary, low confidence — honest: this is
 # the demand side, not the bottleneck trade.
+#
+# Note the evidence dates: every one is 2024. Under any sane freshness threshold
+# this graph loads already stale, and the staleness pass says so on its first
+# run. That is the correct reading, not a defect — the fission thesis is being
+# carried by procurement announcements nobody has re-confirmed since.
 SEED_NODES: tuple[SeedNode, ...] = (
     SeedNode(
         ticker="MSFT",
@@ -72,6 +93,7 @@ SEED_NODES: tuple[SeedNode, ...] = (
         critical_path_status=CRITICAL_DOWNSTREAM,
         evidence_ref="Microsoft-Constellation Three Mile Island (Crane) 20-yr PPA, 2024-09-20",
         evidence_source_class="issuer",
+        evidence_observed_at=_evidence_date(2024, 9, 20),
         kill_criteria=(_ANCHOR_KILL, "Microsoft data-center / AI capex guidance cut materially"),
     ),
     SeedNode(
@@ -81,6 +103,8 @@ SEED_NODES: tuple[SeedNode, ...] = (
         critical_path_status=CRITICAL_DOWNSTREAM,
         evidence_ref="Amazon-Talen Susquehanna nuclear data-center campus + X-energy SMR, 2024",
         evidence_source_class="issuer",
+        # Ref names only a year; floored to its start.
+        evidence_observed_at=_evidence_date(2024),
         kill_criteria=(_ANCHOR_KILL, "AWS capacity build-out slows or nuclear siting stalls"),
     ),
     SeedNode(
@@ -90,6 +114,7 @@ SEED_NODES: tuple[SeedNode, ...] = (
         critical_path_status=CRITICAL_DOWNSTREAM,
         evidence_ref="Google-Kairos Power SMR offtake agreement, 2024-10-14",
         evidence_source_class="issuer",
+        evidence_observed_at=_evidence_date(2024, 10, 14),
         kill_criteria=(_ANCHOR_KILL, "Google cloud capex guidance cut materially"),
     ),
     SeedNode(
@@ -99,6 +124,8 @@ SEED_NODES: tuple[SeedNode, ...] = (
         critical_path_status=CRITICAL_DOWNSTREAM,
         evidence_ref="Meta nuclear-energy RFP (1-4 GW) for AI data centers, 2024-12",
         evidence_source_class="issuer",
+        # Ref names a month; floored to its start.
+        evidence_observed_at=_evidence_date(2024, 12),
         kill_criteria=(_ANCHOR_KILL, "Meta AI infrastructure spend guidance cut materially"),
     ),
 )
