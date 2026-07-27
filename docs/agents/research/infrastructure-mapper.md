@@ -18,6 +18,25 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 **Author:** Mike White
 **Version:** 0.1 (draft)
 
+> **Implementation status (2026-07-27).** Month-2 scope has landed in two
+> cards. Card 1: the graph schema + store (`research.graphs`,
+> `graph_nodes`, `graph_node_history`, `graph_node_evidence`), anchored on
+> `research.world_changers(candidate_id)`. Card 2: the `shrap-infra-mapper`
+> CLI (`load-seed-graph` / `list`) and the first hand-seeded graph — on the
+> promoted fission world-changer, deliberately small and honest (see below).
+> **Honest finding from the seed:** the fission thesis's critical-path layers
+> (`raw-inputs` uranium, `power-gen` nuclear/SMR, `power-delivery`) have **no
+> representation in the locked 50-name Tier-3 universe**; the only fission
+> layer with a clean Tier-3 fit is the `end-user` demand side (hyperscalers
+> with 2024 nuclear deals: MSFT, AMZN, GOOGL, META), seeded at `low`
+> confidence / `downstream-beneficiary`. This is a real universe gap the
+> Mapper is meant to surface, and it says plainly that the fission thesis is
+> only weakly expressible in today's universe. Still **deferred** to later
+> cards: LLM-assisted layer/ticker enumeration (which would build a rich
+> AI-compute graph), the deterministic staleness-maintenance pass,
+> bottleneck-driven updates, and the weekly `universe.proposed-*` aggregation
+> to the Universe Curator.
+
 ## Purpose
 
 The Infrastructure Mapper is step 2 of the three-step Research funnel
