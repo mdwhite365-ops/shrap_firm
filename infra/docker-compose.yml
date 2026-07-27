@@ -905,8 +905,26 @@ services:
     environment:
       STRATEGY_EVALUATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
       STRATEGY_EVALUATOR_REDIS_URL: "redis://redis:6379/0"
-      STRATEGY_EVALUATOR_CARD_ROOT: "docs/strategies/evaluations"
+      # Absolute, and bind-mounted below. This was previously the RELATIVE path
+      # "docs/strategies/evaluations", which resolved against WORKDIR /app —
+      # root-owned, while the container runs as USER shrap (uid 10001). The
+      # evaluator could never write a card: it died with PermissionError on
+      # mkdir at the FIRST line of commit(), before the registry transition,
+      # the evaluations row, and the event publish. Found 2026-07-27 by the
+      # first real verdict run.
+      STRATEGY_EVALUATOR_CARD_ROOT: "/cards"
       STRATEGY_EVALUATOR_LOG_LEVEL: "INFO"
+    volumes:
+      # Evaluation cards are repo artifacts ("the repo is the truth"), so they
+      # land in the working tree rather than a named volume.
+      #
+      # ONE-TIME HOST SETUP, required before the first run on a new machine —
+      # a bind mount carries host ownership, so uid 10001 must be able to write:
+      #   sudo mkdir -p ../docs/strategies/evaluations
+      #   sudo chown 10001:10001 ../docs/strategies/evaluations
+      # Cards then land owned by uid 10001. To commit them, either chown back
+      # afterwards or invoke with `--user "$(id -u):$(id -g)"`.
+      - ../docs/strategies/evaluations:/cards
     depends_on:
       postgres:
         condition: service_healthy
