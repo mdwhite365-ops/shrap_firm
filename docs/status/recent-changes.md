@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-23 (afternoon)
+**Last updated:** 2026-07-27 (afternoon)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -243,6 +243,46 @@
   arXiv papers (the exact impostor class that fooled v1) rejected with the
   right archetype and the economic-evidence rule cited. Supports the
   prompt-gap diagnosis; the false-negative direction remains untested.
+
+## Infrastructure Mapper Month-2 arc (2026-07-26/27)
+
+- PR #81 — Infra Mapper graph schema + store: `research.graphs`,
+  `graph_nodes`, `graph_node_history`, `graph_node_evidence`, anchored on
+  `research.world_changers(candidate_id)`.
+- PR #82 — `shrap-infra-mapper` CLI (`load-seed-graph` / `list`) and the
+  first hand-seeded graph on the promoted fission thesis. Deliberately small:
+  the critical-path fission layers have no Tier-3 representation, so only the
+  `end-user` demand side is seeded (MSFT/AMZN/GOOGL/META, `low` confidence,
+  `downstream-beneficiary`). Forcing a wrong-layer ticker in would have been
+  the Cisco-1999 failure the Mapper exists to prevent.
+- PR #83 — deterministic staleness pass (`maintenance`, `--freshness-days`
+  default 180, `--dry-run`). Two-way (`active` <-> `stale-evidence`, does not
+  latch), idempotent, one `research.graphs-updated` per transition. Owns only
+  that axis: `pending-review` / `downgraded` / `removed` are skipped, since
+  reactivating them would launder a kill decision. Also fixed #82's loader to
+  write true evidence dates.
+- PR #84 — repair for seed evidence rows stamped with load time. The Dell had
+  loaded the graph under #82's code, and the load is idempotent-by-skip, so
+  #83's fix could not reach it. Appending cannot repair a too-*fresh* row —
+  `MAX(observed_at)` keeps picking it — so this is the one documented
+  in-place-update exception on `graph_node_evidence`, scoped to rows matching
+  a seed node exactly, with a history row per correction.
+- PR #85 — thesis-level observation log: `research.world_changer_observations`,
+  append-only, plus `shrap-world-changer-observe {add,list}`. Named apart from
+  the existing `world_changer_evidence` provenance table (*what made us
+  propose it* vs. *what has happened since*). Every row declares whether it
+  bears on a declared kill criterion; the summary reports that count first and
+  warns on zero-falsifier-contact, all-soft evidence, and
+  supporting-with-no-contradicting. Dangling criterion indices rejected.
+- **Dell verification 2026-07-27:** restamp corrected 4/4 rows (603–938 days
+  older), staleness pass flagged all four `active → stale-evidence`, second
+  run reported `flagged stale: 0, unchanged: 4` with no writes. Graph now
+  reads `(4 nodes, 0 active)` — it proposes zero universe names, which is the
+  honest reading of two-year-old evidence.
+- **Process note:** PR #84's card was briefly committed onto #83's branch (the
+  KI-001 stacking trap), caught before push and cherry-picked onto a fresh
+  branch off `main`. Same for #85 relative to #84. The trap is easy to hit
+  when cards arrive back-to-back in one session.
 
 ## Security notes
 

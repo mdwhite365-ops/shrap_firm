@@ -20,6 +20,46 @@
 
 **Recommendation:** Keep open. The 2026-07-18 spot-check (10 random v2 rejections) passed — reasons coherent, impostor-class papers rejected on the right grounds — so the rejection direction looks sound. Ship the KI-007 verdict-history fix and judge the keep direction on the next few live batches; a real world-changer signal should eventually triangulate across EDGAR + arXiv, which the filter can't silently suppress on both legs.
 
+**Update 2026-07-27 — the false-negative direction is no longer untested, and it
+failed.** The KI-008 diagnostic found a named case. DOE newsroom item
+`doe-news:/articles/department-energy-celebrates-fourth-criticality-ahead-july-4th-goal`
+(published 2026-07-06, fetched and filtered 2026-07-19) was rejected under prompt
+v3 by `qwen3.5:9b-q4_K_M` with:
+
+> "The item describes a single successful laboratory milestone (zero-power
+> criticality) rather than the sustained engineering scale, independent
+> replication, or credible path to commercial deployment required for
+> physical-realization evidence."
+
+Three problems with that verdict:
+
+1. **It contradicts the item's own headline.** The article is about the
+   *fourth* criticality; DOE newsroom also carries "Delivers Third Advanced
+   React…" (2026-07-01). The model faulted the item for lacking "independent
+   replication" while the title states it *is* the fourth instance.
+2. **It invents a bar the prompt does not set.** The v3 hard rules explicitly
+   list "regulatory or clinical milestones" as evidence. "Independent
+   replication" and "sustained engineering scale" appear nowhere in the system
+   prompt; they read as the archetype grammar's "physical-realization" bar
+   applied at full academic strength.
+3. **It applies arXiv skepticism to a government fact.** The prompt is one
+   universal bar across all sources (source is passed only as a label in
+   `_item_prompt`). Demanding independent replication of a federal agency's
+   announcement that hardware reached criticality is a category error: for a
+   hard source, the institutional backing *is* much of the evidentiary weight.
+   Combined with "when unsure, say not relevant," this biases systematically
+   against exactly the hard-source items triangulation requires.
+
+This item bears directly on the seeded fission thesis (its own text names
+"Valar Ward 250 critical 2026-06-18"), so the miss is not marginal.
+
+**Revised recommendation:** the answer is no longer "cloud tier or not." Prompt
+v4 should be **source-class aware** — a different evidentiary bar for hard
+sources (EDGAR / USASpending / Federal Register) than for arXiv — before any
+tier change is evaluated, since a tier swap would not fix a category error
+baked into the prompt. See KI-009: this is currently a hard block on the whole
+funnel, not a quality nuisance.
+
 ## Resolved decisions
 
 - **DQ-004 — Universe lock-in.** Resolved 2026-07-23 by Mike. Ruling: the
