@@ -872,3 +872,27 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+
+  # Infrastructure Mapper (Month-2) - deterministic, run-on-demand (tools
+  # profile, not started by default). Loads the hand-seeded world-changer graph
+  # into research.graphs* and inspects graph state. Run pattern:
+  #   docker compose run --rm infra-mapper shrap-infra-mapper load-seed-graph
+  #   docker compose run --rm infra-mapper shrap-infra-mapper list
+  infra-mapper:
+    build:
+      context: ../
+      dockerfile: infra/infra-mapper.Dockerfile
+    container_name: shrap_infra_mapper
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      INFRA_MAPPER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      INFRA_MAPPER_REDIS_URL: "redis://redis:6379/0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net

@@ -80,6 +80,7 @@ shrap-market-data-backfill = "shrap.market_data.backfill:main"
 shrap-strategy-evaluate = "shrap.research.strategy_evaluator.cli:main"
 shrap-strategy-runner = "shrap.agents.research.strategy_runner.__main__:main"
 shrap-strategy-seed = "shrap.research.strategy_seed.cli:main"
+shrap-infra-mapper = "shrap.research.infra_mapper.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shrap"]
