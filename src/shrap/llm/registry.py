@@ -58,10 +58,31 @@ class ModelBinding:
     provider: str
     model: str
     base_url: str | None
+    # Bearer token, when the resolved endpoint is a remote Ollama host rather
+    # than the local daemon. `None` for the local daemon, which needs no auth.
+    api_key: str | None = None
 
 
 def _env_key(tier: str, suffix: str) -> str:
     return f"SHRAP_LLM_{tier.upper().replace('-', '_')}_{suffix}"
+
+
+def _is_remote_ollama(base_url: str | None) -> bool:
+    """True when the Ollama endpoint is off-box and therefore needs a token.
+
+    The local daemon authenticates cloud models a different way — it signs each
+    request with the host's Ed25519 key from ``~/.ollama/id_ed25519``, registered
+    by ``ollama signin``. A bearer token does nothing there. Talking straight to
+    ``https://ollama.com/api`` is the path that takes one.
+    """
+
+    if base_url is None:
+        return False
+    return not (
+        base_url.startswith("http://ollama:")
+        or base_url.startswith("http://localhost")
+        or base_url.startswith("http://127.0.0.1")
+    )
 
 
 class TierRegistry:
@@ -70,6 +91,10 @@ class TierRegistry:
     def __init__(self, env: Mapping[str, str]) -> None:
         self._env = env
         self._ollama_url = env.get("SHRAP_LLM_OLLAMA_URL", DEFAULT_OLLAMA_URL).rstrip("/")
+        # Ollama's own variable name, deliberately not a Shrap-prefixed alias:
+        # it is the same key ollama.com issues, and inventing a second name for
+        # it would just be one more thing to keep in sync.
+        self._ollama_api_key = env.get("OLLAMA_API_KEY", "").strip() or None
 
     @property
     def ollama_url(self) -> str:
@@ -90,4 +115,10 @@ class TierRegistry:
             )
         model = self._env.get(_env_key(tier, "MODEL"), "").strip() or default_model
         base_url = self._ollama_url if provider == PROVIDER_OLLAMA else None
-        return ModelBinding(tier=tier, provider=provider, model=model, base_url=base_url)
+        # Send the key only to a remote host. The local daemon needs no auth
+        # (and leaking a bearer token to localhost would be gratuitous), so the
+        # loopback/compose-service URL never carries one.
+        api_key = self._ollama_api_key if _is_remote_ollama(base_url) else None
+        return ModelBinding(
+            tier=tier, provider=provider, model=model, base_url=base_url, api_key=api_key
+        )

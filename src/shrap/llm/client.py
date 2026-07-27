@@ -69,7 +69,14 @@ class HTTPResponse(Protocol):
 class HTTPClient(Protocol):
     """The slice of httpx.AsyncClient the client needs."""
 
-    async def post(self, url: str, *, json: dict[str, Any], timeout: float) -> HTTPResponse: ...
+    async def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, Any],
+        timeout: float,
+        headers: dict[str, str] | None = ...,
+    ) -> HTTPResponse: ...
 
 
 class TierLLMClient:
@@ -136,9 +143,14 @@ class TierLLMClient:
         if think is not None:
             body["think"] = think
 
+        # ollama.com serves the same /api/chat contract as the local daemon and
+        # acts as a remote Ollama host, so the only difference is the token.
+        headers = (
+            {"Authorization": f"Bearer {binding.api_key}"} if binding.api_key is not None else None
+        )
         started = time.monotonic()
         response = await self._http.post(
-            f"{binding.base_url}/api/chat", json=body, timeout=self._timeout
+            f"{binding.base_url}/api/chat", json=body, timeout=self._timeout, headers=headers
         )
         latency_ms = (time.monotonic() - started) * 1000.0
         if response.status_code != 200:

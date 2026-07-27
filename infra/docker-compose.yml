@@ -219,15 +219,14 @@ services:
     image: ollama/ollama:0.32.0
     container_name: shrap_ollama
     restart: unless-stopped
-    # Single-variable injection, NOT env_file. The daemon needs exactly one
-    # secret; `env_file: .env` would also hand it the Alpaca broker keys, and
-    # ADR-0003 confines those to broker-facing containers. A cloud-tagged model
-    # (e.g. gpt-oss:20b-cloud) is detected by the daemon, which attaches this
-    # key and proxies the request to Ollama's cloud — so agents keep calling
-    # http://ollama:11434/api/chat unchanged and no client code knows the
-    # difference. Blank key = local models still work, cloud tags fail.
-    environment:
-      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+    # Serves LOCAL models only. Deliberately gets no OLLAMA_API_KEY: the daemon
+    # does not authenticate cloud models with a bearer token — it signs each
+    # request with the host's Ed25519 key at /root/.ollama/id_ed25519, which
+    # `ollama signin` registers with an ollama.com account. That identity would
+    # live in the ollama_models volume, i.e. as container state rather than
+    # config, and would vanish silently if the volume were ever recreated.
+    # The Tech Watcher therefore talks straight to https://ollama.com instead
+    # (see its SHRAP_LLM_OLLAMA_URL), where auth is a declarative env var.
     volumes:
       - ollama_models:/root/.ollama
     ports:
@@ -656,7 +655,16 @@ services:
       #
       # Both are overridable without editing compose, so laddering up on a bad
       # result is an .env edit and a restart.
-      SHRAP_LLM_OLLAMA_URL: "http://ollama:11434"
+      #
+      # This container points at ollama.com directly rather than the local
+      # daemon. The daemon's cloud path authenticates by signing requests with
+      # the host's Ed25519 key (registered via `ollama signin`), which is
+      # container-volume state that dies quietly if the volume is recreated.
+      # ollama.com serves the same /api/chat contract as a remote Ollama host,
+      # so the only difference is a bearer token — which is config, restorable
+      # from .env, and reviewable. Other agents keep using the local daemon.
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
       SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
       SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_FILTER_MODEL:-gpt-oss:20b-cloud}"
       SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"

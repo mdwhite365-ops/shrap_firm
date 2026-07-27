@@ -161,18 +161,32 @@ ORDER BY fetched_at
 LIMIT $1
 """.strip()
 
-# Re-score items already filtered under an older prompt. Without this the
-# backlog stays frozen at whatever verdict the prompt of the day produced, and
-# a prompt fix only ever reaches items that happen to arrive afterwards. The
-# previous re-filter (v2, 2026-07-18) was run as ad-hoc SQL, which is how those
-# verdicts were lost (KI-007); this path appends history like any other pass.
+# Re-score items already filtered by a different (prompt, model) pair. Without
+# this the backlog stays frozen at whatever verdict the configuration of the day
+# produced, and a fix only ever reaches items that happen to arrive afterwards.
+# The previous re-filter (v2, 2026-07-18) was run as ad-hoc SQL, which is how
+# those verdicts were lost (KI-007); this path appends history like any other
+# pass.
+#
+# Keying on prompt version ALONE was too narrow, found live 2026-07-27: after a
+# v4 pass on the local model, swapping to a cloud model left every item stamped
+# v4, so `prompt_version < 4` matched nothing and the re-filter reported
+# "0 item(s) scored" — silently declining to test the very change being made.
+# The model is part of the identity of a verdict, so a model change is a reason
+# to re-score. `$4` forces a pass regardless, for when neither changed but the
+# verdicts are suspect anyway.
 SELECT_FOR_REFILTER_SQL = """
 SELECT item_id, source, kind, title, summary,
        COALESCE((filter_result->>'relevant')::boolean, false) AS was_relevant,
-       COALESCE((filter_result->>'prompt_version')::int, 0) AS scored_version
+       COALESCE((filter_result->>'prompt_version')::int, 0) AS scored_version,
+       COALESCE(filter_result->>'model', '') AS scored_model
 FROM research.raw_source_items
 WHERE filtered_at IS NOT NULL
-  AND COALESCE((filter_result->>'prompt_version')::int, 0) < $1
+  AND (
+      $4::boolean
+      OR COALESCE((filter_result->>'prompt_version')::int, 0) < $1
+      OR ($5::text <> '' AND COALESCE(filter_result->>'model', '') <> $5)
+  )
   AND ($2::text IS NULL OR source = $2)
 ORDER BY fetched_at DESC
 LIMIT $3
@@ -410,20 +424,35 @@ async def refilter_pass(
     max_items: int = 300,
     source: str | None = None,
     tier: str = TIER_LOCAL_CLASSIFICATION,
+    current_model: str | None = None,
+    force: bool = False,
     dry_run: bool = False,
 ) -> RefilterReport:
-    """Re-score items last filtered under an older prompt version.
+    """Re-score items whose verdict came from a different prompt *or* model.
 
-    Safe by construction: ``filter_verdict_history`` is append-only, so the
-    prior prompt's verdicts survive and the before/after comparison stays
-    queryable (KI-007 — the v2 re-filter was ad-hoc SQL and lost exactly this).
+    A verdict's identity is the (prompt version, model) pair, so passing
+    ``current_model`` makes a model swap a reason to re-score — without it, a
+    model change under an unchanged prompt selects nothing and the pass
+    silently declines to test the change. ``force`` re-scores the selection
+    regardless of either.
+
+    Safe by construction: ``filter_verdict_history`` is append-only, so prior
+    verdicts survive and the before/after comparison stays queryable (KI-007 —
+    the v2 re-filter was ad-hoc SQL and lost exactly this).
 
     ``dry_run`` selects and reports the candidate set without calling the model
     or writing anything, so the size of a re-filter is knowable before it runs.
     """
 
     async with pool.acquire() as conn:
-        rows = await conn.fetch(SELECT_FOR_REFILTER_SQL, FILTER_PROMPT_VERSION, source, max_items)
+        rows = await conn.fetch(
+            SELECT_FOR_REFILTER_SQL,
+            FILTER_PROMPT_VERSION,
+            source,
+            max_items,
+            force,
+            current_model or "",
+        )
 
     prior = {
         str(row["item_id"]): (bool(row["was_relevant"]), str(row["title"]), str(row["source"]))

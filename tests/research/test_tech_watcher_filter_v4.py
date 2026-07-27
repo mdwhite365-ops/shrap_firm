@@ -187,7 +187,9 @@ class _FakeLLM:
         return _R()
 
 
-def _backlog_row(relevant: bool = False, version: int = 3) -> dict[str, Any]:
+def _backlog_row(
+    relevant: bool = False, version: int = 3, model: str = "qwen3.5:9b-q4_K_M"
+) -> dict[str, Any]:
     return {
         "item_id": DOE_CRITICALITY.item_id,
         "source": SOURCE_DOE_NEWS,
@@ -196,6 +198,7 @@ def _backlog_row(relevant: bool = False, version: int = 3) -> dict[str, Any]:
         "summary": None,
         "was_relevant": relevant,
         "scored_version": version,
+        "scored_model": model,
     }
 
 
@@ -254,7 +257,7 @@ async def test_refilter_selects_on_the_current_prompt_version() -> None:
     pool = _FakePool([])
     await refilter_pass(pool, _FakeLLM([]), max_items=25, source="doe-newsroom", dry_run=True)  # type: ignore[arg-type]
 
-    assert pool.conn.fetched_args == (FILTER_PROMPT_VERSION, "doe-newsroom", 25)
+    assert pool.conn.fetched_args[:3] == (FILTER_PROMPT_VERSION, "doe-newsroom", 25)
 
 
 async def test_refilter_appends_history_before_marking() -> None:
@@ -305,3 +308,51 @@ async def test_kept_counts_relevant_items_whether_or_not_they_moved() -> None:
     assert report.flips == ()
     assert len(report.kept) == 1
     assert "relevant after this pass: 1" in report.render()
+
+
+# --- selection keys on (prompt version, model) --------------------------------
+
+
+async def test_selection_passes_force_and_current_model() -> None:
+    # The 2026-07-27 miss: a model swap under an unchanged prompt selected
+    # nothing, so the pass silently declined to test the change being made.
+    pool = _FakePool([])
+    await refilter_pass(  # type: ignore[arg-type]
+        pool,
+        _FakeLLM([]),
+        max_items=20,
+        source="doe-newsroom",
+        current_model="gpt-oss:20b-cloud",
+        dry_run=True,
+    )
+
+    assert pool.conn.fetched_args == (
+        FILTER_PROMPT_VERSION,
+        "doe-newsroom",
+        20,
+        False,
+        "gpt-oss:20b-cloud",
+    )
+
+
+async def test_force_is_passed_through() -> None:
+    pool = _FakePool([])
+    await refilter_pass(pool, _FakeLLM([]), force=True, dry_run=True)  # type: ignore[arg-type]
+
+    assert pool.conn.fetched_args[3] is True
+
+
+async def test_absent_current_model_sends_empty_string_not_none() -> None:
+    # The SQL compares `$5::text <> ''`, so None must not reach it as NULL —
+    # a NULL comparison is null, not false, and would break the OR chain.
+    pool = _FakePool([])
+    await refilter_pass(pool, _FakeLLM([]), dry_run=True)  # type: ignore[arg-type]
+
+    assert pool.conn.fetched_args[4] == ""
+
+
+def test_refilter_sql_reselects_on_model_change() -> None:
+    from shrap.research.tech_watcher.filter import SELECT_FOR_REFILTER_SQL
+
+    assert "filter_result->>'model'" in SELECT_FOR_REFILTER_SQL
+    assert "$4::boolean" in SELECT_FOR_REFILTER_SQL

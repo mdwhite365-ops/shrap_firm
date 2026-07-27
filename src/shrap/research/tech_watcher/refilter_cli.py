@@ -29,24 +29,38 @@ from shrap.research.tech_watcher.filter import refilter_pass
 
 
 async def _run(args: argparse.Namespace) -> str:
+    registry = TierRegistry(dict(os.environ))
+    # A verdict's identity is (prompt version, model), so the pass needs to know
+    # which model would score these items now — otherwise a model swap under an
+    # unchanged prompt selects nothing.
+    current_model = registry.resolve(args.tier).model
     pool = await create_asyncpg_pool(args.dsn)
     try:
         # A dry run only counts rows; no model call, so no HTTP client needed.
         if args.dry_run:
             report = await refilter_pass(
-                pool, _NoLLM(), max_items=args.limit, source=args.source, dry_run=True
+                pool,
+                _NoLLM(),
+                max_items=args.limit,
+                source=args.source,
+                tier=args.tier,
+                current_model=current_model,
+                force=args.force,
+                dry_run=True,
             )
-            return report.render()
+            return f"current model for tier {args.tier}: {current_model}\n" + report.render()
         async with httpx.AsyncClient(follow_redirects=True) as http:
-            llm = TierLLMClient(TierRegistry(dict(os.environ)), http)
+            llm = TierLLMClient(registry, http)
             report = await refilter_pass(
                 pool,
                 llm,
                 max_items=args.limit,
                 source=args.source,
                 tier=args.tier,
+                current_model=current_model,
+                force=args.force,
             )
-        return report.render()
+        return f"current model for tier {args.tier}: {current_model}\n" + report.render()
     finally:
         await pool.close()
 
@@ -84,6 +98,11 @@ def main() -> None:
         "--tier",
         default=TIER_LOCAL_CLASSIFICATION,
         help=f"LLM tier alias (default: {TIER_LOCAL_CLASSIFICATION})",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-score the selection even when prompt version and model are both unchanged",
     )
     parser.add_argument(
         "--dry-run",
