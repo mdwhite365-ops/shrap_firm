@@ -1,0 +1,195 @@
+# Strategy Evaluator — Test Protocol
+
+**Version:** 0.1 (draft)
+**Date:** 2026-07-26
+**Owner:** Mike White
+**Status:** Draft — versioned; `PROTOCOL_VERSION = "0.1"`
+**Serves:** `docs/agents/research/strategy-evaluator.md` (the spec references this
+file as the authoritative test protocol).
+
+## What this document is
+
+The Strategy Evaluator spec points here for the exact numbers and rules the
+Evaluator applies. The spec is the *contract*; this is the *protocol*. Every
+persisted evaluation is stamped with the `PROTOCOL_VERSION` above so a result
+is reproducible against the protocol that produced it. When the protocol
+changes in a way that makes prior evaluations non-comparable, the version bumps
+and old evaluations keep their old stamp.
+
+This v0.1 captures exactly what the Evaluator's **first card** implements. It is
+deliberately less than the full spec: overfitting statistics (PBO, DSR, CPCV),
+regime-stratified reporting, the kill-review pipeline, and the overnight queue
+runner are all **deferred** (see §8). What is here is the deterministic core —
+walk-forward, realistic costs, a friction stress test, the trade-count gate, and
+a verdict mapping that is a pure function of the metrics.
+
+The Evaluator cannot prove edge. **Passing every test means "we have failed to
+disprove edge under our test protocol," not "edge is real."** That wording is
+required in every evaluation card and is not decoration: the whole design is
+built to kill more aggressively than it promotes, because promoting noise costs
+real money and killing real edge only costs the time to find it again.
+
+## 1. Inputs and eligibility (spec Processing step 1–2)
+
+A strategy is read from `research.strategies` at status `hypothesis`. Before any
+backtest runs, it must clear spec hygiene:
+
+- **Archetype must be `infra-graph-play`.** This is the only evaluable archetype
+  this card. `bottleneck-rotation` is **refused** with an explicit reason: its
+  anchor table `research.bottlenecks` has no rows until Bottleneck Scout exists
+  (resequencing ruling, 2026-07-23). Any other archetype is likewise refused.
+- **Tickers must be Tier-3 eligible** — present in `research.universe_tiers` at
+  tier `active` (read-only; the Universe Curator owns that table).
+- **Parameters must be bounded** — every numeric parameter must be finite and
+  carry a declared `[lo, hi]` bound in `spec.param_bounds`, and its value must
+  lie inside it.
+- **Kill criteria must be declared** (non-empty).
+- **Regime must be a sizing modifier, not a gate** — a `spec.regime_gate` is
+  refused.
+
+**Refusal is not a kill.** A malformed or not-yet-evaluable spec has not been
+evaluated, so it does not earn a terminal verdict: the strategy stays at
+`hypothesis` and the CLI exits non-zero with the reason. This is distinct from a
+*kill verdict*, which is reserved for strategies we did evaluate and found dead
+(dead anchor, too few trades, no edge, edge that dies under friction). Both are
+fail-closed; neither promotes anything.
+
+**Anchor freshness (spec step 2).** The strategy's `anchor` must reference a
+world-changer that is currently `promoted` in `research.world_changers`. The
+anchor JSONB references it by `world_changer_id` (or `candidate_id`). If the
+anchor is missing, unresolved, or not `promoted`, the verdict is `kill` with
+reason `anchor-not-live`, and the backtest does not run. This card wires the
+anchor-freshness gate to `research.world_changers` **only**; the bottleneck leg
+is deferred with Bottleneck Scout.
+
+## 2. Dataset (spec step 3)
+
+Daily bars are read from `market_data.daily_bars` (IEX feed, `adjustment=all` —
+splits and dividends, the correct basis for total-return backtesting) over the
+configured window (default 5 years). Multiple tickers are aligned on the
+**intersection** of their session dates — no forward-fill, no fabricated bars.
+A dataset too short to form the configured folds yields `hold-for-data`
+(reason `insufficient-data`), never a kill: lack of data is not evidence of no
+edge.
+
+> **Recorded project fact.** IEX volumes are a fraction of the SIP consolidated
+> tape, so volume — and any ADV-scaled slippage derived from it — reads
+> differently than a live desk on SIP would see. See
+> `docs/infrastructure/market-data.md`.
+
+## 3. Walk-forward (spec step 5)
+
+Expanding-window walk-forward, **6 folds** (default; ≥6 required), train on
+prior / test on next, no peeking. The out-of-sample range (after warmup and lag
+headroom) is partitioned into 6 contiguous reporting folds; fold *i*'s "train"
+is the expanding history before its first period.
+
+**No-peek is structural, not conventional.** The holding period `[close[p],
+close[p+1]]` uses a target decided at bar `p − execution_lag` from a window that
+exposes only bars `0..p−execution_lag`. A strategy cannot see the bar whose
+return it is about to earn.
+
+**Fixed parameters this card.** In-sample grid fitting (spec step 4) is
+deferred, so a fixed-parameter strategy's expanding walk-forward reduces to one
+continuous out-of-sample backtest partitioned into the reporting folds. The
+fold geometry is already the shape per-fold refitting will use when that lands.
+
+**Metrics** (per fold and aggregate): total return, annualized Sharpe (sample
+std, ddof=1, ×√252), max drawdown (worst peak-to-trough, a non-negative
+fraction), and trade count (a trade = any rebalance leg that changes a ticker's
+target weight).
+
+## 4. Transaction costs (spec step 3)
+
+Costs are charged per rebalance as a fraction of the normalized book:
+
+| Component | v0.1 default | Notes |
+|---|---|---|
+| Commission | 0.5 bps | flat, on traded notional |
+| Half-spread | 2.0 bps | crossing half the quoted spread |
+| Slippage | 10.0 bps per 100% ADV | scales linearly with participation = traded notional / trailing-20-day avg dollar volume; capped at 100% |
+| Borrow (shorts) | 3.0% annual, accrued daily | flat rate — no clean retail borrow feed exists (deferred); the short side only |
+| Backtest capital | $100,000 | sets participation, hence slippage |
+
+A non-positive ADV (illiquid / missing) is treated as full participation — the
+maximum slippage penalty — which fails closed.
+
+## 5. Realistic-friction stress test (spec step 9)
+
+The whole walk-forward is re-run with **+50% on every cost component and +1 day
+of execution lag**. The stressed run must keep a **positive** aggregate Sharpe.
+An edge that only exists at modeled costs and instantaneous execution is treated
+as fragile and does not promote.
+
+## 6. Trade-count gate (spec step 6)
+
+Fewer than **150 trades** across the full walk-forward → `kill`, regardless of
+headline metrics. No exceptions this card. This intentionally kills most
+long-horizon infra-graph plays; the spec flags that tension as a known,
+Mike-owned, post-sprint question.
+
+## 7. Verdict mapping (spec step 6, 10)
+
+A pure function of the metrics — no human tuning — applied in strict priority:
+
+1. anchor not live → `kill` (`anchor-not-live`)
+2. trades < 150 → `kill` (`insufficient-trades`)
+3. aggregate Sharpe ≤ 0 → `kill` (`no-edge`)
+4. stressed Sharpe ≤ 0 → `kill` (`fails-friction-stress`)
+5. aggregate Sharpe < the promote floor → `hold-for-data` (`below-sharpe-floor`)
+6. otherwise → `promote` (`promote-criteria-met`)
+
+**Promote** therefore requires all of: anchor fresh, ≥150 trades, positive
+Sharpe surviving the friction stress, and Sharpe ≥ the promote floor.
+
+On `promote` the strategy transitions `hypothesis → paper` through the strategy
+registry (the append-only transition row records the reasoning). On `kill`,
+`hypothesis → killed`. On `hold-for-data`, no transition. Every run writes an
+append-only row to `research.evaluations` (full metrics blob, config, protocol
+version), publishes `research.strategy.verdict` (and `research.strategy.killed`
+on a kill), and writes a Markdown evaluation card under
+`docs/strategies/evaluations/<strategy_id>/<ts>.md`.
+
+## 8. Deferred (later cards)
+
+Explicitly **not** in this protocol version:
+
+- Probability of Backtest Overfitting (PBO), Deflated Sharpe Ratio (DSR),
+  Minimum Backtest Length (MinBTL), and Combinatorial Purged Cross-Validation
+  (CPCV) with embargo.
+- Regime-stratified reporting and regime-conditional sizing modifiers.
+- In-sample parameter grid fitting and the refit pipeline.
+- The kill-review pipeline and the `research.strategy.halt` /
+  `research.strategy.demoted` events; the `research.bottleneck.*` and
+  `research.infra.graph.node-failed` thesis-broken triggers.
+- The overnight queue runner, Sunday re-evaluation, and decay detection.
+- The strategy-authoring DSL / plugin registry (the record → signal-code
+  binding; see §9).
+- A real borrow-cost data feed (a flat configurable rate is used).
+
+## 9. Decisions pending Mike
+
+Two choices in this card are Mike-owned and shipped as documented defaults, not
+silent decisions:
+
+- **The `StrategySignal` seam (architectural).** The engine is driven by one
+  interface: given a no-peek window of daily bars, a strategy emits a target
+  weight per ticker; the engine turns weight changes into trades, costs, and
+  PnL. This is the interface every future strategy implements. Until the
+  strategy-authoring system exists, an `infra-graph-play` record is evaluated by
+  instantiating a **reference** moving-average trend rule from its params (a
+  labelled placeholder, not a proposed edge); the record → code binding is an
+  injectable factory that the authoring card will replace. **Merging this card
+  accepts the seam.**
+- **The Sharpe promote floor (calibration).** Default **1.0** annualized
+  out-of-sample Sharpe. Chosen conservatively — a net annualized Sharpe of 1.0
+  after realistic costs is a modest but economically meaningful bar, and it is a
+  round number that is easy to move. The spec lists Sharpe/DSR thresholds per
+  stage as "Blocks: first promotion. Owner: Mike." This default is
+  calibration-pending in exactly the way the Regime Classifier's v0.1 sizing
+  bands are — it holds the line until Mike rules, and it is overridable per run
+  via `--sharpe-floor`.
+
+---
+
+*End of protocol v0.1.*

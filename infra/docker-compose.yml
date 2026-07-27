@@ -803,3 +803,36 @@ services:
         condition: service_healthy
     networks:
       - shrap_net
+  # Strategy Evaluator - Research Department, the firm's deterministic
+  # gatekeeper. NOT started by default (no overnight queue runner this card);
+  # gated behind the "tools" profile and exec'd on demand. Reads a
+  # hypothesis-stage strategy from research.strategies, backtests it against
+  # market_data.daily_bars (walk-forward + realistic costs + friction stress),
+  # and promotes to paper / kills on the registry. Anchor freshness is checked
+  # against research.world_changers only (bottleneck leg deferred). Publishes
+  # research.strategy.verdict / research.strategy.killed. No LLM, no broker
+  # credentials.
+  # Run pattern:
+  #   docker compose run --rm strategy-evaluator \
+  #     shrap-strategy-evaluate --strategy-id 01STRAT... [--dry-run]
+  # -------------------------------------------------------------------------
+  strategy-evaluator:
+    build:
+      context: ../
+      dockerfile: infra/strategy-evaluator.Dockerfile
+    container_name: shrap_strategy_evaluator
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      STRATEGY_EVALUATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      STRATEGY_EVALUATOR_REDIS_URL: "redis://redis:6379/0"
+      STRATEGY_EVALUATOR_CARD_ROOT: "docs/strategies/evaluations"
+      STRATEGY_EVALUATOR_LOG_LEVEL: "INFO"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
