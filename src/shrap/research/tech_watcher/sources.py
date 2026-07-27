@@ -244,7 +244,23 @@ class ArxivSource:
 
 
 class UsaSpendingSource:
-    """USASpending award search: configured agencies, above a dollar floor."""
+    """USASpending award search: configured agencies, above a dollar floor.
+
+    Returns **newly signed** awards, newest first. Both qualifiers are
+    load-bearing and were missing until 2026-07-27: ``time_period`` alone
+    matches any transaction activity in the window, and the API's default
+    ordering favours the largest awards, so the leg spent its life re-fetching
+    the same handful of decades-old national-lab management contracts. They
+    deduped to nothing on every pull, which reads as a healthy leg producing no
+    new rows — and it hid, among other things, a $900M uranium-enrichment award
+    dated 2026-07-06, sitting directly on the promoted fission thesis's
+    critical path.
+
+    Trade-off on record: ``new_awards_only`` also excludes large *modifications*
+    to existing awards (an option exercise on a live contract can be real
+    signal). Base awards are the higher-signal set for a world-changer funnel,
+    and the previous behaviour surfaced neither.
+    """
 
     def __init__(
         self,
@@ -267,7 +283,19 @@ class UsaSpendingSource:
         start = end - timedelta(days=self._lookback_days)
         body = {
             "filters": {
-                "time_period": [{"start_date": start.isoformat(), "end_date": end.isoformat()}],
+                "time_period": [
+                    {
+                        "start_date": start.isoformat(),
+                        "end_date": end.isoformat(),
+                        # Without this the window matches ANY transaction
+                        # activity, so decades-old umbrella contracts qualify on
+                        # a routine modification. Verified live 2026-07-27: a
+                        # plain 30-day DOE window returned the 1993 Lockheed
+                        # ($48B), 2017 Sandia ($42B) and 1999 UT-Battelle ($42B)
+                        # national-lab management contracts. New awards only.
+                        "date_type": "new_awards_only",
+                    }
+                ],
                 "award_type_codes": _USASPENDING_AWARD_TYPES,
                 "agencies": [
                     {"type": "awarding", "tier": "toptier", "name": agency}
@@ -284,6 +312,13 @@ class UsaSpendingSource:
                 "Awarding Agency",
                 "generated_internal_id",
             ],
+            # Newest first. The API's default ordering favours the largest
+            # awards, and the largest DOE awards are those same legacy lab
+            # umbrellas — so page 1 was a fixed set of ancient contracts that
+            # deduped to nothing on every pull, and a genuinely new award could
+            # never displace them.
+            "sort": "Start Date",
+            "order": "desc",
             "limit": self._max_results,
             "page": 1,
         }

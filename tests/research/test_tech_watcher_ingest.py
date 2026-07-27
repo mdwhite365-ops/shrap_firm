@@ -510,3 +510,48 @@ def test_settings_parse_env_and_split_lists(monkeypatch: pytest.MonkeyPatch) -> 
     assert settings.gov_sources_enabled is True
     assert settings.interval_seconds == 600.0
     assert settings.redacted()["postgres_dsn"] == "***"
+
+
+async def test_usaspending_requests_new_awards_newest_first() -> None:
+    """The 2026-07-27 fix, verified live against the API.
+
+    Without ``new_awards_only`` the window matches any transaction activity, so
+    decades-old national-lab umbrella contracts (1993 Lockheed $48B, 1999
+    UT-Battelle $42B) qualify on a routine modification; and the API's default
+    ordering favours the largest awards, which are exactly those. Page 1 was
+    therefore a fixed set of ancient contracts that deduped to nothing on every
+    pull — a leg that looks alive while being structurally blind to new awards.
+    """
+
+    http = FakeHTTP([FakeResponse(200, USASPENDING_JSON)])
+    source = UsaSpendingSource(agencies=("Department of Energy",), lookback_days=30)
+
+    await source.fetch(http)
+
+    body = http.post_bodies[0]
+    period = body["filters"]["time_period"][0]
+    assert period["date_type"] == "new_awards_only"
+    assert body["sort"] == "Start Date"
+    assert body["order"] == "desc"
+    # The sort field must be one the API is asked to return, or it errors.
+    assert "Start Date" in body["fields"]
+
+
+async def test_usaspending_still_scopes_by_window_agency_and_floor() -> None:
+    # The fix must not loosen the existing filters.
+    http = FakeHTTP([FakeResponse(200, USASPENDING_JSON)])
+    source = UsaSpendingSource(
+        agencies=("Department of Energy", "Department of Defense"),
+        min_amount=5_000_000.0,
+        lookback_days=30,
+    )
+
+    await source.fetch(http)
+
+    period = http.post_bodies[0]["filters"]["time_period"][0]
+    assert period["start_date"] < period["end_date"]
+    assert [a["name"] for a in http.post_bodies[0]["filters"]["agencies"]] == [
+        "Department of Energy",
+        "Department of Defense",
+    ]
+    assert http.post_bodies[0]["filters"]["award_amounts"] == [{"lower_bound": 5_000_000.0}]
