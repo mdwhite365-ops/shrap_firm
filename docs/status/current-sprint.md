@@ -173,46 +173,112 @@ recover. That kill would also *look* like the milestone landing: a first
 verdict, persisted, with an evaluation card and published events. It would
 test nothing — the backtest never ran.
 
+## THE FIRST-VERDICT RUNBOOK — one session, six steps
+
+**Why this is the whole priority.** The sprint's *minimum* success criteria
+(`docs/00-vision.md:40`) are three items. Two are met: Mike's daily time is
+under two hours, and the audit trail is strong. The third — "the development
+department, research department, and trading floor are all functional" — has
+one gap. The Trading Floor is proven (9/9, autonomous signal→fill). Development
+is functional by substitution and ADR-0014 makes that honest. **Research has
+never completed a single loop.** This runbook closes it.
+
+Every argument below was verified against the code on 2026-07-27, including
+one that a previous draft got wrong: `candidate_id` on the promote CLI is
+**positional**, not `--candidate-id` (`promotion.py:314`).
+
+Run top to bottom in one sitting. Paste output back after each step.
+
 ```bash
 cd /mnt/Archive/shrap/shrap_firm/infra
 
-# 0. PREREQUISITE — populate research.universe_tiers (idempotent; re-run = no-op).
-#    Safe to run now: this does NOT flip PRE_TRADE_CHECKER_TIER3_ENFORCEMENT,
-#    which stays false. universe-curator is a long-running service, so `exec`.
-sudo docker compose exec universe-curator shrap-universe-promote load-launch-list
-sudo docker compose exec universe-curator shrap-universe-promote list   # expect XLE active
+# ── STEP 1 ── Promote the anchor. Mike's decision, authorized 2026-07-27.
+# candidate_id is POSITIONAL. `research.world-changer-promoted` has zero
+# consumers, so nothing cascades — this only flips state and writes the event.
+sudo docker compose exec tech-watcher \
+  shrap-tech-watcher-promote promote 01KXVVPXDMB4HS1QNRPQWRP1RX \
+  --note "Promoted 2026-07-27 to unblock the Evaluator anchor gate for the firm's first verdict. Thesis and falsifiers unchanged. Open: archetype may be keystone-completion rather than cost-curve (ADR-0013 s7)."
+# EXPECT: a promoted decision line naming the candidate.
 
-# 1. Seed the strategy (the seed CLI ships inside the evaluator image —
-#    there is no strategy-seed service). Idempotent on spec_hash.
+sudo docker compose exec tech-watcher shrap-tech-watcher-review
+# EXPECT: "Proposed: 0 · Promoted: 1"; decided_at and decision_note no longer NULL.
+
+# ── STEP 2 ── Populate research.universe_tiers. Idempotent; re-run = no-op.
+# Does NOT flip PRE_TRADE_CHECKER_TIER3_ENFORCEMENT, which stays false.
+sudo docker compose exec universe-curator shrap-universe-promote load-launch-list
+# EXPECT: "launch-list loaded: 50 promoted (...)" — or fewer if partially loaded.
+
+sudo docker compose exec universe-curator shrap-universe-promote list
+# EXPECT: XLE present with tier `active`. If XLE is missing, STOP — step 5 will refuse.
+
+# ── STEP 3 ── Seed the strategy. The seed CLI ships inside the evaluator
+# image; there is no strategy-seed service. Idempotent on spec_hash.
 sudo docker compose --profile tools run --rm strategy-evaluator \
   shrap-strategy-seed load-first
-sudo docker compose --profile tools run --rm strategy-evaluator \
-  shrap-strategy-seed list
+# EXPECT: "loaded: 01KYGTRTTQA9X2B2E16N4SBPTG ... at status=hypothesis"
+#         or "already present: ... status=hypothesis — skipped".
+# IF it says status=killed: stop. The registry needs a manual transition
+# back to hypothesis; load-first will not recreate it.
 
-# 2. Backfill XLE — the ONLY ticker the seed trades. The engine reads a
-#    window_years=5 lookback, so start well before it for MA(100) warmup.
+# ── STEP 4 ── Backfill XLE. The ONLY ticker the seed trades. The engine reads
+# a 5-year window; start earlier so MA(100) has warmup inside fold one.
 sudo docker compose --profile tools run --rm market-data \
   shrap-market-data-backfill --tickers XLE --since 2020-01-01 --dry-run
-#    then drop --dry-run to actually write market_data.daily_bars
+# EXPECT: "tickers=1 rows_fetched=~1600 rows_upserted=0 dry_run=True"
+# If rows_fetched is 0, the Alpaca data credentials are the problem, not the code.
 
-# 3. Evaluate — DRY RUN FIRST, ALWAYS. Read the anchor line in the output.
+sudo docker compose --profile tools run --rm market-data \
+  shrap-market-data-backfill --tickers XLE --since 2020-01-01
+# EXPECT: rows_upserted matching rows_fetched, dry_run=False.
+
+# ── STEP 5 ── Evaluate. DRY RUN FIRST, ALWAYS.
 sudo docker compose --profile tools run --rm strategy-evaluator \
   shrap-strategy-evaluate --strategy-id 01KYGTRTTQA9X2B2E16N4SBPTG --dry-run
+# READ THE ANCHOR LINE BEFORE ANYTHING ELSE.
+#   "Anchor: not live"  -> step 1 did not take. STOP. Do not drop --dry-run.
+#   "Anchor: live" + trades > 0 -> the engine ran. This is a real verdict.
+# Expected verdict: KILL / insufficient-trades. That is SUCCESS, see below.
+
+# ── STEP 6 ── Commit the verdict, and watch the Librarian react.
+sudo docker compose --profile tools run --rm strategy-evaluator \
+  shrap-strategy-evaluate --strategy-id 01KYGTRTTQA9X2B2E16N4SBPTG
+# EXPECT: evaluation_id=... transitioned=True to_stage=killed card=... streams=...
+
+sudo docker compose logs --tail 50 strategy-librarian
+# EXPECT: the Librarian consuming research.strategy.verdict and transitioning
+# the registry. This is the loop closing — it has idled since PR #40 waiting
+# for exactly this event.
 ```
 
-**How to read step 3's dry run.** If it reports `anchor: not live` the run is
-void regardless of what else it prints — resolve the anchor question below
-before committing anything. Only once the dry run shows `anchor: live` **and**
-a non-zero trade count has the engine actually run, and only then is dropping
-`--dry-run` meaningful.
+**How to read the result, and why a kill is the win.** The seed is a plain
+MA(20/100) crossover on one ETF; it flips position a handful of times over five
+years and cannot clear the 150-trade gate. Its own write-up
+(`docs/strategies/fission-costcurve-seed-v1.md`) predicts this.
 
-**Mike's call, and it is the one real decision left in this chain:** promote
-the fission world-changer (making the docs true and letting the Evaluator
-actually backtest), or accept that the first verdict is a fake kill and defer.
-The expected honest outcome once the anchor is live is still a **kill** — a
-daily MA crossover on one ETF will not clear the 150-trade gate
-(`engine.py:51`), and `first_strategy.py` says so plainly. That is the system
-working, and it is a real result in a way the anchor-not-live kill is not.
+The distinction that matters is *which* kill:
+
+- `KILL / anchor-not-live` with `engine_ran=False` — **fake.** Nothing was
+  measured. The backtest never ran.
+- `KILL / insufficient-trades` with `engine_ran=True` — **real.** The engine
+  ran a full walk-forward, measured the strategy, and judged it. The Research
+  Department completed a loop for the first time.
+
+The second outcome is the milestone. Record it in `recent-changes.md` as such.
+
+**The one calibration question this raises, and it is Mike's.** `DEFAULT_MIN_TRADES
+= 150` (`engine.py:51`) is calibrated for the vision's fast layer — "fast loops,
+many trades." A multi-year structural thesis *cannot* produce 150 trades, so for
+Framework #1 the gate is not measuring overfitting risk; it is excluding the
+archetype categorically (KI-013). Setting an archetype-appropriate floor is
+legitimate. Setting it to whatever number lets this seed through is the
+"promoting noise" failure the vision warns about. Those look similar and are
+not. The ruling wants a rationale, not a number.
+
+**After the loop closes.** The remaining sprint weeks go to making it *repeat*
+without Mike — the Evaluator has no trigger and is tools-profile/manual-only,
+so nothing in Research is automatic regardless of how many lenses exist. That
+is the difference between "we did it once by hand" and "the Research Department
+is functional." Everything in ADR-0013 beyond merging it is Phase 2.
 
 **Open PRs at session end (none stacked, any merge order):**
 
