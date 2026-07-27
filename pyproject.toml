@@ -44,6 +44,13 @@ market-phase = ["pydantic-settings>=2.4", "pandas-market-calendars>=4.4"]
 universe-curator = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 market-data = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 strategy-evaluator = ["asyncpg>=0.29", "numpy>=1.26", "pandas>=2.2"]
+strategy-runner = [
+    "pydantic-settings>=2.4",
+    "asyncpg>=0.29",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pandas-market-calendars>=4.4",
+]
 spine-smoke = ["asyncpg>=0.29"]
 
 [project.scripts]
@@ -69,6 +76,7 @@ shrap-universe-curator = "shrap.agents.research.universe_curator.__main__:main"
 shrap-universe-promote = "shrap.research.universe_curator.cli:main"
 shrap-market-data-backfill = "shrap.market_data.backfill:main"
 shrap-strategy-evaluate = "shrap.research.strategy_evaluator.cli:main"
+shrap-strategy-runner = "shrap.agents.research.strategy_runner.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shrap"]
