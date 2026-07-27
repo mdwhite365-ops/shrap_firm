@@ -90,9 +90,18 @@ class FakeHTTP:
     def __init__(self, response: FakeResponse) -> None:
         self.response = response
         self.requests: list[tuple[str, dict[str, Any], float]] = []
+        self.headers: list[dict[str, str] | None] = []
 
-    async def post(self, url: str, *, json: dict[str, Any], timeout: float) -> FakeResponse:
+    async def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, Any],
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> FakeResponse:
         self.requests.append((url, json, timeout))
+        self.headers.append(headers)
         return self.response
 
 
@@ -194,3 +203,72 @@ async def test_think_toggle_is_passed_through_and_absent_by_default() -> None:
     _url, body_default, _t = http.requests[1]
     assert body_think["think"] is False
     assert "think" not in body_default
+
+
+# --- remote-host auth (Ollama Cloud direct) -----------------------------------
+#
+# The local daemon signs cloud requests with the host's Ed25519 key
+# (~/.ollama/id_ed25519, registered by `ollama signin`) and ignores bearer
+# tokens entirely. Talking straight to https://ollama.com/api is the path that
+# takes a token — so the key must travel to a remote host and never to the
+# local daemon.
+
+
+def test_local_daemon_gets_no_authorization_header() -> None:
+    registry = TierRegistry(
+        {"SHRAP_LLM_OLLAMA_URL": "http://ollama:11434", "OLLAMA_API_KEY": "sk-test"}
+    )
+
+    assert registry.resolve(TIER_LOCAL_CLASSIFICATION).api_key is None
+
+
+def test_loopback_daemon_gets_no_authorization_header() -> None:
+    registry = TierRegistry(
+        {"SHRAP_LLM_OLLAMA_URL": "http://localhost:11434", "OLLAMA_API_KEY": "sk-test"}
+    )
+
+    assert registry.resolve(TIER_LOCAL_CLASSIFICATION).api_key is None
+
+
+def test_remote_host_carries_the_key() -> None:
+    registry = TierRegistry(
+        {"SHRAP_LLM_OLLAMA_URL": "https://ollama.com", "OLLAMA_API_KEY": "sk-test"}
+    )
+
+    assert registry.resolve(TIER_LOCAL_CLASSIFICATION).api_key == "sk-test"
+
+
+def test_remote_host_without_a_key_carries_none() -> None:
+    registry = TierRegistry({"SHRAP_LLM_OLLAMA_URL": "https://ollama.com"})
+
+    assert registry.resolve(TIER_LOCAL_CLASSIFICATION).api_key is None
+
+
+def test_blank_key_is_treated_as_absent() -> None:
+    # `.env` ships OLLAMA_API_KEY= empty; that must not become "Bearer ".
+    registry = TierRegistry({"SHRAP_LLM_OLLAMA_URL": "https://ollama.com", "OLLAMA_API_KEY": "   "})
+
+    assert registry.resolve(TIER_LOCAL_CLASSIFICATION).api_key is None
+
+
+async def test_bearer_header_is_sent_to_a_remote_host() -> None:
+    registry = TierRegistry(
+        {"SHRAP_LLM_OLLAMA_URL": "https://ollama.com", "OLLAMA_API_KEY": "sk-test"}
+    )
+    http = FakeHTTP(_ok_response())
+    client = TierLLMClient(registry, http)
+
+    await client.complete(tier=TIER_LOCAL_CLASSIFICATION, prompt="p")
+
+    assert http.headers == [{"Authorization": "Bearer sk-test"}]
+    assert http.requests[0][0] == "https://ollama.com/api/chat"
+
+
+async def test_no_header_is_sent_to_the_local_daemon() -> None:
+    registry = TierRegistry({"SHRAP_LLM_OLLAMA_URL": "http://ollama:11434"})
+    http = FakeHTTP(_ok_response())
+    client = TierLLMClient(registry, http)
+
+    await client.complete(tier=TIER_LOCAL_CLASSIFICATION, prompt="p")
+
+    assert http.headers == [None]

@@ -31,11 +31,27 @@ Changing the latter without breaking the former is the whole point.
 > **Deployment routing amendment (2026-07-27) — Tech Watcher only.** The
 > local-only ruling of 2026-07-15 is superseded *for this agent*: its
 > `local-classification` and `cloud-default` tiers now resolve to Ollama Cloud
-> models. Both still point at the local daemon (`http://ollama:11434`), which
-> detects a cloud-tagged model, attaches `OLLAMA_API_KEY`, and proxies
-> upstream — so no client code changed and the tier aliases remain the
-> contract. The Intelligence agents (News Analyzer, Filing Processor) stay
-> fully local; routing them is a separate cost decision.
+> models, and that container alone points at `https://ollama.com` instead of
+> the local daemon. The tier aliases remain the contract. The Intelligence
+> agents (News Analyzer, Filing Processor) stay fully local; routing them is a
+> separate cost decision.
+>
+> **Why direct rather than through the local daemon.** The daemon *can* serve
+> cloud models, but it does not authenticate them with a bearer token — it
+> signs every cloud request with the host's Ed25519 key at
+> `~/.ollama/id_ed25519`, which `ollama signin` registers against an
+> ollama.com account. On the Dell that key lives in the `ollama_models` volume,
+> making cloud access **container state rather than configuration**: recreate
+> the volume and cloud dies with "You need to be signed in to Ollama to run
+> Cloud models," with nothing in the repo explaining why. ollama.com serves the
+> same `/api/chat` contract as a remote Ollama host, so pointing at it costs
+> one `Authorization: Bearer` header and makes auth declarative, restorable
+> from `.env`, and reviewable. `SHRAP_TW_OLLAMA_URL=http://ollama:11434` sends
+> the agent back through the daemon if that trade is ever worth reversing.
+>
+> The client now sends that header whenever a tier resolves to a **remote**
+> Ollama host and a key is present; the local daemon never receives one, since
+> it needs no auth and leaking a token to loopback would be gratuitous.
 >
 > Model choice is cost-shaped rather than capability-maximising. Ollama bills
 > **GPU-time** under 5-hour session and weekly caps, not per token, and its
