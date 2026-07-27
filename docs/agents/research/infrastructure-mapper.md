@@ -18,12 +18,14 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 **Author:** Mike White
 **Version:** 0.1 (draft)
 
-> **Implementation status (2026-07-27).** Month-2 scope has landed in two
+> **Implementation status (2026-07-27).** Month-2 scope has landed in three
 > cards. Card 1: the graph schema + store (`research.graphs`,
 > `graph_nodes`, `graph_node_history`, `graph_node_evidence`), anchored on
 > `research.world_changers(candidate_id)`. Card 2: the `shrap-infra-mapper`
 > CLI (`load-seed-graph` / `list`) and the first hand-seeded graph — on the
 > promoted fission world-changer, deliberately small and honest (see below).
+> Card 3: the deterministic staleness-maintenance pass
+> (`maintenance` subcommand, `--freshness-days` / `--dry-run`).
 > **Honest finding from the seed:** the fission thesis's critical-path layers
 > (`raw-inputs` uranium, `power-gen` nuclear/SMR, `power-delivery`) have **no
 > representation in the locked 50-name Tier-3 universe**; the only fission
@@ -31,11 +33,27 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 > with 2024 nuclear deals: MSFT, AMZN, GOOGL, META), seeded at `low`
 > confidence / `downstream-beneficiary`. This is a real universe gap the
 > Mapper is meant to surface, and it says plainly that the fission thesis is
-> only weakly expressible in today's universe. Still **deferred** to later
-> cards: LLM-assisted layer/ticker enumeration (which would build a rich
-> AI-compute graph), the deterministic staleness-maintenance pass,
-> bottleneck-driven updates, and the weekly `universe.proposed-*` aggregation
-> to the Universe Curator.
+> only weakly expressible in today's universe.
+>
+> **Second honest finding, from card 3.** The staleness pass runs on evidence
+> `observed_at`, which exposed a defect in card 2: the seed loader stamped
+> evidence rows with *load* time, so 2024 procurement announcements would have
+> looked days old and the pass would have reported a fully fresh graph. Card 3
+> fixes the loader to write the true observation date (refs naming only a year
+> or month are floored to the start of that period, so age is never
+> understated). The consequence is that **the seed graph loads already stale** —
+> all four nodes are past the 180-day threshold on their first pass. That is
+> the correct reading: the fission thesis is carried by procurement
+> announcements nobody has re-confirmed since 2024. Note that this pass only
+> moves nodes between `active` and `stale-evidence`; `pending-review`,
+> `downgraded`, and `removed` are owned by Mike's gate and by kill-criterion
+> evaluation, and reactivating them here would launder a kill decision.
+> Still **deferred** to later cards: LLM-assisted layer/ticker enumeration
+> (which would build a rich AI-compute graph), actual evidence *refresh*
+> (fetching new filings — card 3 only measures age), kill-criterion
+> evaluation, bottleneck-driven updates, the `research.mapper-summary`
+> rollups, and the weekly `universe.proposed-*` aggregation to the Universe
+> Curator.
 
 ## Purpose
 
@@ -373,6 +391,11 @@ universe change back to original Tech Watcher candidate.
   Filings cadence is quarterly so 180 days catches two cycles, but
   fast-moving layers (compute interconnect) may need shorter.
   Blocks: stale-evidence flag noise floor. Owner: Mike.
+  *Implemented (card 3) as `DEFAULT_FRESHNESS_DAYS = 180`, overridable per
+  run with `--freshness-days`. Still a documented guess, not a calibration —
+  merging card 3 does not settle this question. The threshold is currently
+  global; a per-layer-role threshold is the obvious refinement once there is
+  a graph with fast- and slow-moving layers in it.*
 - **Cross-graph confidence aggregation rule:** max-per-ticker is
   the current rule. Sum or weighted-sum could overweight
   multi-graph tickers in the universe. Blocks: universe
