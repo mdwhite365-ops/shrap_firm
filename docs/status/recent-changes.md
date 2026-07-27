@@ -284,6 +284,53 @@
   branch off `main`. Same for #85 relative to #84. The trap is easy to hit
   when cards arrive back-to-back in one session.
 
+## Funnel unblock attempt + Ollama Cloud (2026-07-27 evening)
+
+- PR #86 — Status reconciliation after the Infra Mapper arc; KI-008 (thesis
+  memory is manual-only), KI-009 (the funnel is structurally incapable of
+  promoting — 8/8 clusters arXiv-only, triangulation needs ≥2 origins + ≥1
+  hard leg), KI-010 (ingest legs die silently), DQ-006 updated with the first
+  named false negative.
+- PR #89 (was #87) — Filter prompt v4: source-class-aware evidentiary bar
+  (`attested` vs `claim`), cumulative-evidence rule, reject-only-after-every-
+  archetype rule; `shrap-tech-watcher-refilter`; re-filter report shows every
+  verdict rather than only flips.
+- PR #88 — Tech Watcher routed to Ollama Cloud, ending local-only for that
+  agent. `gpt-oss:20b-cloud` (Low Usage) for the bulk filter, `kimi-k3:cloud`
+  (Extra High) for synthesis — Ollama bills GPU-time and publishes a usage
+  tier per model, so the split is cost-shaped.
+- PR #90 — Recovered #88's auth fix onto main (pushed after that PR merged, so
+  it missed — KI-001 pattern) and fixed the re-filter to select on **model**
+  as well as prompt version. A verdict's identity is the (prompt, model) pair;
+  keying on prompt alone meant a model swap selected nothing and the pass
+  silently declined to test the change being made.
+- PR #91 — USASpending fetches new awards newest-first.
+
+**Outcome, honestly: the funnel is still blocked, and the diagnosis moved
+twice.** The 9B local model was confabulating (it called a fission reactor
+"fusion ignition" and rejected a *fourth* criticality as "a single
+milestone"). The 20B cloud model does not confabulate and gives coherent,
+specific reasons — but returned 0 flips on the same 16 items. Reading those
+reasons, the rejections are largely **defensible**: `cost-curve` requires unit
+cost evidence, and DOE press releases contain none. The remaining question is
+a taxonomy one (KI-009), not a model or prompt one.
+
+**The USASpending finding is the session's most concrete result.** The leg was
+never dead — `external_ts` there is the award *Start Date*, not fetch time, so
+the "18 days stale" reading was wrong. The real defect was that `time_period`
+matches any transaction activity and the API's default sort favours the
+largest awards, so every pull returned the same decades-old national-lab
+umbrella contracts (1993 Lockheed $48B, 1999 UT-Battelle $42B) which deduped
+to nothing. Fixing it surfaces **$900M to American Centrifuge Operating
+(uranium enrichment), dated 2026-07-06** — hard-source, dollar-denominated, on
+the promoted fission thesis's critical path, in the very `raw-inputs` layer
+the Infra Mapper flagged as unrepresented.
+
+**Process note:** four wrong calls this session (ingest-not-filter; prompt v4
+will fix it; the Ollama auth mechanism; the re-filter selection key). The first
+two were hypotheses the data corrected. The last two were shipped without
+end-to-end verification, and both surfaced only when Mike ran them on the Dell.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.

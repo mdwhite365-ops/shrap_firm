@@ -1,6 +1,6 @@
 # Current sprint status
 
-**Last updated:** 2026-07-27
+**Last updated:** 2026-07-27 (evening — session close, pivot to strategy loop)
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
@@ -107,6 +107,68 @@ aggregation card lands it unions the *active* ticker set, so this graph
 currently proposes **zero** universe names. That is the correct answer, not
 a bug — the one promoted thesis has no tradeable expression whose evidence
 has been confirmed within two years.
+
+## NEXT SESSION STARTS HERE — pivot to the strategy loop
+
+**Mike's ruling, 2026-07-27 (end of session).** Framework #1 work pauses; the
+next card is the **Strategy Evaluator's first verdict**. The reasoning, and it
+is grounded in the vision rather than a preference:
+
+`docs/00-vision.md` §7 says most of Shrap's strategies trade on "technical and
+short-term-catalyst signals — fast loops, many trades," while the structural
+department runs "on a much slower clock" and feeds "biases and sizing
+modifiers — **not entry triggers**." ADR-0007 has the funnel producing the
+*universe* ("the graph IS the trading universe"), not signals. So Framework #1
+answers *which names*, never *when to trade them* — it was never the day/swing
+edge and cannot become it.
+
+Two facts make the pause urgent rather than optional:
+
+1. **The funnel currently feeds nothing.** DQ-004 locked the 50-name universe
+   as a hand-chosen list and the Universe Curator's implementation card has not
+   shipped, so even a perfect funnel would not change what the firm trades
+   today. The Mapper's one graph proposes zero names (all four nodes stale).
+2. **The firm has never evaluated a single strategy.** The Evaluator is built
+   (#41, in-house walk-forward) and has never produced a verdict. The Librarian
+   is deployed and idles waiting for one. The only "strategy" in existence is
+   the disarmed fixture. The inner loop executes flawlessly and has nothing
+   real to execute.
+
+**The chain to unblock:** market-data backfill → `shrap-strategy-evaluate` on
+the seeded strategy → first verdict → Librarian lifecycle transition. That is
+the first real test of whether the firm can find edge at all, which is a more
+load-bearing question than the Tech Watcher's filter calibration.
+
+```bash
+# 1. Confirm a strategy exists to evaluate
+cd /mnt/Archive/shrap/shrap_firm/infra
+sudo docker compose --profile tools run --rm strategy-seed shrap-strategy-seed list
+
+# 2. Backfill daily bars (dry-run first — it reports row counts without writing)
+sudo docker compose --profile tools run --rm market-data \
+  shrap-market-data-backfill --tickers AAPL,MSFT,NVDA,SPY --since 2021-01-01 --dry-run
+
+# 3. Evaluate (dry-run computes the verdict without persisting or publishing)
+sudo docker compose --profile tools run --rm strategy-evaluator \
+  shrap-strategy-evaluate --strategy-id <id from step 1> --dry-run
+```
+
+Verify the tools-profile service names against `infra/docker-compose.yml`
+before running — the Infra Mapper precedent is
+`docker compose --profile tools run --rm <svc> <cli>`.
+
+**Open PRs at session end (none stacked, any merge order):**
+
+- **#91** — USASpending new-awards fix (below). Not on the critical path;
+  merge whenever.
+- Everything else from this session is merged through #90.
+
+**Carried over, deliberately not done:** KI-008 auto-attach, KI-009's
+taxonomy question (should `cost-curve` admit leading indicators, or is
+industrial scale-up a separate archetype — Mike's artifact), KI-010's
+freshness/zero-new-rows alerting, the anchor-thesis promotion call, and
+logging the Valar criticality item as a thesis observation against kill
+criterion 3.
 
 ## Main branch state
 
