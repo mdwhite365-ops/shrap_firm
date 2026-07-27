@@ -185,22 +185,39 @@ observation log (#85). Full list in `recent-changes.md`.
   deployed 2026-07-19 has already shown it survives a restart; the
   `closed-day` Sat/Sun + `pre-open` Monday cycle is the remaining
   certification step.
-- **Valar Atomics: did the funnel see it?** (2026-07-27, KI-008.) Ward 250
-  reached criticality 2026-06-18 under the DOE Reactor Pilot Program — the
-  motivating case for the DQ-007 reorder — and a public demonstration
-  (reactor powering an NVIDIA DGX Spark) followed. Both bear on the promoted
-  fission thesis. The gov-sources legs meant to catch exactly this (DOE
-  newsroom + USASpending) shipped in PR #53 and are deployed, so the open
-  question is not *can* the firm see Valar but **did it, and where did the
-  signal go**. Check `shrap-tech-watcher-review` and
-  `research.tech_watcher_cluster_log` for Valar/DOE-program items and
-  whether they were filtered, held single-source, or never ingested. The
-  answer picks the fix: prompt, source coverage, or triangulation rule.
+- **THE FUNNEL IS BLOCKED (KI-009) — highest priority.** The 2026-07-27
+  diagnostic found that all 8 clusters ever logged are `["arxiv"]`
+  single-source. Triangulation requires ≥2 origins and ≥1 hard leg; arXiv is
+  one origin and is not hard, so the funnel **cannot promote anything, ever**,
+  until hard-source items survive the filter. They currently do not: 1656
+  EDGAR, 117 USASpending, 113 Federal Register and 16 DOE items are ingested
+  and none reach a cluster. The named false negative is in DQ-006 — a DOE
+  announcement of a *fourth* reactor criticality rejected for lacking
+  "independent replication." Fix is filter prompt v4, source-class aware.
+  **This supersedes the earlier read that ingest health was the bottleneck**;
+  a healthy USASpending leg would have its items rejected by the same filter.
+- **Ingest legs die silently (KI-010).** USASpending has ingested nothing
+  since 2026-07-09 (18 days) while other legs are current, and nothing
+  alerted — it surfaced only from a manual per-leg count during an unrelated
+  diagnostic. DOE newsroom also shows ~13 days of ingest latency. Real, but
+  second to KI-009.
+- **The Mapper's anchor thesis was never promoted.** `research.world_changers`
+  holds one row, status `proposed`, `decided_at` and `decision_note` NULL —
+  the review page reads "Proposed: 1 · Promoted: 0". The seed graph (#82) was
+  built on it anyway, the Mapper's `research.world-changer-promoted` trigger
+  never fired, and every seed node carries the kill criterion "world-changer
+  anchor no longer 'promoted' in research.world_changers" — which, read
+  literally, is *already satisfied*. Docs (including the Infra Mapper spec
+  note and `first_graph.py`) call it "the promoted world-changer"; the
+  database disagrees. **Mike's call:** promote it (making the docs true), or
+  treat the graph as premature. Either way the anchor kill criterion is a poor
+  proxy and should reference the thesis's three real criteria — which are
+  good ones (unsubsidized PPA, $/kW across cohorts, licensing throughput).
 - **Thesis observations are manual-only** (KI-008). `shrap-world-changer-observe`
-  is Mike's keyboard. Nothing attaches observations to a promoted thesis
-  automatically, which inverts principles 6 and 10. The auto-attach card is
-  the fix and should follow the Valar diagnostic above, since the diagnostic
-  determines what it needs to attach.
+  is Mike's keyboard. Nothing attaches observations to a thesis automatically,
+  which inverts principles 6 and 10. **Deferred behind KI-009** — attaching
+  pipeline hits is worthless while the filter rejects the hits worth
+  attaching.
 - **Graphed-but-fully-stale is unmonitored.** The spec has the Health
   Monitor surfacing "promoted but ungraphed" world-changers; a graph whose
   nodes are all `stale-evidence` (i.e. proposing zero names) raises nothing.

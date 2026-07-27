@@ -115,6 +115,27 @@ Valar / Reactor Pilot Program items. Four outcomes, four different fixes:
 - *Proposed and sitting unreviewed* → the review surface is the bottleneck,
   not the ingest.
 
+**Diagnostic result (2026-07-27): outcome 2, "ingested, filtered out."** The
+DOE newsroom leg *did* catch it — one item, published 2026-07-06, fetched and
+filtered 2026-07-19 — and the filter rejected it. Details and the verdict text
+in DQ-006; the structural consequence in KI-009. Three corrections to what
+this entry originally assumed:
+
+- The private-company objection was wrong. Valar is invisible to EDGAR and to
+  the ticker-scoped News Analyzer / Filing Processor, but the DOE leg is not
+  ticker-scoped and saw it fine.
+- The auto-attach card is **premature**. Attaching pipeline hits to theses is
+  worthless while the filter rejects the hits worth attaching. KI-009's
+  prompt-v4 card comes first.
+- The seeded thesis's own text already names "Valar Ward 250 critical
+  2026-06-18," so the firm had the date recorded before the diagnostic ran.
+  The gap is not knowing the fact; it is that nothing connects the fact to the
+  thesis record automatically.
+
+Note also that the anchor thesis is `proposed`, never `promoted` (`decided_at`
+and `decision_note` are both NULL) — see the Infra Mapper foundation issue in
+`current-sprint.md`.
+
 **Mitigation (not yet built):** an auto-attach path writing pipeline hits to
 `world_changer_observations` for the theses they reference, with `bearing` and
 the kill-criterion link left unset for Mike rather than guessed — the falsifier
@@ -122,3 +143,72 @@ judgement is the part that must not be automated away. A thesis-scoped
 watchlist (named entities, including private ones, attached to a promoted
 world-changer) is the likely shape, since ticker-scoped watching structurally
 cannot see a Valar.
+
+## KI-009 — The funnel is structurally incapable of promoting anything
+
+**Status:** Open, found 2026-07-27 by the KI-008 diagnostic. This is a hard
+block, not a slowness problem.
+
+`research.tech_watcher_cluster_log` holds 8 rows. All 8 are
+`held-single-source`. **Every one has `source_classes = ["arxiv"]`** — two
+clusters a day (`compute-substrate`, `cost-curve`), one item each,
+2026-07-24 through 2026-07-27. Nothing has ever been synthesized.
+
+The triangulation rule (`Cluster.promotable`) requires **≥2 distinct origins
+AND ≥1 hard leg**, where hard = EDGAR / USASpending / Federal Register. arXiv
+maps to origin `research` and is not hard. So an arXiv-only cluster fails
+*both* conditions simultaneously. As long as arXiv is the only source whose
+items survive the filter, the funnel cannot promote anything — not slowly,
+not eventually. Ever.
+
+And arXiv is the only survivor. Ingest volumes are healthy on the hard legs
+(sec-edgar 1656, federal-register 113, usaspending 117, doe-newsroom 16), yet
+none of their items reach a cluster. The filter is rejecting them — see DQ-006
+for the named false negative (a DOE reactor-criticality announcement rejected
+for lacking "independent replication" when its headline says it is the
+*fourth* one).
+
+**This inverts the previous read.** Ingest health looked like the bottleneck;
+it is not. Even a fully healthy USASpending leg would have its items rejected
+by the same filter and change nothing. **The filter is the binding
+constraint.**
+
+**Fix order:**
+
+1. **Filter prompt v4, source-class aware** (DQ-006). Unblocks triangulation.
+   Nothing else matters until hard-source items can pass.
+2. **Ingest staleness alerting** (below). Real, but secondary.
+3. Re-run the filter over already-ingested hard-source items under v4 — 1900+
+   items are sitting filtered-and-rejected, and KI-007's verdict history means
+   a re-filter is now auditable.
+
+## KI-010 — Ingest legs die silently
+
+**Status:** Open, found 2026-07-27.
+
+Per-leg ingest as of 2026-07-27:
+
+| leg | items | oldest | newest |
+|---|---|---|---|
+| sec-edgar | 1656 | 2026-07-15 | 2026-07-27 |
+| arxiv | 700 | 2026-07-16 | 2026-07-24 |
+| usaspending | 117 | 1978-09-15 | **2026-07-09** |
+| federal-register | 113 | 2026-05-01 | 2026-07-27 |
+| doe-newsroom | 16 | 2026-06-30 | 2026-07-26 |
+
+**USASpending has ingested nothing for 18 days** while every other leg is
+current. Nothing alerted; it was found only by manually querying per-leg
+volume during an unrelated diagnostic. A leg can die and the firm's only
+symptom is a funnel that quietly proposes less — indistinguishable from a
+market with less happening in it.
+
+Secondary observations from the same query: DOE newsroom shows ~13 days of
+**ingest latency** (the 2026-07-06 criticality article was fetched
+2026-07-19), so that leg is running as a slow backfill rather than a live
+feed; and arXiv is 3 days behind the two current legs.
+
+**Mitigation (not yet built):** a per-leg freshness check with a Health
+Monitor alert when a leg's newest `external_ts` (or `fetched_at`) falls
+outside its expected cadence. The Infra Mapper's staleness pass is the
+working precedent — same shape, different table: a max-timestamp per group
+compared against a threshold, flagging when it goes cold.
