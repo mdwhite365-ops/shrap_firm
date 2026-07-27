@@ -10,6 +10,9 @@ Subcommands:
   ``research.graphs-initialized`` once and ``research.graphs-added`` per node,
   and writes append-only history + evidence rows.
 - ``list`` — show graphs and their node counts by layer role and status.
+- ``restamp-seed-evidence`` — one-time repair for a seed graph loaded before
+  card 3 fixed the loader, whose evidence rows carry load time instead of the
+  true observation date. Idempotent; ``--dry-run`` reports without writing.
 - ``maintenance`` — deterministic staleness pass over every active graph:
   flags nodes whose newest evidence is past the freshness threshold, recovers
   nodes whose evidence has since been refreshed, and emits
@@ -40,6 +43,7 @@ from shrap.research.infra_mapper.maintenance import (
     DEFAULT_FRESHNESS_DAYS,
     run_maintenance_pass,
 )
+from shrap.research.infra_mapper.restamp import restamp_seed_evidence
 from shrap.research.infra_mapper.store import GRAPH_ACTIVE, NODE_ACTIVE, PostgresGraphStore
 
 PRODUCED_BY = "research/infra-mapper"
@@ -163,15 +167,18 @@ async def _run(args: argparse.Namespace) -> str:
         await store.ensure_schema()
         if args.action == "load-seed-graph":
             return await load_seed_graph(store, cast(_RedisXAdd, redis))
+        if args.action == "restamp-seed-evidence":
+            restamp_report = await restamp_seed_evidence(store, dry_run=args.dry_run)
+            return restamp_report.render()
         if args.action == "maintenance":
-            report = await run_maintenance_pass(
+            maintenance_report = await run_maintenance_pass(
                 store,
                 cast(_RedisXAdd, redis),
                 now=_utcnow(),
                 freshness_days=args.freshness_days,
                 dry_run=args.dry_run,
             )
-            return report.render()
+            return maintenance_report.render()
         return await render_list(store)
     finally:
         await redis.aclose()
@@ -199,6 +206,15 @@ def main() -> None:
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("load-seed-graph", help="Load the hand-seeded graph (idempotent)")
     sub.add_parser("list", help="Show graphs and their nodes")
+    restamp = sub.add_parser(
+        "restamp-seed-evidence",
+        help="Repair seed evidence rows stamped with load time (one-time, idempotent)",
+    )
+    restamp.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report corrections without writing",
+    )
     maint = sub.add_parser("maintenance", help="Run the deterministic staleness pass")
     maint.add_argument(
         "--freshness-days",
