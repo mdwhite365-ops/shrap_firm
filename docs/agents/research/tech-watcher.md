@@ -25,6 +25,48 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 > clustering; single-source clusters wait unsynthesized until a second
 > source class corroborates (they are the `seen-not-proposed` population).
 
+> **Filter prompt v4 — source-class-aware evidentiary bar (2026-07-27).** The
+> funnel had never synthesized a candidate: all 8 clusters ever logged were
+> `["arxiv"]` single-source, and triangulation requires ≥2 origins plus ≥1 hard
+> leg, so promotion was structurally impossible (KI-009). Cause: the filter was
+> rejecting every hard-source item. The named case (DQ-006) is a DOE
+> announcement that a *fourth* reactor in a federal pilot cohort reached
+> criticality, rejected for lacking "independent replication" — a bar v3 never
+> set, drawn from the `physical-realization` archetype's signature signals and
+> applied to an item whose own headline stated it was the fourth instance.
+>
+> v4 fixes three things. **(1) The bar now depends on who asserts the fact.**
+> `attested` sources (SEC filer, federal spending record, rulemaking, an agency
+> reporting on its own program) get the event presumed real — replication and
+> peer review are bars for testing unverified claims, and nothing attested is
+> unverified. `claim` sources (arXiv) keep the full v3 skepticism. Unmapped
+> sources default to `claim`. **Note carefully: this is not the triangulation
+> hardness rule.** DOE newsroom is `attested` for the filter but stays *soft*
+> for triangulation — one governs "did this happen," the other "does it count
+> as an independent leg" — and conflating them would let a single agency fake
+> corroboration. **(2) Cumulative evidence counts:** an item reporting it is
+> the Nth instance is reporting replication, not confessing to being an
+> anecdote. **(3) Rejection requires failing every archetype**, so falling
+> short of one archetype's bar no longer ends the evaluation — an attested
+> deployment milestone can be `cost-curve` evidence even when it is a weak
+> `physical-realization` claim. `physical-realization` deliberately stays in
+> the grammar despite its HISTORICAL marking, per
+> `docs/research/world-changer-archetypes.md` ("should remain in scope for Tech
+> Watcher scanning").
+>
+> **`shrap-tech-watcher-refilter`** ships alongside, because a prompt fix
+> otherwise only reaches items arriving after it — and at DOE's ~16 items a
+> month that is effectively never. It re-scores items last filtered under an
+> older prompt version, appending to `filter_verdict_history` like any other
+> pass, so the before/after comparison survives (the v2 re-filter was ad-hoc
+> SQL and destroyed exactly that — KI-007). `--dry-run` sizes the pass without
+> calling the model; the report's rescued/dropped counts are the direct
+> measurement of what the prompt change did.
+>
+> **Not settled by this card:** whether the local Qwen tier is good enough
+> (DQ-006's original question). v4 fixes a category error in the prompt, which
+> a tier swap would not have fixed. Judge the tier on the re-filter results.
+>
 > **Thesis observation log (2026-07-27).** The funnel had two evidence stores
 > and neither could hold an observation about a *thesis*. `graph_node_evidence`
 > (Infra Mapper) says why a ticker sits in a layer role — per-node.
