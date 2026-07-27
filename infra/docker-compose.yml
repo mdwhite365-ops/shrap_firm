@@ -561,6 +561,42 @@ services:
       - shrap_net
 
   # -------------------------------------------------------------------------
+  # Strategy Runner - Research Department. The paper-trading loop's last
+  # structural piece and the Strategy Fixture's real successor. Consumes
+  # operations.market-phase; on each entry into `open` it evaluates every
+  # active paper-stage strategy and emits a trading.strategy.signal on a
+  # flat/invested target transition. Emits signals only (Decision Maker ->
+  # Pre-Trade -> Execution owns the rest); idempotent per (strategy, session).
+  # PAPER ONLY - no intents, no broker credentials.
+  # -------------------------------------------------------------------------
+  strategy-runner:
+    build:
+      context: ../
+      dockerfile: infra/strategy-runner.Dockerfile
+    container_name: shrap_strategy_runner
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      STRATEGY_RUNNER_REDIS_URL: "redis://redis:6379/0"
+      STRATEGY_RUNNER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      STRATEGY_RUNNER_START_ID: "$$"
+      STRATEGY_RUNNER_CONFIDENCE: "0.75"
+      STRATEGY_RUNNER_QUANTITY: "1"
+      STRATEGY_RUNNER_ADJUSTMENT: "all"
+      STRATEGY_RUNNER_COUNT: "100"
+      STRATEGY_RUNNER_BLOCK_MS: "5000"
+      STRATEGY_RUNNER_RETRY_DELAY_SECONDS: "1.0"
+      STRATEGY_RUNNER_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
   # Tech Watcher (ingest slice) - Research Department, top of the
   # Framework #1 funnel. Hourly EDGAR + arXiv pulls into
   # research.raw_source_items with atomic cursor advance; publishes
