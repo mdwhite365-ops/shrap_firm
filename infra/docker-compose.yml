@@ -219,6 +219,15 @@ services:
     image: ollama/ollama:0.32.0
     container_name: shrap_ollama
     restart: unless-stopped
+    # Single-variable injection, NOT env_file. The daemon needs exactly one
+    # secret; `env_file: .env` would also hand it the Alpaca broker keys, and
+    # ADR-0003 confines those to broker-facing containers. A cloud-tagged model
+    # (e.g. gpt-oss:20b-cloud) is detected by the daemon, which attaches this
+    # key and proxies the request to Ollama's cloud — so agents keep calling
+    # http://ollama:11434/api/chat unchanged and no client code knows the
+    # difference. Blank key = local models still work, cloud tags fail.
+    environment:
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
     volumes:
       - ollama_models:/root/.ollama
     ports:
@@ -621,12 +630,37 @@ services:
       TECH_WATCHER_SYNTHESIS_INTERVAL_SECONDS: "86400"
       TECH_WATCHER_MAX_PROPOSALS: "10"
       TECH_WATCHER_LOG_LEVEL: "INFO"
-      # Local-only LLM routing (Mike's ruling 2026-07-15): both tiers this
-      # agent uses are env-routed to the Dell's Ollama. Deployment routing,
-      # not a registry change — see docs/infrastructure/llm-registry.md.
+      # LLM routing (Mike's ruling 2026-07-27, superseding local-only of
+      # 2026-07-15 for THIS agent only — the Intelligence agents below stay
+      # local). Still deployment routing, not a registry change: the tier
+      # aliases remain the contract (ADR-0009), and both still point at the
+      # local daemon, which proxies cloud-tagged models upstream.
+      #
+      # Why local-only ended here: qwen3.5:9b-q4_K_M could not execute the
+      # filter's multi-constraint classification. It rejected a DOE
+      # announcement of a *fourth* reactor criticality as "a single milestone"
+      # lacking "independent replication," and reached for the archetype's
+      # example vocabulary (fusion ignition) on a fission item. Filter prompt
+      # v4 fixed the prompt-side causes and changed nothing: 16 re-scored,
+      # 0 flips. See DQ-006 and KI-009.
+      #
+      # Model choice is cost-shaped. Ollama bills GPU-time and labels a usage
+      # tier per model. The filter runs over ~1900 backlog items plus ~140/day,
+      # so it takes the cheapest tier that can plausibly do the job
+      # (gpt-oss:20b-cloud, "Low Usage"; its 128K context is ~90x our ~1400
+      # token prompt, so paying for a 1M window buys nothing). Synthesis runs a
+      # handful of times a day on already-clustered candidates and is where
+      # judgment is load-bearing, so it takes kimi-k3:cloud ("Extra High
+      # Usage"). K3 on the bulk filter would pay flagship rates for a call that
+      # deliberately runs with think=False.
+      #
+      # Both are overridable without editing compose, so laddering up on a bad
+      # result is an .env edit and a restart.
       SHRAP_LLM_OLLAMA_URL: "http://ollama:11434"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_FILTER_MODEL:-gpt-oss:20b-cloud}"
       SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
-      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "qwen3.5:9b-q4_K_M"
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "${SHRAP_SYNTHESIS_MODEL:-kimi-k3:cloud}"
     depends_on:
       redis:
         condition: service_healthy

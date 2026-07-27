@@ -28,6 +28,28 @@ Changing the latter without breaking the former is the whole point.
 | `local-heavy` | `mistral-small:24b-instruct-q4_K_M` (Ollama) | Local (Ryzen, via `ryzen.tasks` stream) | 32k tokens (approx; depends on Ollama config) | Marginal (electricity) | Heavier local inference offloaded to Ryzen substrate | Agents that publish to `ryzen.tasks` (consumer set TBD per agent spec) |
 | `no-llm` | N/A | — | — | None | Deterministic logic only | Risk Officer; Strategy Evaluator core stats; Health Monitor |
 
+> **Deployment routing amendment (2026-07-27) — Tech Watcher only.** The
+> local-only ruling of 2026-07-15 is superseded *for this agent*: its
+> `local-classification` and `cloud-default` tiers now resolve to Ollama Cloud
+> models. Both still point at the local daemon (`http://ollama:11434`), which
+> detects a cloud-tagged model, attaches `OLLAMA_API_KEY`, and proxies
+> upstream — so no client code changed and the tier aliases remain the
+> contract. The Intelligence agents (News Analyzer, Filing Processor) stay
+> fully local; routing them is a separate cost decision.
+>
+> Model choice is cost-shaped rather than capability-maximising. Ollama bills
+> **GPU-time** under 5-hour session and weekly caps, not per token, and its
+> library publishes a usage tier per model. The filter runs over ~1900 backlog
+> items plus ~140/day and takes `gpt-oss:20b-cloud` (*Low Usage*); its 128K
+> window is already ~90x the filter's ~1400-token prompt, so a 1M-context
+> model would be paid for and unused. Synthesis runs a handful of times a day
+> where judgment is load-bearing, and takes `kimi-k3:cloud` (*Extra High
+> Usage*). Putting a flagship reasoning model on the bulk filter would be
+> paying top rates for a call that deliberately runs `think=False`.
+> `SHRAP_FILTER_MODEL` / `SHRAP_SYNTHESIS_MODEL` override both from `.env`, so
+> laddering up (e.g. to `gpt-oss:120b-cloud`, *Medium Usage*) or falling back
+> to a local tag is an env edit and a restart.
+
 Context-window numbers are approximate and will shift as providers update
 their offerings or as Ollama configuration changes the effective window
 for local models. Treat the numbers as planning guidance, not contracts.
@@ -77,6 +99,7 @@ Append-only. Newest at the bottom.
 | 2026-05-30 | `local-heavy` | N/A | `mistral-small:24b-instruct-q4_K_M` | initial seed | Mike White | this PR |
 | 2026-05-30 | `no-llm` | N/A | N/A | initial seed | Mike White | this PR |
 | 2026-07-16 | `local-classification` | `qwen2.5:9b-instruct-q4_K_M` | `qwen3.5:9b-q4_K_M` | N/A — seed correction, not a swap: the v0.1 tag never existed (Qwen 2.5 has no 9B; discovered on first `ollama pull`). No incumbent ever ran, so there is nothing to shadow-eval against. `qwen3.5:9b-q4_K_M` is 6.6 GB, fits the Dell's 8 GB GTX 1080; requires Ollama >= 0.31.x (compose pin bumped 0.3.12 → 0.31.2 in the same PR). | Mike White | PR (this) |
+| 2026-07-27 | *deployment routing only* (Tech Watcher) | `qwen3.5:9b-q4_K_M` on both tiers | `gpt-oss:20b-cloud` (filter) / `kimi-k3:cloud` (synthesis), both via the Ollama daemon's cloud proxy | **Failure evidence, not a shadow-eval.** The incumbent could not perform the task: it rejected a DOE announcement of a *fourth* reactor criticality as "a single milestone" lacking "independent replication," and named `physical-realization`'s example vocabulary (fusion ignition) for a fission item. Filter prompt v4 addressed every prompt-side cause and moved nothing — 16 items re-scored, 0 verdict changes. Consequence was structural: 8 of 8 clusters ever logged were arXiv-only, so triangulation (≥2 origins + ≥1 hard leg) could never fire and the funnel could not promote anything. See DQ-006, KI-009. | Mike White | PR (this) |
 
 ## Hard Rules
 
