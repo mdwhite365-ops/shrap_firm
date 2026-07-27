@@ -273,3 +273,35 @@ async def test_refilter_appends_history_before_marking() -> None:
 def test_refilter_prompt_carries_the_evidence_class() -> None:
     # The whole point: the re-scored prompt must label DOE as attested.
     assert f"evidence_class={EVIDENCE_ATTESTED}" in _item_prompt(DOE_CRITICALITY)
+
+
+async def test_report_shows_unchanged_verdicts_with_their_reasons() -> None:
+    # The blind spot that cost a diagnostic round trip: a run with zero flips
+    # must still surface what the model actually said, or "0 changes" cannot be
+    # told apart from "the prompt never reached the model".
+    pool = _FakePool([_backlog_row(relevant=False)])
+    llm = _FakeLLM(
+        [
+            '{"relevant": false, "archetype": null, '
+            '"reason": "physical-realization: fusion ignition bar not met"}'
+        ]
+    )
+
+    report = await refilter_pass(pool, llm)  # type: ignore[arg-type]
+    rendered = report.render()
+
+    assert report.flips == ()
+    assert len(report.verdicts) == 1
+    assert "fusion ignition bar not met" in rendered
+    assert "Fourth Criticality" in rendered
+
+
+async def test_kept_counts_relevant_items_whether_or_not_they_moved() -> None:
+    pool = _FakePool([_backlog_row(relevant=True)])
+    llm = _FakeLLM(['{"relevant": true, "archetype": "cost-curve", "reason": "still good"}'])
+
+    report = await refilter_pass(pool, llm)  # type: ignore[arg-type]
+
+    assert report.flips == ()
+    assert len(report.kept) == 1
+    assert "relevant after this pass: 1" in report.render()

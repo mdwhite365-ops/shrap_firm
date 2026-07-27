@@ -330,8 +330,8 @@ async def _score_items(
 
 
 @dataclass(frozen=True, slots=True)
-class RefilterFlip:
-    """One item whose verdict changed when re-scored under a newer prompt."""
+class RefilterVerdict:
+    """One item's before/after when re-scored under a newer prompt."""
 
     item_id: str
     source: str
@@ -341,26 +341,46 @@ class RefilterFlip:
     archetype: str | None
     reason: str
 
+    @property
+    def changed(self) -> bool:
+        return self.was_relevant != self.now_relevant
+
 
 @dataclass(frozen=True, slots=True)
 class RefilterReport:
-    """Outcome of a re-filter. The flips are the point: they are the direct
-    measurement of what a prompt change actually did to the backlog."""
+    """Outcome of a re-filter.
+
+    Reports **every** verdict, not only the ones that moved. An earlier version
+    printed flips alone, so a run that changed nothing said "0 verdict changes"
+    and stopped — which cannot distinguish "the new prompt never reached the
+    model" from "the model read it and disagreed anyway." Those need opposite
+    fixes, and the reasons are the only thing that tells them apart.
+    """
 
     scored: int
     prompt_version: int
-    flips: tuple[RefilterFlip, ...]
+    verdicts: tuple[RefilterVerdict, ...]
     dry_run: bool
 
     @property
-    def rescued(self) -> tuple[RefilterFlip, ...]:
-        """False negatives the new prompt recovered."""
-        return tuple(f for f in self.flips if f.now_relevant)
+    def flips(self) -> tuple[RefilterVerdict, ...]:
+        return tuple(v for v in self.verdicts if v.changed)
 
     @property
-    def dropped(self) -> tuple[RefilterFlip, ...]:
+    def rescued(self) -> tuple[RefilterVerdict, ...]:
+        """False negatives the new prompt recovered."""
+        return tuple(v for v in self.flips if v.now_relevant)
+
+    @property
+    def dropped(self) -> tuple[RefilterVerdict, ...]:
         """Previously-kept items the new prompt now rejects."""
-        return tuple(f for f in self.flips if not f.now_relevant)
+        return tuple(v for v in self.flips if not v.now_relevant)
+
+    @property
+    def kept(self) -> tuple[RefilterVerdict, ...]:
+        """Everything the new prompt scored relevant, moved or not — the set
+        that will actually reach clustering."""
+        return tuple(v for v in self.verdicts if v.now_relevant)
 
     def render(self) -> str:
         prefix = "[dry-run] " if self.dry_run else ""
@@ -368,13 +388,17 @@ class RefilterReport:
             f"{prefix}re-filter under prompt v{self.prompt_version}: "
             f"{self.scored} item(s) scored, {len(self.flips)} verdict change(s)",
             f"  rescued (false -> true): {len(self.rescued)}   "
-            f"dropped (true -> false): {len(self.dropped)}",
+            f"dropped (true -> false): {len(self.dropped)}   "
+            f"relevant after this pass: {len(self.kept)}",
         ]
-        for flip in self.flips:
-            direction = "RESCUED" if flip.now_relevant else "dropped"
+        for verdict in self.verdicts:
+            if verdict.changed:
+                marker = "RESCUED" if verdict.now_relevant else "DROPPED"
+            else:
+                marker = "kept" if verdict.now_relevant else "-"
             lines.append(
-                f"  {direction:8} [{flip.source}] {flip.title[:60]}\n"
-                f"           archetype={flip.archetype} — {flip.reason[:110]}"
+                f"  {marker:8} [{verdict.source}] {verdict.title[:60]}\n"
+                f"           archetype={verdict.archetype} — {verdict.reason[:160]}"
             )
         return "\n".join(lines)
 
@@ -407,19 +431,17 @@ async def refilter_pass(
     }
     if dry_run:
         return RefilterReport(
-            scored=len(rows), prompt_version=FILTER_PROMPT_VERSION, flips=(), dry_run=True
+            scored=len(rows), prompt_version=FILTER_PROMPT_VERSION, verdicts=(), dry_run=True
         )
 
     items = [_row_to_item(row) for row in rows]
-    verdicts = await _score_items(pool, llm, items, tier)
+    scored = await _score_items(pool, llm, items, tier)
 
-    flips: list[RefilterFlip] = []
-    for verdict in verdicts:
+    rows_out: list[RefilterVerdict] = []
+    for verdict in scored:
         was_relevant, title, item_source = prior[verdict.item_id]
-        if was_relevant == verdict.relevant:
-            continue
-        flips.append(
-            RefilterFlip(
+        rows_out.append(
+            RefilterVerdict(
                 item_id=verdict.item_id,
                 source=item_source,
                 title=title,
@@ -430,8 +452,8 @@ async def refilter_pass(
             )
         )
     return RefilterReport(
-        scored=len(verdicts),
+        scored=len(scored),
         prompt_version=FILTER_PROMPT_VERSION,
-        flips=tuple(flips),
+        verdicts=tuple(rows_out),
         dry_run=False,
     )
