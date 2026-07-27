@@ -10,8 +10,9 @@
 
 ## What Shrap is
 
-Shrap is a self-developing, self-improving, self-trading firm that operates on Mike's hardware, manages Mike's capit
-al, and is built and maintained primarily by AI agents under Mike's architectural direction.
+Shrap is a self-improving, self-trading firm that operates on Mike's hardware, manages Mike's capital, and is built and maintained primarily by AI agents under Mike's architectural direction.
+
+**On "self-developing" (amended 2026-07-27, ADR-0014).** This sentence read "self-developing, self-improving, self-trading" until the Development Department descope. The firm does not currently develop itself: it develops when Mike opens a Claude Code session, on a subscription tied to his person and his machine, and that tier cannot run on the Dell. Its research loop genuinely does run unattended; its development loop does not. Local development autonomy is a Phase 2 goal, not a present property. Principle 5 ("cloud is scaffolding") anticipated this arrangement — what was missing was the admission that development is currently standing on the scaffolding.
 
 The firm trades a deliberately focused universe of stocks deeply rather than a broad universe shallowly. The launch Universe begins with a 50-name list and grows only when approved research theses surface tradable candidates worth adding. The firm adapts its active research lenses and strategy library to current market conditions using both statistical state classification and historical-analog reasoning. It generates, validates, promotes, and retires trading strategies autonomously through a research loop that runs while Mike sleeps. It reads news, financial filings, social sentiment, and structural macro data to find edges most retail traders cannot see. And it improves its own infrastructure over time, including drafting specifications and writing code under Mike's review.
 

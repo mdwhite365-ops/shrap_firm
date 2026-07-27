@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-07-18
+**Last updated:** 2026-07-27
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -239,3 +239,72 @@ Worth adding a second check alongside it: a leg whose pulls return rows but
 insert **zero new** item_ids for N consecutive passes. That is the signature
 USASpending had, and a freshness check on `fetched_at` alone would have called
 it healthy.
+
+## KI-011 — `intelligence.signal` has two producers and no consumer
+
+**Status:** Open, found 2026-07-27 by an architecture trace. Decided in
+ADR-0013 §3; not yet built.
+
+The News Analyzer and Filing Processor both publish materiality-scored signals
+to `intelligence.signal` on a market-phase-driven cadence. A grep across
+`src/shrap/` finds the stream constant defined and published in exactly two
+places — `intelligence/news_analyzer/service.py:63` and
+`intelligence/filing_processor/service.py:85` — and read nowhere. The Decision
+Maker subscribes only to `STREAM_STRATEGY_SIGNAL`
+(`trading_floor/decision_maker_service.py:87`).
+
+Two deployed agents, both escalating material items to a cloud model, write
+into a void. Every cost of running them is paid and none of the value is
+collected.
+
+**Mitigation (decided, not built):** ADR-0013 §3 routes the stream to promoted
+Framework #3 strategies through the Strategy Runner, which declares interest by
+ticker and signal type. Deliberately *not* wired straight into the Decision
+Maker — that would put unevaluated signals on the order path.
+
+## KI-012 — ADR-0010 is accepted and substantially unimplemented
+
+**Status:** Open, found 2026-07-27. Tracked by ADR-0013 §4.
+
+ADR-0010 (Accepted 2026-05-31) corrected ADR-0007's exclusivity claim and made
+four decisions that have no implementation two months later:
+
+| ADR-0010 | Status |
+|---|---|
+| §3 Structural Analysis as a separate department | Zero agents; `docs/agents/structural-analysis/` does not exist |
+| §4 Regime Classifier as a strategy-activation gate | No Regime Router; classifier output gates nothing |
+| §5 Forced-Proxy as Framework #2 via ADR-0011 | ADR-0011 never written; `docs/decisions/` runs 0001–0010, 0012 |
+| §6 Multiple theses in parallel | Only Framework #1 exists |
+
+The practical effect is that the implementation drifted back into exactly the
+single-thesis exclusivity ADR-0010 was written to correct. This is the
+clearest instance so far of operating principle 7 running in reverse: the spec
+was updated and the code never followed, and nothing surfaced the divergence
+because no artifact tracks ADR implementation status.
+
+**Worth considering separately:** whether accepted ADRs need an implementation
+-status field, since this failure mode is silent by construction.
+
+## KI-013 — Evaluator gates are Framework #1 constructs applied to all strategies
+
+**Status:** Open, found 2026-07-27. Blocking for ADR-0013; see its Consequences.
+
+Two gates in `research/strategy_evaluator/` are written as universal but are
+Framework #1-specific:
+
+1. **Anchor freshness** (`pipeline.py:293`). Every strategy is checked for a
+   `promoted` world-changer anchor, and a missing one maps to
+   `KILL / anchor-not-live` with `engine_ran=False`. A `technical-catalyst`
+   strategy is correctly anchor-*less*; under the current code it would be
+   killed without the backtest ever running.
+2. **`DEFAULT_MIN_TRADES = 150`** (`engine.py:51`). Calibrated for the vision's
+   fast layer — "fast loops, many trades." Applied uniformly it guarantees that
+   every structural strategy dies on trade count regardless of edge, which is
+   why the seed strategy's write-up predicts its own death.
+
+Neither is wrong; both are miscategorized as universal. Until they are
+archetype-conditional the Evaluator can only meaningfully evaluate a class of
+strategy the firm cannot yet produce.
+
+**Mitigation:** make both archetype-conditional. The min-trades band per
+archetype is a calibration decision and is Mike's.
