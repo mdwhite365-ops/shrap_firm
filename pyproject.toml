@@ -51,6 +51,7 @@ strategy-runner = [
     "pandas>=2.2",
     "pandas-market-calendars>=4.4",
 ]
+strategy-seed = ["asyncpg>=0.29"]
 spine-smoke = ["asyncpg>=0.29"]
 
 [project.scripts]
@@ -77,6 +78,7 @@ shrap-universe-promote = "shrap.research.universe_curator.cli:main"
 shrap-market-data-backfill = "shrap.market_data.backfill:main"
 shrap-strategy-evaluate = "shrap.research.strategy_evaluator.cli:main"
 shrap-strategy-runner = "shrap.agents.research.strategy_runner.__main__:main"
+shrap-strategy-seed = "shrap.research.strategy_seed.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shrap"]
