@@ -180,6 +180,24 @@ WHERE status = $1
 ORDER BY updated_at DESC
 """.strip()
 
+SELECT_STRATEGY_BY_SPEC_HASH_SQL = """
+SELECT
+    strategy_id, name, version, archetype, status, source, thesis,
+    anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
+    code_ref, created_at, updated_at
+FROM research.strategies
+WHERE spec_hash = $1
+""".strip()
+
+SELECT_ALL_STRATEGIES_SQL = """
+SELECT
+    strategy_id, name, version, archetype, status, source, thesis,
+    anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
+    code_ref, created_at, updated_at
+FROM research.strategies
+ORDER BY created_at DESC, strategy_id
+""".strip()
+
 SELECT_STATUS_FOR_UPDATE_SQL = """
 SELECT status FROM research.strategies WHERE strategy_id = $1 FOR UPDATE
 """.strip()
@@ -359,6 +377,20 @@ class PostgresStrategyRegistry:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(SELECT_STRATEGIES_BY_STATUS_SQL, status)
         return [_record_from_row(row) for row in rows]
+
+    async def list_all(self) -> list[StrategyRecord]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_ALL_STRATEGIES_SQL)
+        return [_record_from_row(row) for row in rows]
+
+    async def get_by_spec_hash(self, spec_hash: str) -> StrategyRecord | None:
+        """Look up a strategy by its unique ``spec_hash`` (the dedup key)."""
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(SELECT_STRATEGY_BY_SPEC_HASH_SQL, spec_hash)
+        if row is None:
+            return None
+        return _record_from_row(row)
 
     async def transitions(self, strategy_id: str) -> list[StrategyTransition]:
         async with self._pool.acquire() as conn:
