@@ -11,6 +11,8 @@ discarding extra tickers while shortening the panel.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, timedelta
 
 import pytest
@@ -35,6 +37,17 @@ from shrap.research.strategy_evaluator.strategy import BarSample, PricePanel
 from shrap.research.strategy_registry import STATUS_HYPOTHESIS, StrategyRecord
 
 _START = date(2024, 1, 1)
+
+
+@contextmanager
+def monkeypatch_deferred(rule: str, reason: str) -> Iterator[None]:
+    """Temporarily list a rule as deferred, restoring the real table after."""
+
+    DEFERRED_RULES[rule] = reason
+    try:
+        yield
+    finally:
+        DEFERRED_RULES.pop(rule, None)
 
 
 class _DummyPort:
@@ -293,23 +306,37 @@ def test_cross_sectional_rules_accept_the_full_universe() -> None:
 # --- the benchmark gap: these rules must not be evaluable yet ----------------
 
 
-def test_cross_sectional_rules_are_refused_until_a_benchmark_exists() -> None:
-    """The reason this card ships code that cannot run.
+def test_cross_sectional_rules_are_evaluable_now_that_a_benchmark_exists() -> None:
+    """These shipped deferred in #110 and are enabled here.
 
-    The promote gate is an ABSOLUTE Sharpe floor. Measured on synthetic
-    random-walk data with a ~7.5%/yr drift and no timing skill whatsoever, naive
-    equal-weight buy-and-hold scores 1.03 (1 name) to 1.16 (50 names) — clearing
-    the 1.0 floor purely by being invested. At zero drift the same portfolios
-    score 0.33-0.45, which identifies drift rather than diversification as the
-    term doing the work.
-
-    Enabling these rules before benchmark-relative evaluation would build a
-    machine that promotes market beta and calls it edge.
+    The deferral existed because the promote gate was an absolute Sharpe floor,
+    which a diversified long-only portfolio clears on market drift alone.
+    `map_verdict` now also gates on the information ratio against equal-weight
+    buy-and-hold of the strategy's own panel, so the reason no longer holds.
     """
 
     for rule in (RULE_CROSS_SECTIONAL_TREND, RULE_CROSS_SECTIONAL_MOMENTUM):
-        assert rule in DEFERRED_RULES
-        record = _record({"rule": rule, "params": {"fast": 5, "slow": 20}}, ["AAA", "BBB"])
+        assert rule not in DEFERRED_RULES
+        record = _record(
+            {
+                "rule": rule,
+                "params": {"fast": 5, "slow": 20},
+                "param_bounds": {"fast": [2, 100], "slow": [5, 400]},
+            },
+            ["AAA", "BBB"],
+        )
+        assert _pipeline()._check_spec_hygiene(record) == ["AAA", "BBB"]
+
+
+def test_the_deferral_mechanism_still_refuses_whatever_is_listed() -> None:
+    """DEFERRED_RULES is empty, not deleted — the situation will recur.
+
+    Injecting an entry rather than relying on a real rule keeps this test
+    honest about what it checks: the mechanism, not today's contents.
+    """
+
+    record = _record({"rule": "some-future-rule", "params": {}}, ["AAA"])
+    with monkeypatch_deferred("some-future-rule", "its dependency does not exist"):
         with pytest.raises(SpecHygieneError, match="not evaluable yet"):
             _pipeline()._check_spec_hygiene(record)
 
@@ -340,7 +367,8 @@ def test_a_deferred_rule_is_refused_not_killed() -> None:
     would be unrecoverable: `killed` has no outbound transitions.
     """
 
-    record = _record({"rule": RULE_CROSS_SECTIONAL_TREND, "params": {}}, ["AAA"])
-    with pytest.raises(SpecHygieneError):
-        _pipeline()._check_spec_hygiene(record)
+    record = _record({"rule": "some-future-rule", "params": {}}, ["AAA"])
+    with monkeypatch_deferred("some-future-rule", "not ready"):
+        with pytest.raises(SpecHygieneError):
+            _pipeline()._check_spec_hygiene(record)
     assert record.status == STATUS_HYPOTHESIS

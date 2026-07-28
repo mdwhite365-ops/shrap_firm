@@ -65,16 +65,25 @@ ALTER TABLE research.evaluations
 ADD COLUMN IF NOT EXISTS anchor_required BOOLEAN NOT NULL DEFAULT TRUE
 """.strip()
 
+# Added with benchmark-relative evaluation. The verdict can now hinge on the
+# information ratio, so the ledger must record it or the row cannot explain its
+# own verdict. Defaults to '{}' for rows written before the benchmark existed —
+# honestly "not measured", not "measured as zero".
+ADD_EVALUATIONS_ACTIVE_METRICS_SQL = """
+ALTER TABLE research.evaluations
+ADD COLUMN IF NOT EXISTS active_metrics JSONB NOT NULL DEFAULT '{}'::jsonb
+""".strip()
+
 INSERT_EVALUATION_SQL = """
 INSERT INTO research.evaluations (
     evaluation_id, strategy_id, spec_hash, protocol_version, verdict, reason,
     anchor_required, anchor_fresh, total_trades, from_stage, to_stage,
-    aggregate_metrics, fold_metrics, stress_metrics, config, card_path,
-    trigger, created_at
+    aggregate_metrics, fold_metrics, stress_metrics, active_metrics, config,
+    card_path, trigger, created_at
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-    $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18
+    $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19
 )
 """.strip()
 
@@ -134,6 +143,7 @@ class PostgresEvaluationStore:
             await conn.execute(CREATE_RESEARCH_SCHEMA_SQL)
             await conn.execute(CREATE_EVALUATIONS_TABLE_SQL)
             await conn.execute(ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL)
+            await conn.execute(ADD_EVALUATIONS_ACTIVE_METRICS_SQL)
             await conn.execute(CREATE_EVALUATIONS_STRATEGY_INDEX_SQL)
 
     async def insert_evaluation(
@@ -153,6 +163,7 @@ class PostgresEvaluationStore:
         aggregate_metrics: dict[str, Any],
         fold_metrics: list[dict[str, Any]],
         stress_metrics: dict[str, Any],
+        active_metrics: dict[str, Any],
         config: dict[str, Any],
         card_path: str | None,
         trigger: str,
@@ -175,6 +186,7 @@ class PostgresEvaluationStore:
                 json.dumps(aggregate_metrics, separators=(",", ":")),
                 json.dumps(fold_metrics, separators=(",", ":")),
                 json.dumps(stress_metrics, separators=(",", ":")),
+                json.dumps(active_metrics, separators=(",", ":")),
                 json.dumps(config, separators=(",", ":")),
                 card_path,
                 trigger,
@@ -236,6 +248,7 @@ class PostgresEvaluatorReader:
 
 
 __all__ = [
+    "ADD_EVALUATIONS_ACTIVE_METRICS_SQL",
     "ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL",
     "CREATE_EVALUATIONS_TABLE_SQL",
     "CREATE_RESEARCH_SCHEMA_SQL",

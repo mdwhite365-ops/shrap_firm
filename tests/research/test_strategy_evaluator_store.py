@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from shrap.research.strategy_evaluator.store import (
+    ADD_EVALUATIONS_ACTIVE_METRICS_SQL,
     ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL,
     CREATE_EVALUATIONS_TABLE_SQL,
     INSERT_EVALUATION_SQL,
@@ -92,6 +93,7 @@ async def test_insert_evaluation_serializes_jsonb_and_binds_args() -> None:
         aggregate_metrics={"sharpe": 1.4, "trade_count": 210},
         fold_metrics=[{"index": 0, "sharpe": 1.1}],
         stress_metrics={"sharpe": 0.6},
+        active_metrics={"information_ratio": 0.9},
         config={"n_folds": 6},
         card_path="docs/strategies/evaluations/01STRAT/x.md",
         trigger="on-demand",
@@ -107,7 +109,8 @@ async def test_insert_evaluation_serializes_jsonb_and_binds_args() -> None:
     # aggregate/fold/stress/config are json-encoded strings for ::jsonb cast.
     assert json.loads(str(args[11]))["trade_count"] == 210
     assert json.loads(str(args[12]))[0]["index"] == 0
-    assert json.loads(str(args[14]))["n_folds"] == 6
+    assert json.loads(str(args[14]))["information_ratio"] == 0.9
+    assert json.loads(str(args[15]))["n_folds"] == 6
 
 
 def test_insert_sql_placeholders_match_the_column_list() -> None:
@@ -137,6 +140,7 @@ async def test_ensure_schema_backfills_anchor_required_on_existing_tables() -> N
     await store.ensure_schema()
     assert ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL in _executed_sql(pool.conn)
     assert "DEFAULT TRUE" in ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL
+    assert ADD_EVALUATIONS_ACTIVE_METRICS_SQL in _executed_sql(pool.conn)
 
 
 async def test_world_changer_status_reads_status() -> None:

@@ -182,16 +182,16 @@ SINGLE_TICKER_RULES: frozenset[str] = frozenset({RULE_REFERENCE_TREND})
 # buy-and-hold of the same universe, not absolute Sharpe. Until that exists,
 # enabling these rules would build a machine that promotes market beta.
 DEFERRED_RULES: dict[str, str] = {
-    RULE_CROSS_SECTIONAL_TREND: (
-        "the promote gate is an absolute Sharpe floor, which a diversified long-only "
-        "portfolio clears on market drift alone — benchmark-relative evaluation must "
-        "land first (see docs/research/eval-protocol.md, 'The benchmark gap')"
-    ),
-    RULE_CROSS_SECTIONAL_MOMENTUM: (
-        "the promote gate is an absolute Sharpe floor, which a diversified long-only "
-        "portfolio clears on market drift alone — benchmark-relative evaluation must "
-        "land first (see docs/research/eval-protocol.md, 'The benchmark gap')"
-    ),
+    # Emptied 2026-07-28 when benchmark-relative evaluation landed. The
+    # cross-sectional rules were deferred because the promote gate was an
+    # absolute Sharpe floor that a diversified long-only portfolio cleared on
+    # market drift alone; `map_verdict` now also gates on the information ratio
+    # against equal-weight buy-and-hold of the strategy's own panel, so the
+    # reason for the deferral no longer holds.
+    #
+    # Kept as an empty table rather than deleted: it is the mechanism for
+    # shipping a rule that is written and tested but not yet safe to evaluate,
+    # and that situation will recur.
 }
 
 StrategyFactory = Callable[[StrategyRecord, list[str]], StrategySignal]
@@ -288,6 +288,7 @@ class EvaluationStorePort(Protocol):
         aggregate_metrics: dict[str, Any],
         fold_metrics: list[dict[str, Any]],
         stress_metrics: dict[str, Any],
+        active_metrics: dict[str, Any],
         config: dict[str, Any],
         card_path: str | None,
         trigger: str,
@@ -318,6 +319,7 @@ class EvaluationOutcome:
     aggregate_metrics: dict[str, Any]
     fold_metrics: list[dict[str, Any]]
     stress_metrics: dict[str, Any]
+    active_metrics: dict[str, Any]
     config: dict[str, Any]
     trigger: str
     ts: datetime
@@ -414,6 +416,18 @@ def _anchor_world_changer_id(anchor: Mapping[str, Any] | None) -> str | None:
     return None
 
 
+def _empty_active() -> dict[str, Any]:
+    """Active metrics when the engine never ran. Explicitly unmeasured."""
+
+    return {
+        "information_ratio": 0.0,
+        "active_total_return": 0.0,
+        "benchmark_sharpe": 0.0,
+        "benchmark_total_return": 0.0,
+        "n_periods": 0,
+    }
+
+
 def _empty_metrics() -> dict[str, Any]:
     return {
         "total_return": 0.0,
@@ -502,6 +516,7 @@ class EvaluationPipeline:
                 aggregate_metrics=_empty_metrics(),
                 fold_metrics=[],
                 stress_metrics=_empty_metrics(),
+                active_metrics=_empty_active(),
                 trigger=trigger,
                 ts=ts,
             )
@@ -525,6 +540,7 @@ class EvaluationPipeline:
                 aggregate_metrics=_empty_metrics(),
                 fold_metrics=[],
                 stress_metrics=_empty_metrics(),
+                active_metrics=_empty_active(),
                 trigger=trigger,
                 ts=ts,
             )
@@ -537,6 +553,8 @@ class EvaluationPipeline:
             stress_sharpe=result.stress.sharpe,
             min_trades=self._config.min_trades,
             sharpe_floor=self._config.sharpe_floor,
+            information_ratio=result.active.information_ratio,
+            information_ratio_floor=self._config.information_ratio_floor,
         )
         return self._build_outcome(
             record=record,
@@ -551,6 +569,7 @@ class EvaluationPipeline:
             aggregate_metrics=result.aggregate.as_dict(),
             fold_metrics=[f.as_dict() for f in result.folds],
             stress_metrics=result.stress.as_dict(),
+            active_metrics=result.active.as_dict(),
             trigger=trigger,
             ts=ts,
         )
@@ -607,6 +626,7 @@ class EvaluationPipeline:
             aggregate_metrics=outcome.aggregate_metrics,
             fold_metrics=outcome.fold_metrics,
             stress_metrics=outcome.stress_metrics,
+            active_metrics=outcome.active_metrics,
             config=outcome.config,
             card_path=str(card_path),
             trigger=outcome.trigger,
@@ -756,6 +776,7 @@ class EvaluationPipeline:
         aggregate_metrics: dict[str, Any],
         fold_metrics: list[dict[str, Any]],
         stress_metrics: dict[str, Any],
+        active_metrics: dict[str, Any],
         trigger: str,
         ts: datetime,
     ) -> EvaluationOutcome:
@@ -782,6 +803,7 @@ class EvaluationPipeline:
             aggregate_metrics=aggregate_metrics,
             fold_metrics=fold_metrics,
             stress_metrics=stress_metrics,
+            active_metrics=active_metrics,
             config=config,
             trigger=trigger,
             ts=ts,
@@ -820,6 +842,7 @@ def _with_card(outcome: EvaluationOutcome, card: str) -> EvaluationOutcome:
         aggregate_metrics=outcome.aggregate_metrics,
         fold_metrics=outcome.fold_metrics,
         stress_metrics=outcome.stress_metrics,
+        active_metrics=outcome.active_metrics,
         config=outcome.config,
         trigger=outcome.trigger,
         ts=outcome.ts,
@@ -891,6 +914,20 @@ def render_evaluation_card(outcome: EvaluationOutcome) -> str:
             f"- Total return: {_pct(agg.get('total_return'))}",
             f"- Sharpe (annualized): {_num(agg.get('sharpe'))}",
             f"- Max drawdown: {_pct(agg.get('max_drawdown'))}",
+            "",
+            "## Versus equal-weight buy-and-hold of the same names",
+            "",
+            f"- Information ratio: {_num(outcome.active_metrics.get('information_ratio'))} "
+            "(active return / tracking error — the gate that separates skill from "
+            "market exposure)",
+            f"- Active total return: {_pct(outcome.active_metrics.get('active_total_return'))}",
+            f"- Benchmark Sharpe: {_num(outcome.active_metrics.get('benchmark_sharpe'))}",
+            "- Benchmark total return: "
+            + _pct(outcome.active_metrics.get("benchmark_total_return")),
+            "",
+            "> Absolute Sharpe cannot tell being invested apart from being skilful: "
+            "naive buy-and-hold scores 1.03-1.16 on drifting data with no timing rule "
+            "at all. The information ratio above is what the promote gate uses.",
             "",
             "## Realistic-friction stress (+50% costs, +1 day execution lag)",
             "",

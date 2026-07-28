@@ -11,6 +11,15 @@ Three outcomes, in strict priority order (spec Processing steps 6, 9-10):
 3. ``hold-for-data`` — a real-looking but sub-floor edge that survives friction:
    not enough to promote, not zero enough to kill. Wait for more data.
 
+``information_ratio`` is the strategy's active return over tracking error
+against equal-weight buy-and-hold of its own panel. It defaults to ``None``,
+meaning "not measured, do not gate on it" — the honest behaviour for a caller
+that has not computed it, rather than a silent pass. Absolute Sharpe cannot
+separate skill from market exposure (see ``docs/research/eval-protocol.md``
+6b), so this is the gate that actually asks whether the strategy added
+anything. Note the asymmetry: failing to beat the benchmark **kills**, while
+beating it insufficiently only **holds**.
+
 The mapping takes ``anchor_fresh`` as an explicit input so it is a total,
 side-effect-free function; the pipeline still short-circuits a dead anchor
 before it ever runs the engine, but the verdict function does not assume that.
@@ -38,6 +47,8 @@ REASON_INSUFFICIENT_DATA = "insufficient-data"
 REASON_NO_EDGE = "no-edge"
 REASON_FAILS_FRICTION_STRESS = "fails-friction-stress"
 REASON_BELOW_SHARPE_FLOOR = "below-sharpe-floor"
+REASON_NO_ACTIVE_EDGE = "no-active-edge"
+REASON_BELOW_INFORMATION_RATIO_FLOOR = "below-information-ratio-floor"
 REASON_PROMOTE = "promote-criteria-met"
 
 
@@ -58,6 +69,8 @@ def map_verdict(
     min_trades: int,
     sharpe_floor: float,
     anchor_required: bool = True,
+    information_ratio: float | None = None,
+    information_ratio_floor: float = 0.0,
 ) -> Verdict:
     """Map measured metrics to a verdict. Pure; deterministic; no tuning.
 
@@ -76,19 +89,29 @@ def map_verdict(
         return Verdict(VERDICT_KILL, REASON_INSUFFICIENT_TRADES)
     if base_sharpe <= 0.0:
         return Verdict(VERDICT_KILL, REASON_NO_EDGE)
+    # Losing to buy-and-hold is a kill, not a hold. A strategy that trades all
+    # year to end up behind the basket it trades has been measured and found
+    # actively harmful; more data will not redeem the decisions it already made.
+    if information_ratio is not None and information_ratio <= 0.0:
+        return Verdict(VERDICT_KILL, REASON_NO_ACTIVE_EDGE)
     if stress_sharpe <= 0.0:
         return Verdict(VERDICT_KILL, REASON_FAILS_FRICTION_STRESS)
     if base_sharpe < sharpe_floor:
         return Verdict(VERDICT_HOLD, REASON_BELOW_SHARPE_FLOOR)
+    # Beat the benchmark, but not by enough to distinguish skill from luck.
+    if information_ratio is not None and information_ratio < information_ratio_floor:
+        return Verdict(VERDICT_HOLD, REASON_BELOW_INFORMATION_RATIO_FLOOR)
     return Verdict(VERDICT_PROMOTE, REASON_PROMOTE)
 
 
 __all__ = [
     "REASON_ANCHOR_NOT_LIVE",
+    "REASON_BELOW_INFORMATION_RATIO_FLOOR",
     "REASON_BELOW_SHARPE_FLOOR",
     "REASON_FAILS_FRICTION_STRESS",
     "REASON_INSUFFICIENT_DATA",
     "REASON_INSUFFICIENT_TRADES",
+    "REASON_NO_ACTIVE_EDGE",
     "REASON_NO_EDGE",
     "REASON_PROMOTE",
     "VERDICT_HOLD",

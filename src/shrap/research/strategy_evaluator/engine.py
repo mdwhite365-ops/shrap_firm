@@ -36,6 +36,10 @@ from typing import Any
 
 import numpy as np
 
+from shrap.research.strategy_evaluator.benchmark import (
+    EqualWeightBuyAndHold,
+    active_returns,
+)
 from shrap.research.strategy_evaluator.costs import (
     TRADING_DAYS_PER_YEAR,
     CostModel,
@@ -53,6 +57,13 @@ DEFAULT_MIN_TRADES = 150
 # default (see the protocol doc's "pending Mike" note). Conservative: a net
 # annualized OOS Sharpe of 1.0 is a modest but economically meaningful bar.
 DEFAULT_SHARPE_FLOOR = 1.0
+
+# DECISION-CARRYING (Mike's calibration). The information ratio is active return
+# over tracking error against equal-weight buy-and-hold. 0.5 is a genuinely good
+# active manager sustained out of sample; 1.0 is exceptional and rare. Setting it
+# equal to the Sharpe floor would mean the firm essentially never promotes, which
+# is a defensible position but should be chosen rather than inherited.
+DEFAULT_INFORMATION_RATIO_FLOOR = 0.5
 DEFAULT_STRESS_COST_MULTIPLIER = 1.5
 DEFAULT_STRESS_EXECUTION_LAG = 1
 MIN_FOLD_PERIODS = 5
@@ -72,6 +83,7 @@ class EvalConfig:
     window_years: int = DEFAULT_WINDOW_YEARS
     min_trades: int = DEFAULT_MIN_TRADES
     sharpe_floor: float = DEFAULT_SHARPE_FLOOR
+    information_ratio_floor: float = DEFAULT_INFORMATION_RATIO_FLOOR
     cost_model: CostModel = field(default_factory=CostModel)
     stress_cost_multiplier: float = DEFAULT_STRESS_COST_MULTIPLIER
     stress_execution_lag: int = DEFAULT_STRESS_EXECUTION_LAG
@@ -84,6 +96,7 @@ class EvalConfig:
             "window_years": self.window_years,
             "min_trades": self.min_trades,
             "sharpe_floor": self.sharpe_floor,
+            "information_ratio_floor": self.information_ratio_floor,
             "stress_cost_multiplier": self.stress_cost_multiplier,
             "stress_execution_lag": self.stress_execution_lag,
             "periods_per_year": self.periods_per_year,
@@ -155,6 +168,33 @@ class AggregateMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class ActiveMetrics:
+    """The strategy measured against equal-weight buy-and-hold of its own panel.
+
+    ``information_ratio`` is the annualised Sharpe of the ACTIVE return series
+    (strategy minus benchmark, per period), i.e. active return over tracking
+    error. It is the only number here that answers "did the strategy add
+    anything," because absolute Sharpe is dominated by market drift — see
+    ``docs/research/eval-protocol.md`` 6b.
+    """
+
+    information_ratio: float
+    active_total_return: float
+    benchmark_sharpe: float
+    benchmark_total_return: float
+    n_periods: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "information_ratio": self.information_ratio,
+            "active_total_return": self.active_total_return,
+            "benchmark_sharpe": self.benchmark_sharpe,
+            "benchmark_total_return": self.benchmark_total_return,
+            "n_periods": self.n_periods,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class WalkForwardResult:
     """The full deterministic result of one evaluation run."""
 
@@ -165,6 +205,7 @@ class WalkForwardResult:
     folds: tuple[FoldMetrics, ...]
     aggregate: AggregateMetrics
     stress: AggregateMetrics
+    active: ActiveMetrics
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -175,6 +216,7 @@ class WalkForwardResult:
             "folds": [f.as_dict() for f in self.folds],
             "aggregate": self.aggregate.as_dict(),
             "stress": self.stress.as_dict(),
+            "active": self.active.as_dict(),
         }
 
 
@@ -373,6 +415,22 @@ def walk_forward(
         execution_lag=config.stress_execution_lag,
     )
 
+    # The benchmark runs over the IDENTICAL periods with the same cost model and
+    # no execution lag, so the difference between the two return series is
+    # attributable to the strategy's decisions and nothing else.
+    bench = run_backtest(
+        panel,
+        EqualWeightBuyAndHold(),
+        config.cost_model,
+        first_period=first_period,
+        last_period=last_period,
+        execution_lag=0,
+    )
+    active_series = active_returns(base.daily_returns, bench.daily_returns)
+    active_equity: list[float] = [1.0]
+    for r in active_series:
+        active_equity.append(active_equity[-1] * (1.0 + r))
+
     folds: list[FoldMetrics] = []
     for i, (start_off, end_off) in enumerate(_fold_bounds(n_periods, config.n_folds)):
         returns_slice = base.daily_returns[start_off : end_off + 1]
@@ -402,11 +460,19 @@ def walk_forward(
         folds=tuple(folds),
         aggregate=_aggregate(base, config.periods_per_year),
         stress=_aggregate(stress, config.periods_per_year),
+        active=ActiveMetrics(
+            information_ratio=sharpe(active_series, config.periods_per_year),
+            active_total_return=total_return(active_equity),
+            benchmark_sharpe=sharpe(bench.daily_returns, config.periods_per_year),
+            benchmark_total_return=total_return(bench.equity),
+            n_periods=len(active_series),
+        ),
     )
 
 
 __all__ = [
     "DEFAULT_FOLDS",
+    "DEFAULT_INFORMATION_RATIO_FLOOR",
     "DEFAULT_MIN_TRADES",
     "DEFAULT_SHARPE_FLOOR",
     "DEFAULT_STRESS_COST_MULTIPLIER",
@@ -414,6 +480,7 @@ __all__ = [
     "DEFAULT_WINDOW_YEARS",
     "MIN_FOLD_PERIODS",
     "PROTOCOL_VERSION",
+    "ActiveMetrics",
     "AggregateMetrics",
     "BacktestSegment",
     "EvalConfig",

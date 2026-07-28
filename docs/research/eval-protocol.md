@@ -181,10 +181,11 @@ For `technical-catalyst` — the archetype the vision assigns most of the firm's
 trading, "fast loops, many trades" — 150 is the floor it was calibrated for and
 needs no exemption.
 
-## 6b. The benchmark gap — the promote floor measures exposure, not skill
+## 6b. Benchmark-relative evaluation — skill, not exposure
 
-**Open defect, found 2026-07-28 while building cross-sectional rules. It affects
-every long-only strategy the firm evaluates, including the ones already killed.**
+**Defect found and closed 2026-07-28.** The account below is kept because the
+measurement is the justification for the gate, and a gate whose reason is
+forgotten is a gate someone later removes as redundant.
 
 The promote gate is an **absolute** Sharpe floor. Nothing in the protocol
 compares a strategy to the alternative of simply being invested. Measured
@@ -219,10 +220,50 @@ window, and gate on that (an information ratio) rather than on absolute Sharpe.
 engine already supports this — computing it needs one extra `walk_forward` pass
 over the same panel with a constant-weight rule.
 
-**Until it lands**, cross-sectional rules are refused by spec hygiene
-(`DEFERRED_RULES` in `pipeline.py`), on the same fail-closed pattern as
-`bottleneck-rotation`. They are implemented and tested; they are not evaluable.
-Nothing is written and the strategy stays at `hypothesis`.
+### What shipped
+
+Every evaluation now runs a **second backtest over the identical panel, periods
+and cost model**, using equal-weight buy-and-hold (`benchmark.py`). The
+per-period difference is the strategy's active return; its risk-adjusted form is
+the **information ratio** (active return over tracking error), reported in
+`research.evaluations.active_metrics` and on every evaluation card.
+
+Two verdict outcomes come from it, and the asymmetry is deliberate:
+
+| Condition | Verdict | Reason |
+|---|---|---|
+| information ratio ≤ 0 | **kill** | `no-active-edge` |
+| 0 < information ratio < floor | hold | `below-information-ratio-floor` |
+
+Losing to buy-and-hold **kills**. A strategy that traded all year to finish
+behind the basket it trades has been measured and found actively harmful, and
+more data cannot redeem the decisions it already made. Beating the benchmark
+insufficiently only **holds** — that is a power problem, not a verdict.
+
+The benchmark is **fully invested and pays costs**. It does not inherit the
+strategy's gross exposure: a strategy that sits in cash is making a decision,
+and matching its exposure would hide the choice being evaluated. It generalises
+at N=1, where it becomes buy-and-hold that one name and the question is "did
+the timing beat simply owning it?"
+
+**`DEFAULT_INFORMATION_RATIO_FLOOR = 0.5` is decision-carrying and Mike's.** An
+information ratio of 0.5 sustained out of sample is a genuinely good active
+manager; 1.0 is exceptional and rare. Setting it equal to the Sharpe floor would
+mean the firm essentially never promotes — defensible, but it should be chosen
+rather than inherited.
+
+Cross-sectional rules, shipped refused in PR #110, are **enabled** by this:
+`DEFERRED_RULES` is now empty. It is kept as a mechanism rather than deleted,
+because "written and tested but not yet safe to evaluate" will recur.
+
+### What it caught immediately
+
+The pipeline's own promote fixture. Its synthetic prices rose during the long
+phase and were **flat** otherwise, so buy-and-hold captured every rise and gave
+nothing back — the timing rule added only its own costs and was correctly killed
+as `no-active-edge`. It had only ever "promoted" because absolute Sharpe cannot
+tell being invested apart from being skilful. The fixture now falls during the
+off phase, so avoiding it is worth something.
 
 **What this says about the verdicts already on record.** The three killed
 strategies all died on trade count, before Sharpe was ever the binding

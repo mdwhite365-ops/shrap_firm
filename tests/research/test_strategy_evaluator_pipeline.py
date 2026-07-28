@@ -208,12 +208,20 @@ def _uptrend_bars(n: int = 300) -> list[BarSample]:
 
 
 def _square_wave_bars(period: int = 8, n: int = 1600) -> list[BarSample]:
-    # Rises only during the long phase -> the square-wave signal captures edge
-    # and trades on every phase flip (~150+ trades over the window).
+    # Rises during the long phase and FALLS otherwise, so the square-wave signal
+    # captures edge the benchmark cannot: it is out of the market exactly when
+    # the market loses money.
+    #
+    # The off phase used to be flat (1.0), which made this fixture unable to
+    # produce a legitimate promotion once benchmark-relative evaluation landed —
+    # buy-and-hold captured every rise and gave nothing back, so the timing added
+    # only its own costs and was correctly killed as `no-active-edge`. The old
+    # fixture only "promoted" because absolute Sharpe cannot tell being invested
+    # apart from being skilful.
     closes = [100.0]
     for i in range(1, n):
         long_phase = ((i - 1) // period) % 2 == 0
-        closes.append(closes[-1] * (1.01 if long_phase else 1.0))
+        closes.append(closes[-1] * (1.01 if long_phase else 0.995))
     return _bars(closes)
 
 
