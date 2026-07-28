@@ -31,6 +31,11 @@ from typing import Protocol
 from shrap.common.db import create_asyncpg_pool
 from shrap.research.strategy_registry import PostgresStrategyRegistry, StrategyRecord
 from shrap.research.strategy_seed.first_strategy import first_strategy_record
+from shrap.research.strategy_seed.probe_strategies import (
+    PROBE_SEEDS,
+    PROBE_SEEDS_BY_KEY,
+    probe_record,
+)
 
 SEED_ACTOR = "mike-seed"
 SEED_REASON = "Mike-seed: first hypothesis strategy exercising the funnel -> Evaluator path"
@@ -114,7 +119,50 @@ def render_list(records: Sequence[StrategyRecord]) -> str:
     return "\n".join(lines)
 
 
+async def load_probe(registry: RegistryPort, key: str) -> str:
+    """Insert one protocol-probe seed at ``hypothesis``, idempotently.
+
+    Same dedup rule as :func:`load_first` — a row with the same ``spec_hash``
+    means this probe is already registered and the call is a no-op.
+    """
+
+    seed = PROBE_SEEDS_BY_KEY.get(key)
+    if seed is None:
+        available = ", ".join(sorted(PROBE_SEEDS_BY_KEY))
+        raise SystemExit(f"refused: unknown probe {key!r}; available: {available}")
+    record = probe_record(seed)
+    existing = await registry.get_by_spec_hash(record.spec_hash)
+    if existing is not None:
+        return (
+            f"already present: {existing.strategy_id} ({existing.name}) "
+            f"status={existing.status} — skipped (no duplicate)"
+        )
+    inserted = await registry.register(
+        record,
+        reason=f"Mike-seed: protocol probe ({seed.role}) exercising Evaluator verdict branches",
+        actor=SEED_ACTOR,
+        trigger_kind=SEED_TRIGGER_KIND,
+    )
+    if not inserted:
+        return f"already present: {record.strategy_id} — skipped (strategy_id conflict)"
+    return (
+        f"loaded: {record.strategy_id} ({record.name}) at status={record.status}; "
+        f"evaluate with `shrap-strategy-evaluate --strategy-id {record.strategy_id} --dry-run`"
+    )
+
+
+def render_probe_catalogue() -> str:
+    """List the available probe seeds without touching the database."""
+
+    lines = [f"Probe seeds: {len(PROBE_SEEDS)}"]
+    for s in PROBE_SEEDS:
+        lines.append(f"  {s.key:<14} {s.role:<10} fast={s.fast} slow={s.slow}  {s.strategy_id}")
+    return "\n".join(lines)
+
+
 async def _run(args: argparse.Namespace) -> str:
+    if args.action == "list-probes":
+        return render_probe_catalogue()
     pool = await create_asyncpg_pool(args.dsn)
     registry = PostgresStrategyRegistry(pool)
     try:
@@ -122,6 +170,8 @@ async def _run(args: argparse.Namespace) -> str:
         await registry.ensure_schema()
         if args.action == "load-first":
             return await load_first(registry)
+        if args.action == "load-probe":
+            return await load_probe(registry, args.key)
         # list
         return render_list(await registry.list_all())
     finally:
@@ -151,6 +201,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("load-first", help="Insert the first seeded strategy (idempotent)")
+    probe = sub.add_parser(
+        "load-probe", help="Insert a protocol-probe strategy by key (idempotent)"
+    )
+    probe.add_argument("key", choices=sorted(PROBE_SEEDS_BY_KEY), help="Probe seed key")
+    sub.add_parser("list-probes", help="Show available probe seeds (no database access)")
     sub.add_parser("list", help="Show research.strategies rows (id, name, archetype, status)")
     return parser
 

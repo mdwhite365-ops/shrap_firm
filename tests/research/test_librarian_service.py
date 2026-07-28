@@ -293,3 +293,72 @@ def test_settings_reads_strategy_librarian_env(monkeypatch: pytest.MonkeyPatch) 
     assert settings.redis_url == "redis://elsewhere:6379/1"
     assert settings.start_id == "$"
     assert settings.redacted()["postgres_dsn"] == "***"
+
+
+async def test_poll_once_logs_convergence_at_info_not_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An already-applied verdict is the NORMAL path, so it must not log ERROR.
+
+    Under ADR-0013/#97 the Strategy Evaluator applies the transition itself in
+    commit(); this consumer converges. Before the fix, that happy path went
+    through log.exception — an ERROR plus a stack trace on every verdict the
+    firm produces, which drowns real Librarian failures and poisons error-rate
+    alerting. Observed live 2026-07-27 on the firm's first verdict.
+    """
+
+    redis = FakeRedis(_entries(_promote_payload()))
+    registry = FakeRegistry()
+    registry.raises = InvalidTransitionError(
+        "01TESTSTRATEGY: expected status 'hypothesis', found 'paper'",
+        strategy_id="01TESTSTRATEGY",
+        from_status="paper",
+        to_status="paper",
+        expected_from="hypothesis",
+    )
+
+    applied = await poll_once(redis, registry, _subscriber(redis), count=10, block_ms=10)
+    out = capsys.readouterr().out
+
+    assert applied == 0
+    assert redis.acked == ["1-0"]
+    assert redis.published == []
+    assert "strategy_librarian.verdict_already_applied" in out
+    # The whole point: no ERROR and no traceback on the convergence path.
+    assert "[error" not in out
+    assert "Traceback" not in out
+
+
+async def test_poll_once_logs_genuinely_illegal_move_at_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A move that is not convergence must still be loud."""
+
+    redis = FakeRedis(_entries(_promote_payload()))
+    registry = FakeRegistry()
+    registry.raises = InvalidTransitionError(
+        "01TESTSTRATEGY: 'killed' -> 'paper' is not allowed",
+        strategy_id="01TESTSTRATEGY",
+        from_status="killed",
+        to_status="paper",
+    )
+
+    applied = await poll_once(redis, registry, _subscriber(redis), count=10, block_ms=10)
+    out = capsys.readouterr().out
+
+    assert applied == 0
+    assert redis.acked == ["1-0"]
+    assert "strategy_librarian.verdict_skipped" in out
+    assert "[error" in out
+
+
+def test_invalid_transition_already_at_target_flag() -> None:
+    converged = InvalidTransitionError("x", from_status="killed", to_status="killed")
+    illegal = InvalidTransitionError("x", from_status="killed", to_status="paper")
+    unstructured = InvalidTransitionError("legacy message with no fields")
+
+    assert converged.already_at_target
+    assert not illegal.already_at_target
+    # A bare construction must not be mistaken for convergence — it degrades to
+    # the loud branch, which is the safe direction.
+    assert not unstructured.already_at_target

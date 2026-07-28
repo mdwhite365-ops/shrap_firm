@@ -204,11 +204,38 @@ async def poll_once(
                 lifecycle_event_id=result.envelope.event_id,
                 verdict_event_id=event.envelope.event_id,
             )
-        except (ValueError, StrategyNotFoundError, InvalidTransitionError):
-            # Permanent for this event: malformed payload, unknown strategy,
-            # or a move the state machine rejects (usually a replayed verdict
-            # already applied — expected_from catches it). Ack and skip, or
-            # the consumer stalls forever on a poison message.
+        except InvalidTransitionError as exc:
+            # Two very different situations arrive here, and conflating them was
+            # a real defect. Under ADR-0013/#97 the Strategy Evaluator owns the
+            # verdict transition and applies it inside commit(); this consumer is
+            # a convergence path. So "the registry is already at the target
+            # stage" is the NORMAL outcome for every verdict the firm produces,
+            # not an anomaly — logging it via log.exception put an ERROR plus a
+            # stack trace on the happy path, which would drown real Librarian
+            # failures and poison any error-rate alerting.
+            #
+            # Converged: expected. Anything else: a genuinely illegal move.
+            if exc.already_at_target:
+                log.info(
+                    "strategy_librarian.verdict_already_applied",
+                    stream=event.stream,
+                    redis_stream_id=event.redis_stream_id,
+                    verdict_event_id=event.envelope.event_id,
+                    detail=str(exc),
+                )
+            else:
+                log.error(
+                    "strategy_librarian.verdict_skipped",
+                    stream=event.stream,
+                    redis_stream_id=event.redis_stream_id,
+                    verdict_event_id=event.envelope.event_id,
+                    detail=str(exc),
+                )
+            await subscriber.ack(event)
+            continue
+        except (ValueError, StrategyNotFoundError):
+            # Permanent for this event: malformed payload or unknown strategy.
+            # Ack and skip, or the consumer stalls forever on a poison message.
             log.exception(
                 "strategy_librarian.verdict_skipped",
                 stream=event.stream,

@@ -233,7 +233,46 @@ class StrategyNotFoundError(StrategyRegistryError):
 
 
 class InvalidTransitionError(StrategyRegistryError):
-    """The requested lifecycle transition is not allowed by the state machine."""
+    """The requested lifecycle transition is not allowed by the state machine.
+
+    Carries the statuses involved as structured fields, not only in the message.
+    Consumers need to tell two very different rejections apart — a registry that
+    is *already at the requested stage* (convergence, expected whenever a second
+    consumer replays a verdict its producer already applied) versus a genuinely
+    illegal move. The Strategy Librarian branches on exactly that, and doing it
+    by parsing the message string would break silently the first time the
+    wording changed.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        strategy_id: str | None = None,
+        from_status: str | None = None,
+        to_status: str | None = None,
+        expected_from: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.strategy_id = strategy_id
+        self.from_status = from_status
+        self.to_status = to_status
+        self.expected_from = expected_from
+
+    @property
+    def already_at_target(self) -> bool:
+        """True when the registry already sits at the stage the caller wanted.
+
+        Covers both rejection paths: an ``expected_from`` mismatch where the
+        current status is the target, and a state-machine rejection of a
+        no-op move out of a terminal status.
+        """
+
+        return (
+            self.from_status is not None
+            and self.to_status is not None
+            and self.from_status == self.to_status
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,11 +466,19 @@ class PostgresStrategyRegistry:
                 from_status = str(row["status"])
                 if expected_from is not None and from_status != expected_from:
                     raise InvalidTransitionError(
-                        f"{strategy_id}: expected status {expected_from!r}, found {from_status!r}"
+                        f"{strategy_id}: expected status {expected_from!r}, found {from_status!r}",
+                        strategy_id=strategy_id,
+                        from_status=from_status,
+                        to_status=to_status,
+                        expected_from=expected_from,
                     )
                 if to_status not in ALLOWED_TRANSITIONS.get(from_status, frozenset()):
                     raise InvalidTransitionError(
-                        f"{strategy_id}: {from_status!r} -> {to_status!r} is not allowed"
+                        f"{strategy_id}: {from_status!r} -> {to_status!r} is not allowed",
+                        strategy_id=strategy_id,
+                        from_status=from_status,
+                        to_status=to_status,
+                        expected_from=expected_from,
                     )
                 await conn.execute(UPDATE_STRATEGY_STATUS_SQL, strategy_id, to_status, occurred_at)
                 await conn.execute(
