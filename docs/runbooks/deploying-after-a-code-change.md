@@ -1,14 +1,17 @@
-# Runbook — tools-profile services
+# Runbook — deploying and running services after a code change
 
 **Last updated:** 2026-07-28
 
-Services gated behind the `tools` compose profile are **run-to-completion
-tools**, not always-on agents: `market-data`, `strategy-evaluator`,
-`infra-mapper`. They are invoked on demand and exit.
+Covers both service kinds, because the same mistake has now been made in both:
 
-They have two failure modes that the always-on deploy path does not, both found
-the hard way on 2026-07-28 while running the first strategy probes. Neither
-produces a useful error message on its own.
+- **Tools-profile** (`market-data`, `strategy-evaluator`, `infra-mapper`) —
+  run-to-completion, invoked on demand, exit when done.
+- **Always-on** (everything else) — long-running agents.
+
+Two failure modes recur here, both found the hard way on 2026-07-27/28 while
+running the first strategy evaluations. Neither produces a useful error message
+on its own, and both present as "the code is merged, so it must be running."
+
 
 ## 1. Build before running, after any code change
 
@@ -40,6 +43,34 @@ container on the old one. Same class of problem, different command.
 **`check-deploy-drift.sh` cannot catch this.** It compares *which services are
 running* against which are defined. A tools service is correctly not running,
 and image staleness is invisible to it. Different check; not currently built.
+
+### The always-on twin of the same mistake
+
+The identical trap exists for always-on services, and it was hit the same day.
+
+PR #100 changed `librarian_service.py` and `strategy_registry.py`. The
+`strategy-evaluator` image was rebuilt (because the probe commands needed it);
+`strategy-librarian` was not, because nobody thought to name it. It kept running
+the previous image and kept emitting the exact ERROR-plus-traceback the PR had
+just fixed — while `docker compose ps` showed it healthy and `git log` showed
+the fix merged.
+
+**After merging anything, rebuild every service whose source it touched**, not
+only the one you are about to invoke:
+
+```bash
+sudo docker compose up -d --build --force-recreate <service>
+```
+
+Confirm by the container's own startup log line, not by the compose summary
+(`Running 0.0s` means untouched). A service's `config_loaded` timestamp older
+than the merge is the tell.
+
+**Verification caveat.** Restarting a stream consumer does **not** replay
+already-acked events — `start_id` applies only when the consumer group is
+first created. A logging or handling fix therefore cannot be observed against
+old events; it needs a new one. Do not record such a fix as verified live until
+a fresh event has exercised it.
 
 ## 2. Do not override the container user
 

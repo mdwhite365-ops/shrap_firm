@@ -305,7 +305,7 @@ Three operational defects surfaced, none of them in the evaluator:
    container's default user is 10001. Overriding to the host uid (950) fell
    through to `other` (`r-x`) and failed. The setup was already correct; the
    override created the mismatch.
-3. Both are now covered by `docs/runbooks/tools-services.md`.
+3. Both are now covered by `docs/runbooks/deploying-after-a-code-change.md`.
 
 ## THE FIRST VERDICT — 2026-07-27 23:49 UTC
 

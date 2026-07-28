@@ -891,7 +891,7 @@ services:
   # research.strategy.verdict / research.strategy.killed. No LLM, no broker
   # credentials.
   # Run pattern — BUILD FIRST, and do NOT pass --user. See
-  # docs/runbooks/tools-services.md; both were learned the hard way 2026-07-28.
+  # docs/runbooks/deploying-after-a-code-change.md; both were learned the hard way 2026-07-28.
   #   docker compose --profile tools build strategy-evaluator
   #   docker compose --profile tools run --rm strategy-evaluator \
   #     shrap-strategy-evaluate --strategy-id 01STRAT... [--dry-run]
