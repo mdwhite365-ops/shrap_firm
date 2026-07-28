@@ -1,0 +1,65 @@
+# Verification on every push to main and every PR.
+#
+# This exists because it didn't. On 2026-07-28 two PRs merged cleanly and the
+# resolution spliced a test file into a SyntaxError — `pytest` could not collect
+# tests/research/ and the whole suite was unrunnable on `main`. Nothing reported
+# it. It was found by chance, by someone syncing before starting the next card.
+#
+# There is no `continue-on-error` anywhere below: a red run is the point.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR makes the previous run's answer stale, so cancel it.
+# `main` is exempt: every commit there is a merge someone will act on, and its
+# result must survive the next merge landing.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: lint · typecheck · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # `.[dev]` alone cannot collect the suite — tests import agent modules
+      # directly, and 13 files failed on a clean environment before the `test`
+      # extra existed. See the comment on it in pyproject.toml.
+      - name: Install
+        id: install
+        run: pip install -e '.[dev,test]'
+
+      # Every check runs even after an earlier one fails, so a single run
+      # reports every problem instead of revealing them one push at a time.
+      # Gated on the install so a dependency failure yields one red step, not
+      # four confusing ones.
+      - name: ruff check
+        if: '!cancelled() && steps.install.outcome == ''success'''
+        run: ruff check .
+
+      - name: ruff format --check
+        if: '!cancelled() && steps.install.outcome == ''success'''
+        run: ruff format --check .
+
+      - name: mypy --strict
+        if: '!cancelled() && steps.install.outcome == ''success'''
+        run: mypy src/
+
+      - name: pytest
+        if: '!cancelled() && steps.install.outcome == ''success'''
+        run: pytest -q
