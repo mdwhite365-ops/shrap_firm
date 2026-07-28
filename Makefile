@@ -23,4 +23,4 @@ all: install lint typecheck test
 # Run this on the Dell after any deploy — the per-service deploy pattern
 # silently skips services that were never explicitly named (KI-014).
 deploy-drift:
-	./infra/check-deploy-drift.sh
+	sudo ./infra/check-deploy-drift.sh
