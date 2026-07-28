@@ -217,6 +217,102 @@ what exists.
   quarters. Motivating case: Valar Atomics Ward 250 criticality
   (DOE Reactor Pilot Program, 2026-06-18).
 
+## THE FIRST VERDICT — 2026-07-27 23:49 UTC
+
+**The Research Department completed a loop for the first time.** Live on the
+Dell, end to end, in one session.
+
+```
+evaluation_id=01KYJZQ10C3XAP12WMF21YVYVQ
+kill (insufficient-trades)   hypothesis -> killed
+trades=20  sharpe=0.415  stress_sharpe=0.310  protocol=0.1
+anchor: live (world_changer status: promoted)
+card=docs/strategies/evaluations/01KYGTRTTQA9X2B2E16N4SBPTG/20260727T234911Z.md
+streams=research.strategy.verdict,research.strategy.killed
+```
+
+The chain that got there: anchor promoted (`01KXVVPXDMB4HS1QNRPQWRP1RX`,
+`proposed -> promoted` — the row had sat undecided since 2026-07-18 while three
+docs asserted it was promoted) → launch list loaded (50 names into
+`research.universe_tiers`; the table had been empty, which is what gated the
+Pre-Trade Tier 3 flag) → seed loaded at `hypothesis` → 1,507 XLE daily bars
+backfilled → walk-forward → verdict → registry transition → card → events.
+
+**A kill was the expected and correct outcome.** The distinction that decides
+whether the run counted: `KILL / anchor-not-live` with `engine_ran=False` would
+have measured nothing. This was `KILL / insufficient-trades` with 20 real
+trades — the engine ran a full six-fold walk-forward, measured, and judged.
+
+### The fold table is the real finding
+
+| Fold | Return | Sharpe | Max DD | Trades |
+|---|---|---|---|---|
+| 0 | 14.44% | 0.701 | 34.87% | 3 |
+| 1 | 1.24% | 0.181 | 17.26% | 5 |
+| 2 | 16.66% | 1.526 | 10.99% | 3 |
+| 3 | -14.83% | -1.566 | 17.12% | 3 |
+| 4 | -9.32% | -0.515 | 19.86% | 5 |
+| 5 | 29.49% | **1.712** | 14.09% | **1** |
+
+**Fold 5 produced an annualized Sharpe of 1.712 from a single trade.** That
+number is not a measurement of anything. It is one position held across a
+trending 192-day window, and the statistic is computed from daily returns
+while the strategy took one decision.
+
+Fold dispersion runs -1.566 to +1.712. The aggregate 0.415 is the mean of six
+numbers that are individually meaningless, and the 45.57% aggregate max
+drawdown is real while the Sharpe is not.
+
+**The 150-trade gate did exactly the job it exists to do**, and this card is
+the evidence. It is not an arbitrary hurdle — it is the threshold below which
+the protocol's own statistics stop carrying information.
+
+### This changes KI-013's mitigation
+
+KI-013 proposed making `min_trades` archetype-conditional so Framework #1
+strategies are not auto-killed. **This card argues that fix is wrong.**
+
+The problem is not that 150 is too high for a structural strategy. It is that
+a Sharpe-based walk-forward cannot evaluate a strategy that takes 1–5
+decisions per fold *at any threshold*. Lowering the gate would not make the
+evaluation valid; it would promote a number that means nothing into a decision
+that costs money — precisely the "promoting noise" failure the vision names.
+
+The honest conclusion is stronger and less convenient: **Framework #1
+strategies may not be evaluable under the current eval protocol at all.**
+A structural thesis wants falsification against its stated kill criteria and
+holding-period outcomes, not trade-frequency statistics. That is a different
+protocol, not a different constant.
+
+This also strengthens the ADR-0013 case rather than weakening it. The Evaluator
+was built for the fast layer; the fast layer is what it can actually measure.
+
+*(Mechanically, for the record: with `sharpe=0.415` against a `1.0` floor, a
+lowered trade gate would have produced `HOLD / below-sharpe-floor`, not a
+promotion. Nothing was going to be promoted here either way.)*
+
+### Two defects found by running it
+
+1. **The Evaluator could never write an evaluation card.**
+   `STRATEGY_EVALUATOR_CARD_ROOT` was the relative path
+   `docs/strategies/evaluations`, resolved against WORKDIR `/app`, which is
+   root-owned while the container runs as `USER shrap` (uid 10001).
+   `PermissionError` on `mkdir`. Fixed in this card: absolute path plus a bind
+   mount, with the host-ownership requirement documented in the compose block.
+   Worth noting the failure ordering was benign — `commit()` writes the card
+   *first*, before the registry transition, the evaluation row, and the event
+   publish, so both crashed attempts persisted nothing and the retry was clean.
+2. **The Strategy Librarian and Strategy Runner have never been deployed.**
+   `docker compose ps -a` returns no container for either — not stopped,
+   never created. Both are default compose services with no `profiles:` key,
+   shipped in PR #40 and PR #80. Recorded as KI-014.
+
+Neither blocked the milestone. The Evaluator performs its own registry
+transition in `commit()`; the Librarian is a separate consumer of
+`research.strategy.verdict` that transitions again under `expected_from`
+guarding, so it acks and skips an already-applied verdict by design
+(`librarian_service.py:14`).
+
 ## Live smoke notes
 
 - **2026-07-06 (first full-stack run):** Card 15 smoke PASSED 6/6 on the Dell —

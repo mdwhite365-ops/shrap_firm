@@ -240,6 +240,50 @@ insert **zero new** item_ids for N consecutive passes. That is the signature
 USASpending had, and a freshness check on `fetched_at` alone would have called
 it healthy.
 
+## KI-014 — The Strategy Librarian and Strategy Runner were never deployed
+
+**Status:** Open, found 2026-07-27 during the first-verdict run.
+
+`sudo docker compose ps -a | grep -Ei "librarian|runner"` on the Dell returns
+**nothing** — no container for `shrap_strategy_librarian` or
+`shrap_strategy_runner`, stopped or otherwise. They were never created.
+
+Both are ordinary default services in `infra/docker-compose.yml` with no
+`profiles:` key, so a plain `docker compose up -d` should have started them.
+The Librarian shipped in PR #40 (2026-07-xx) and the Runner in PR #80
+(2026-07-24). Neither has ever run in production.
+
+This did not block the first verdict, because the Evaluator performs its own
+registry transition inside `commit()` and publishes the lifecycle events
+directly. The Librarian is a *second* consumer of `research.strategy.verdict`
+that transitions again under `expected_from` guarding
+(`librarian_service.py:14`), so it acks and skips an already-applied verdict
+by design. The status doc's earlier claim that the Librarian "idles waiting
+for a verdict" described an architecture the code does not implement — the
+Evaluator does not delegate to it.
+
+**Two things to establish before restarting them**, because "just bring them
+up" would paper over the more interesting question:
+
+1. **Why were they never created?** A service that is in the compose file and
+   absent from `ps -a` means either it was never in the file at the time of the
+   last full `up -d`, or an `up -d <specific-service>` pattern has been used
+   throughout and no full-stack `up` has run since PR #40. The deploy history
+   would say which. The second explanation implicates every other service added
+   since, and is the more likely one given the `--force-recreate` lesson.
+2. **Is the Librarian's transition leg redundant by design or by accident?**
+   Two components transitioning the same registry rows on the same event is a
+   design smell even when `expected_from` makes it safe. Either the Evaluator
+   should stop transitioning and delegate (making the Librarian load-bearing),
+   or the Librarian's transition leg should be dropped and its role narrowed to
+   lifecycle-event emission. Right now the answer is "whichever runs first
+   wins," which is not a decision anyone made.
+
+**Restarting is safe when it happens.** The Librarian's consumer group starts
+at `start_id="0"` (`strategy_librarian/config.py:31`), so it will read the
+2026-07-27 verdict from the stream start, attempt `hypothesis -> killed`, find
+the registry already at `killed`, and ack-and-skip — logging at exception level
+while behaving correctly.
 ## KI-011 — `intelligence.signal` has two producers and no consumer
 
 **Status:** Open, found 2026-07-27 by an architecture trace. Decided in

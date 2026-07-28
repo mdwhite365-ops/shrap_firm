@@ -38,6 +38,12 @@ RUN pip install --no-cache-dir /wheels/*.whl \
         "pandas>=2.2" \
     && rm -rf /wheels
 
+# Card output root. Compose bind-mounts the repo's evaluations directory over
+# this path; creating it here (owned by shrap) keeps the image runnable without
+# a mount, and makes the ownership requirement explicit rather than implicit in
+# WORKDIR. See the strategy-evaluator block in docker-compose.yml.
+RUN mkdir -p /cards && chown shrap:shrap /cards
+
 USER shrap
 
 ENV PYTHONUNBUFFERED=1 \
