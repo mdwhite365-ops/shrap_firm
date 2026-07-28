@@ -100,6 +100,7 @@ shrap-strategy-evaluate = "shrap.research.strategy_evaluator.cli:main"
 shrap-strategy-evaluator-trigger = "shrap.agents.research.strategy_evaluator.__main__:main"
 shrap-strategy-runner = "shrap.agents.research.strategy_runner.__main__:main"
 shrap-strategy-seed = "shrap.research.strategy_seed.cli:main"
+shrap-strategy-stage = "shrap.research.strategy_stage_cli:main"
 shrap-infra-mapper = "shrap.research.infra_mapper.cli:main"
 
 [tool.hatch.build.targets.wheel]
