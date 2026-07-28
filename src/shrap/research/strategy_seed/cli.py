@@ -13,6 +13,9 @@ Subcommands:
 - ``load-first``  insert the firm's FIRST seeded strategy (a code constant) at
   status ``hypothesis``, idempotently — a re-run with the same ``spec_hash`` is
   a no-op (no duplicate row).
+- ``load-technical``  insert a Framework #3 (``technical-catalyst``) seed by key.
+  These carry no world-changer anchor, which the Evaluator only accepts since
+  ADR-0013's archetype-conditional gates.
 - ``list``        show ``research.strategies`` rows (id, name, archetype,
   status, tickers) so the strategy_id can be fed to ``shrap-strategy-evaluate``.
 
@@ -35,6 +38,11 @@ from shrap.research.strategy_seed.probe_strategies import (
     PROBE_SEEDS,
     PROBE_SEEDS_BY_KEY,
     probe_record,
+)
+from shrap.research.strategy_seed.technical_strategies import (
+    TECHNICAL_SEEDS,
+    TECHNICAL_SEEDS_BY_KEY,
+    technical_record,
 )
 
 SEED_ACTOR = "mike-seed"
@@ -151,6 +159,48 @@ async def load_probe(registry: RegistryPort, key: str) -> str:
     )
 
 
+async def load_technical(registry: RegistryPort, key: str) -> str:
+    """Insert one Framework #3 seed at ``hypothesis``, idempotently.
+
+    Same dedup rule as the others. Unlike them, the record carries no anchor —
+    which is only evaluable because ADR-0013 made the anchor gate
+    archetype-conditional.
+    """
+
+    seed = TECHNICAL_SEEDS_BY_KEY.get(key)
+    if seed is None:
+        available = ", ".join(sorted(TECHNICAL_SEEDS_BY_KEY))
+        raise SystemExit(f"refused: unknown technical seed {key!r}; available: {available}")
+    record = technical_record(seed)
+    existing = await registry.get_by_spec_hash(record.spec_hash)
+    if existing is not None:
+        return (
+            f"already present: {existing.strategy_id} ({existing.name}) "
+            f"status={existing.status} — skipped (no duplicate)"
+        )
+    inserted = await registry.register(
+        record,
+        reason="Mike-seed: first Framework #3 (technical-catalyst) strategy — no anchor",
+        actor=SEED_ACTOR,
+        trigger_kind=SEED_TRIGGER_KIND,
+    )
+    if not inserted:
+        return f"already present: {record.strategy_id} — skipped (strategy_id conflict)"
+    return (
+        f"loaded: {record.strategy_id} ({record.name}) at status={record.status}; "
+        f"evaluate with `shrap-strategy-evaluate --strategy-id {record.strategy_id} --dry-run`"
+    )
+
+
+def render_technical_catalogue() -> str:
+    """List the available Framework #3 seeds without touching the database."""
+
+    lines = [f"Technical seeds: {len(TECHNICAL_SEEDS)}"]
+    for s in TECHNICAL_SEEDS:
+        lines.append(f"  {s.key:<16} {s.ticker:<6} fast={s.fast} slow={s.slow}  {s.strategy_id}")
+    return "\n".join(lines)
+
+
 def render_probe_catalogue() -> str:
     """List the available probe seeds without touching the database."""
 
@@ -163,6 +213,8 @@ def render_probe_catalogue() -> str:
 async def _run(args: argparse.Namespace) -> str:
     if args.action == "list-probes":
         return render_probe_catalogue()
+    if args.action == "list-technical":
+        return render_technical_catalogue()
     pool = await create_asyncpg_pool(args.dsn)
     registry = PostgresStrategyRegistry(pool)
     try:
@@ -172,6 +224,8 @@ async def _run(args: argparse.Namespace) -> str:
             return await load_first(registry)
         if args.action == "load-probe":
             return await load_probe(registry, args.key)
+        if args.action == "load-technical":
+            return await load_technical(registry, args.key)
         # list
         return render_list(await registry.list_all())
     finally:
@@ -206,6 +260,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     probe.add_argument("key", choices=sorted(PROBE_SEEDS_BY_KEY), help="Probe seed key")
     sub.add_parser("list-probes", help="Show available probe seeds (no database access)")
+    technical = sub.add_parser(
+        "load-technical", help="Insert a Framework #3 technical-catalyst seed (idempotent)"
+    )
+    technical.add_argument("key", choices=sorted(TECHNICAL_SEEDS_BY_KEY), help="Technical seed key")
+    sub.add_parser("list-technical", help="Show available Framework #3 seeds (no database access)")
     sub.add_parser("list", help="Show research.strategies rows (id, name, archetype, status)")
     return parser
 
