@@ -3,7 +3,7 @@
 **Department:** Trading Floor
 **LLM tier:** `no-llm`
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
-**Status:** Month 1 paper-order core in progress
+**Status:** **Deployed** — paper order submission, pending-order re-polling, fill publication
 **Date:** 2026-06-17
 **Author:** Mike White
 

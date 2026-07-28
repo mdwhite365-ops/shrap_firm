@@ -3,7 +3,7 @@
 **Department:** Risk and Compliance
 **LLM tier:** `no-llm`
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
-**Status:** Implemented for Month 1 wire path; deployable service PR in progress
+**Status:** **Deployed** — wire path, Redis rate guardrails, and the flag-gated Tier-3 membership check
 **Date:** 2026-06-08
 **Author:** Mike White
 

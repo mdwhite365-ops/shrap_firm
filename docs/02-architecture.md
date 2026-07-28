@@ -318,10 +318,25 @@ Each department is implemented as a LangGraph subgraph. The subgraph defines the
 **OpenHands SDK — development sandbox.**
 The Development Department's Implementation Agent runs inside an OpenHands Docker-sandboxed environment with a fresh repo clone per task. Writable paths are allowlisted: `docs/`, `agents/`, `intelligence/`, `research/`, `tests/`, `tools/`, `strategies/`. Everything under `trading/`, `risk/`, `execution/`, and `compliance/` is read-only. Credentials paths (`.env*`, `*api_key*`, `*credentials*`) are excluded from the sandbox entirely. Every task produces a PR; OpenHands cannot merge to main. This boundary means the outer loop (self-development) cannot modify the inner loop (trading) without Mike's explicit review.
 
-**NautilusTrader — execution engine.**
+**NautilusTrader — execution engine (GATED, NOT BUILT).**
+
+> **Correction, 2026-07-28.** The paragraph below describes the pre-ADR-0003
+> design and is **not what runs.** ADR-0003 (Accepted, 2026-07-06) re-scoped
+> NautilusTrader from a Month-1 dependency to a *gate*: the paper spine runs on
+> a direct Alpaca client, there is no NautilusTrader container on the Dell, no
+> IBKR adapter, and no `trading/` path owned by it. The gate triggers on live
+> capital **or execution needs beyond market/day orders — which is exactly what
+> options and futures are.** Kept as the design that adoption would restore.
+
 NautilusTrader is the trading engine for the inner loop. It handles real-time bar aggregation, strategy signal evaluation, order routing, fill tracking, and position management. Two adapters are wired: the Alpaca adapter for equities (paper trading with live Level 1 data), and the IBKR Gateway adapter for MES futures. The adapter pattern is the reason provider swaps are low-cost — Polygon.io Level 2 and any future broker are additional adapter implementations, not architectural changes. NautilusTrader's internal pub/sub bus handles intra-engine events; selected events (fills, risk alerts, regime signals from the Regime Router) are bridged to Redis Streams for consumption by other departments. NautilusTrader runs as its own container on the Dell and owns the `trading/` path in the repo.
 
-**VectorBT PRO — backtesting.**
+**VectorBT PRO — backtesting (GATED, NOT BUILT).**
+
+> **Correction, 2026-07-28.** Also not what runs. PR #41 ruled for an in-house
+> walk-forward engine (`src/shrap/research/strategy_evaluator/engine.py`), which
+> reads `market_data.daily_bars` directly. There is no `ryzen.tasks` stream, no
+> `ryzen.results` stream, and no job-submission protocol.
+
 VectorBT PRO runs backtest workloads submitted by the Strategy Evaluator. Computationally light backtests (small universe slices, short date ranges) run on the Dell. Heavy backtests (full universe, multi-year, walk-forward windows) are routed to the Ryzen via the `ryzen.tasks` stream. The Strategy Evaluator submits a backtest job as a serialized configuration — universe slice, date range, strategy module ID, parameter set, cost model — and waits for a result record on `ryzen.results`. VectorBT PRO does not read from NautilusTrader's live data path; it reads historical OHLCV data from TimescaleDB. This keeps the backtest path fully decoupled from the live trading path.
 
 **Ollama — local LLM serving.**

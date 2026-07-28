@@ -86,11 +86,18 @@ Building a queue and five subscriptions for events nothing emits would be
 scaffolding around a hole, and would have to be rewritten when the producers
 arrive and their payloads are actually known.
 
-**One stream the spec does not mention does have a producer:**
-`research.strategy.registered`, published by the registry on every new
-strategy. Subscribing to it would reduce latency from one sweep interval to
-seconds. It is deferred rather than overlooked — the sweep already catches
-every registration within 15 minutes, and evaluation is a batch concern.
+**Correction (2026-07-28).** An earlier version of this section claimed
+`research.strategy.registered` "does have a producer, published by the registry
+on every new strategy." **It does not.** `register()` inserts the strategy and
+its first transition row and publishes nothing; the seed CLI states it does not
+publish; and the Librarian — the only caller of `stream_for_transition` — runs
+only on verdict events, which always carry a `from_stage`. So that stream is
+never written, and a subscriber to it would wait forever. See KI-017.
+
+That leaves **every** trigger this spec names without a producer, which
+strengthens rather than weakens the case for the interval sweep: there is no
+event leg available to build, not merely none worth building. Making
+registration visible on the bus is its own card.
 
 The Sunday paper-stage re-evaluation is a genuine gap rather than a deferral:
 nothing currently re-examines a promoted strategy, so a strategy that decays
