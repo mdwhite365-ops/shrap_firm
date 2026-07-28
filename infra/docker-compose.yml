@@ -890,9 +890,15 @@ services:
   # against research.world_changers only (bottleneck leg deferred). Publishes
   # research.strategy.verdict / research.strategy.killed. No LLM, no broker
   # credentials.
-  # Run pattern:
-  #   docker compose run --rm strategy-evaluator \
+  # Run pattern — BUILD FIRST, and do NOT pass --user. See
+  # docs/runbooks/deploying-after-a-code-change.md; both were learned the hard way 2026-07-28.
+  #   docker compose --profile tools build strategy-evaluator
+  #   docker compose --profile tools run --rm strategy-evaluator \
   #     shrap-strategy-evaluate --strategy-id 01STRAT... [--dry-run]
+  # `run` never rebuilds, so without the build step this silently executes the
+  # previously-built image. And the container's default uid (10001) is what
+  # matches the mounted card directory below — overriding it to the host user
+  # causes PermissionError on a directory whose ownership looks correct.
   # -------------------------------------------------------------------------
   strategy-evaluator:
     build:
