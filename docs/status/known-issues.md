@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-07-27
+**Last updated:** 2026-07-28
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -414,3 +414,53 @@ stress run reports. The gap is interpretive, not a bypass.
 The third is the smallest change that makes the claim true, but it discards the
 information that a lag *helped* — which is itself a signal about a rule that
 trades on noise.
+
+## KI-016 — Parallel PRs appending to the same file tail merge into garbage
+
+**Status:** Partially mitigated 2026-07-28. The verification command is fixed;
+**CI is written but not yet pushed** — see "Blocked" below. The hazard itself is
+structural and remains; CI turns it from silent into loud.
+
+PRs #102 and #103 both branched from the same commit and both appended a block
+of tests to the **end of** `tests/research/test_strategy_evaluator_pipeline.py`.
+The conflict resolution in `99c22d6` interleaved the two blocks: one test was
+truncated mid-body and the other PR's section header was spliced into it.
+
+The result was a `SyntaxError`. `pytest` could not collect `tests/research/`, so
+**the entire 634-test suite was unrunnable on `main`** — for roughly an hour,
+across two merges, with nothing reporting it. It was found by chance, by
+syncing before starting the next card.
+
+This is KI-001's sibling. KI-001 is about *stacking* PRs; this is about two
+*correctly independent* PRs that touch the same region of the same file. Neither
+PR was wrong on its own and neither would have been caught by review.
+
+**Why it was invisible.** The repo had no CI of any kind. `main` was never
+verified by anything except a human choosing to run `pytest` locally.
+
+**Compounding it:** `make install` ran `pip install -e '.[dev]'`, which cannot
+collect the suite — tests import agent modules directly, and 13 files fail on a
+clean environment. Local runs passed only because developer venvs accumulate
+every extra over time. So the documented verification command was itself broken,
+and had been for some time, in a way that only showed up on a fresh machine.
+
+**Shipped:** a `test` extra (self-referential over every agent extra, so
+versions cannot drift) with `make install` using `.[dev,test]`. Verified from
+clean venvs under both pip and uv: `make all` now runs install → lint →
+typecheck → test end to end, which it could not do before.
+
+**Blocked:** `.github/workflows/ci.yml` is written and validated but could not
+be pushed — the repo's stored OAuth credential lacks the `workflow` scope, and
+GitHub refuses pushes that create or modify workflow files without it. One-time
+unblock, run locally by Mike:
+
+```bash
+gh auth refresh -h github.com -s workflow
+```
+
+Adding the file through GitHub's web UI works too. Until it lands, `main` is
+still verified only when someone chooses to run `pytest`.
+
+**Still open even once CI lands:** CI reports the breakage, it does not prevent
+it. When two open PRs touch the same file, prefer inserting near the relevant
+section over appending to the tail, and merge one then rebase the other.

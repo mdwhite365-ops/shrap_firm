@@ -55,6 +55,23 @@ strategy-seed = ["asyncpg>=0.29"]
 infra-mapper = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 spine-smoke = ["asyncpg>=0.29"]
 
+# Everything the test suite needs to import. Tests exercise agent modules
+# directly, so `.[dev]` alone cannot collect them — 13 files failed on a clean
+# environment before this existed, while a stale local venv reported green.
+#
+# Self-referential rather than a copied list of packages: version constraints
+# live once, in the extra that owns them, and cannot drift. Adding a new agent
+# extra means adding it here too; CI fails on collection if it is forgotten,
+# which is the intended feedback.
+test = [
+    "shrap[health-monitor,audit-logger,pre-trade-checker,execution-agent]",
+    "shrap[paper-order-store,reconciliation-agent,regime-classifier]",
+    "shrap[decision-maker,strategy-fixture,strategy-librarian,tech-watcher]",
+    "shrap[news-analyzer,filing-processor,market-phase,universe-curator]",
+    "shrap[market-data,strategy-evaluator,strategy-runner,strategy-seed]",
+    "shrap[infra-mapper,spine-smoke]",
+]
+
 [project.scripts]
 shrap-health-monitor = "shrap.agents.operations.health_monitor.__main__:main"
 shrap-audit-logger = "shrap.agents.operations.audit_logger.__main__:main"
