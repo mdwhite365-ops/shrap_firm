@@ -181,6 +181,54 @@ For `technical-catalyst` — the archetype the vision assigns most of the firm's
 trading, "fast loops, many trades" — 150 is the floor it was calibrated for and
 needs no exemption.
 
+## 6b. The benchmark gap — the promote floor measures exposure, not skill
+
+**Open defect, found 2026-07-28 while building cross-sectional rules. It affects
+every long-only strategy the firm evaluates, including the ones already killed.**
+
+The promote gate is an **absolute** Sharpe floor. Nothing in the protocol
+compares a strategy to the alternative of simply being invested. Measured
+through this engine on synthetic random-walk data, with a naive equal-weight
+buy-and-hold portfolio that has **no timing rule at all**:
+
+| Drift | 1 name | 10 names | 50 names |
+|---|---|---|---|
+| **zero** (pure noise) | 0.450 | 0.330 | 0.358 |
+| **~7.5%/yr** (roughly US equities) | **1.026** | **1.098** | **1.158** |
+
+With realistic drift, doing nothing clears the 1.0 floor at every breadth. At
+zero drift the same portfolios score 0.33-0.45, which identifies the term doing
+the work: **market drift, not skill, and not diversification.**
+
+Corroborating, from the same runs: on 50 independent series a cross-sectional
+5/20 timing rule scored 2.28 against buy-and-hold's 3.22. The rule **destroyed
+value** relative to holding the basket — and would have promoted, because 2.28
+clears 1.0.
+
+**Why breadth makes this urgent rather than merely true.** A single-name timing
+rule is at least measured against being flat: it is out of the market much of
+the time, so its Sharpe is not simply the instrument's. A cross-sectional rule is
+reliably invested in *something*, so it inherits close to full market exposure
+and the floor stops discriminating at all. Building breadth without a benchmark
+would produce a machine that promotes market beta and files it as edge.
+
+**The fix.** Benchmark-relative evaluation: measure active return against
+equal-weight buy-and-hold of the strategy's own declared universe over the same
+window, and gate on that (an information ratio) rather than on absolute Sharpe.
+"Beat being invested" is the question the firm actually wants answered. The
+engine already supports this — computing it needs one extra `walk_forward` pass
+over the same panel with a constant-weight rule.
+
+**Until it lands**, cross-sectional rules are refused by spec hygiene
+(`DEFERRED_RULES` in `pipeline.py`), on the same fail-closed pattern as
+`bottleneck-rotation`. They are implemented and tested; they are not evaluable.
+Nothing is written and the strategy stays at `hypothesis`.
+
+**What this says about the verdicts already on record.** The three killed
+strategies all died on trade count, before Sharpe was ever the binding
+constraint, so none of their verdicts changes. But their reported Sharpes were
+never measures of skill, and should not be cited as if they were.
+
 ## 7. Verdict mapping (spec step 6, 10)
 
 A pure function of the metrics — no human tuning — applied in strict priority:

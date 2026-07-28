@@ -1,0 +1,224 @@
+"""Cross-sectional strategies — rules that trade the universe, not one name.
+
+Every strategy the firm has evaluated has traded exactly one ticker, because
+``_default_strategy_factory`` built the reference rule from ``tickers[0]`` and
+discarded the rest. The *engine* was never single-name: ``PricePanel`` is
+documented as "one or more tickers" and ``walk_forward`` counts a trade per
+ticker per weight change. Only the rules were.
+
+That one line distorted a conclusion. The probes' verdicts were read as showing
+that a daily-bar rule cannot clear the 150-trade gate — true for a single
+instrument (a five-year window is ~1,260 bars, so 150 trades demands a flip
+every ~8 bars) and **false across a universe**, where the same rule applied to
+50 names generates roughly 50x the trades.
+
+The distinction that matters: the trade-count gate measures **sample size**, not
+speed. Breadth supplies sample size. A cross-sectional daily rule is still not a
+*fast* strategy — each position holds for weeks — but it is a properly powered
+one, which is what the gate is actually asking for.
+
+**The honest caveat, recorded here rather than discovered later.** Trades across
+50 US equities are not 50 independent observations. Daily equity returns are
+heavily cross-correlated; in a drawdown every name flips together. The effective
+sample is materially smaller than the nominal trade count, so a breadth-based
+strategy can satisfy the gate while being tested less rigorously than the number
+implies. The gate should eventually count independent *episodes* rather than raw
+weight changes. Until it does, read a cross-sectional trade count as an upper
+bound on statistical power, never as the power itself.
+
+Two rules live here:
+
+- :class:`CrossSectionalTrendStrategy` — the reference crossover applied to every
+  ticker, equal-weighted across whichever names are invested. A direct
+  generalisation, useful mainly because it isolates breadth as the only change
+  from the runs already on record.
+- :class:`CrossSectionalMomentumStrategy` — rank the universe on trailing return,
+  hold the top N equal-weighted. This is the one with a real prior behind it
+  rather than a rule invented to have something to run.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
+from shrap.research.strategy_evaluator.strategy import PanelWindow
+
+CROSS_SECTIONAL_TREND_NAME = "cross-sectional-ma-crossover"
+CROSS_SECTIONAL_MOMENTUM_NAME = "cross-sectional-momentum"
+
+DEFAULT_GROSS_EXPOSURE = 1.0
+DEFAULT_LOOKBACK = 126
+DEFAULT_SKIP = 21
+DEFAULT_TOP_N = 10
+
+# Validated by the pipeline's `_validate_param_bounds` against the record's
+# declared `param_bounds`, same contract as the reference rule.
+TREND_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "fast": (2.0, 100.0),
+    "slow": (5.0, 400.0),
+    "gross_exposure": (0.0, 1.0),
+}
+
+MOMENTUM_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "lookback": (21.0, 504.0),
+    "skip": (0.0, 63.0),
+    "top_n": (1.0, 50.0),
+    "gross_exposure": (0.0, 1.0),
+}
+
+
+def _equal_weights(
+    tickers: tuple[str, ...], selected: list[str], gross_exposure: float
+) -> dict[str, float]:
+    """Spread ``gross_exposure`` equally over ``selected``; everything else flat.
+
+    Every ticker in the panel is named explicitly, including the flat ones. The
+    engine diffs weights per ticker to recover trades, so an omitted ticker
+    would read as "unchanged" rather than "exit" — a silent way to never sell.
+    """
+
+    if not selected:
+        return dict.fromkeys(tickers, 0.0)
+    per_name = gross_exposure / len(selected)
+    chosen = set(selected)
+    return {t: (per_name if t in chosen else 0.0) for t in tickers}
+
+
+@dataclass(frozen=True, slots=True)
+class CrossSectionalTrendStrategy:
+    """The reference crossover, applied to every ticker in the panel."""
+
+    fast: int = 10
+    slow: int = 30
+    gross_exposure: float = DEFAULT_GROSS_EXPOSURE
+    long_only: bool = True
+
+    def __post_init__(self) -> None:
+        if self.fast < 1 or self.slow < 1:
+            raise ValueError("moving-average windows must be >= 1")
+        if self.fast >= self.slow:
+            raise ValueError("fast window must be shorter than slow window")
+        if not 0.0 <= self.gross_exposure <= 1.0:
+            raise ValueError("gross_exposure must lie in [0, 1]")
+
+    @property
+    def name(self) -> str:
+        return CROSS_SECTIONAL_TREND_NAME
+
+    @property
+    def warmup(self) -> int:
+        return self.slow
+
+    def target_weights(self, window: PanelWindow) -> Mapping[str, float]:
+        selected: list[str] = []
+        for ticker in window.tickers:
+            closes = window.closes(ticker)
+            if len(closes) < self.slow:
+                continue
+            fast_ma = sum(closes[-self.fast :]) / self.fast
+            slow_ma = sum(closes[-self.slow :]) / self.slow
+            if fast_ma > slow_ma:
+                selected.append(ticker)
+        return _equal_weights(window.tickers, selected, self.gross_exposure)
+
+    @classmethod
+    def from_spec(cls, params: Mapping[str, Any]) -> CrossSectionalTrendStrategy:
+        return cls(
+            fast=int(params.get("fast", 10)),
+            slow=int(params.get("slow", 30)),
+            gross_exposure=float(params.get("gross_exposure", DEFAULT_GROSS_EXPOSURE)),
+            long_only=bool(params.get("long_only", True)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CrossSectionalMomentumStrategy:
+    """Hold the top ``top_n`` names by trailing return, equal-weighted.
+
+    ``skip`` omits the most recent bars from the ranking window. That is not a
+    tuning knob — short-horizon reversal is a well-documented effect that runs
+    opposite to momentum, so including the last month in the formation window
+    mixes two opposing signals. Skipping it is the standard construction, and
+    setting ``skip=0`` is a deliberate choice to measure something different.
+    """
+
+    lookback: int = DEFAULT_LOOKBACK
+    skip: int = DEFAULT_SKIP
+    top_n: int = DEFAULT_TOP_N
+    gross_exposure: float = DEFAULT_GROSS_EXPOSURE
+
+    def __post_init__(self) -> None:
+        if self.lookback < 2:
+            raise ValueError("lookback must span at least two bars")
+        if self.skip < 0:
+            raise ValueError("skip must not be negative")
+        if self.skip >= self.lookback:
+            raise ValueError("skip must be shorter than lookback, or nothing is ranked")
+        if self.top_n < 1:
+            raise ValueError("top_n must be at least 1")
+        if not 0.0 <= self.gross_exposure <= 1.0:
+            raise ValueError("gross_exposure must lie in [0, 1]")
+
+    @property
+    def name(self) -> str:
+        return CROSS_SECTIONAL_MOMENTUM_NAME
+
+    @property
+    def warmup(self) -> int:
+        # One extra bar: the formation return needs a bar before the window
+        # starts to difference against.
+        return self.lookback + 1
+
+    def _formation_return(self, window: PanelWindow, ticker: str) -> float | None:
+        closes = window.closes(ticker)
+        if len(closes) < self.lookback + 1:
+            return None
+        end = len(closes) - self.skip
+        start = end - (self.lookback - self.skip)
+        if start < 0 or end <= start:
+            return None
+        first, last = closes[start], closes[end - 1]
+        if first <= 0.0:
+            return None
+        return last / first - 1.0
+
+    def target_weights(self, window: PanelWindow) -> Mapping[str, float]:
+        scored: list[tuple[float, str]] = []
+        for ticker in window.tickers:
+            r = self._formation_return(window, ticker)
+            if r is not None:
+                scored.append((r, ticker))
+        if not scored:
+            return dict.fromkeys(window.tickers, 0.0)
+        # Sort by ticker first so ties resolve deterministically rather than by
+        # panel order — a reproducible backtest cannot depend on dict ordering.
+        scored.sort(key=lambda pair: (-pair[0], pair[1]))
+        # Long-only by construction: a negative formation return is a loser, and
+        # holding it would make this a different strategy wearing this name.
+        selected = [t for r, t in scored[: self.top_n] if r > 0.0]
+        return _equal_weights(window.tickers, selected, self.gross_exposure)
+
+    @classmethod
+    def from_spec(cls, params: Mapping[str, Any]) -> CrossSectionalMomentumStrategy:
+        return cls(
+            lookback=int(params.get("lookback", DEFAULT_LOOKBACK)),
+            skip=int(params.get("skip", DEFAULT_SKIP)),
+            top_n=int(params.get("top_n", DEFAULT_TOP_N)),
+            gross_exposure=float(params.get("gross_exposure", DEFAULT_GROSS_EXPOSURE)),
+        )
+
+
+__all__ = [
+    "CROSS_SECTIONAL_MOMENTUM_NAME",
+    "CROSS_SECTIONAL_TREND_NAME",
+    "DEFAULT_GROSS_EXPOSURE",
+    "DEFAULT_LOOKBACK",
+    "DEFAULT_SKIP",
+    "DEFAULT_TOP_N",
+    "MOMENTUM_PARAM_BOUNDS",
+    "TREND_PARAM_BOUNDS",
+    "CrossSectionalMomentumStrategy",
+    "CrossSectionalTrendStrategy",
+]

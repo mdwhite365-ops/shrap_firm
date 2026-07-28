@@ -45,6 +45,10 @@ import structlog
 from ulid import ULID
 
 from shrap.events import EventPublisher
+from shrap.research.strategy_evaluator.cross_sectional import (
+    CrossSectionalMomentumStrategy,
+    CrossSectionalTrendStrategy,
+)
 from shrap.research.strategy_evaluator.engine import (
     PROTOCOL_VERSION,
     EvalConfig,
@@ -139,19 +143,90 @@ ARCHETYPE_POLICIES: dict[str, ArchetypePolicy] = {
 
 DEFAULT_CARD_ROOT = Path("docs/strategies/evaluations")
 
-# The record → signal-code binding. Until the strategy-authoring system exists
-# (a DSL / plugin registry — deferred), EVERY record is evaluated by
-# instantiating the REFERENCE trend rule from its params, whatever its
-# archetype. That is adequate for both archetypes evaluable today — a moving
-# average crossover is as legitimate an expression of `technical-catalyst` as of
-# `infra-graph-play` — but it means the archetype currently selects gates, not
-# code. This factory is the seam a later card replaces; tests inject their own
-# signal through it.
+# The record → signal-code binding. A record names its rule in `spec["rule"]`;
+# absent, it means the single-ticker reference crossover, which is what every
+# strategy written before this registry existed assumed. This is still the seam
+# the deferred strategy-authoring system replaces; tests inject their own signal
+# through it. The archetype selects gates, never code — a moving average
+# crossover is as legitimate an expression of `technical-catalyst` as of
+# `infra-graph-play`.
+RULE_REFERENCE_TREND = "reference-trend"
+RULE_CROSS_SECTIONAL_TREND = "cross-sectional-trend"
+RULE_CROSS_SECTIONAL_MOMENTUM = "cross-sectional-momentum"
+
+# Rules that consume exactly one ticker. Declared rather than inferred, because
+# the failure it guards is silent: `_build_panel` fetches every declared ticker
+# and `PricePanel` intersects their session dates, so extra tickers on a
+# single-name rule would *shorten* the usable history while contributing no
+# trades. The backtest would look shorter and no worse, with nothing to see.
+SINGLE_TICKER_RULES: frozenset[str] = frozenset({RULE_REFERENCE_TREND})
+
+# Rules that are implemented and tested but NOT yet evaluable, mirroring the
+# archetype `deferred_reason` pattern. Refusing is fail-closed and writes
+# nothing; the strategy stays at `hypothesis` until the dependency lands.
+#
+# Why these are deferred: the verdict's promote gate is an ABSOLUTE Sharpe
+# floor, which cannot separate strategy skill from market exposure. Measured on
+# synthetic random-walk data with a ~7.5%/yr drift and no timing skill at all,
+# naive equal-weight buy-and-hold scores Sharpe 1.03 (1 name) to 1.16 (50
+# names) — clearing the 1.0 promote floor purely by being invested. At zero
+# drift the same portfolios score 0.33-0.45, which is the tell: the term doing
+# the work is drift, not skill.
+#
+# This affects every long-only strategy, but it becomes near-certain with
+# breadth, because a cross-sectional rule is reliably invested in something. In
+# one run the timing rule scored 2.28 against buy-and-hold's 3.22 on the same
+# panel — it DESTROYED value and would still have promoted.
+#
+# The fix is benchmark-relative evaluation: active return against equal-weight
+# buy-and-hold of the same universe, not absolute Sharpe. Until that exists,
+# enabling these rules would build a machine that promotes market beta.
+DEFERRED_RULES: dict[str, str] = {
+    RULE_CROSS_SECTIONAL_TREND: (
+        "the promote gate is an absolute Sharpe floor, which a diversified long-only "
+        "portfolio clears on market drift alone — benchmark-relative evaluation must "
+        "land first (see docs/research/eval-protocol.md, 'The benchmark gap')"
+    ),
+    RULE_CROSS_SECTIONAL_MOMENTUM: (
+        "the promote gate is an absolute Sharpe floor, which a diversified long-only "
+        "portfolio clears on market drift alone — benchmark-relative evaluation must "
+        "land first (see docs/research/eval-protocol.md, 'The benchmark gap')"
+    ),
+}
+
 StrategyFactory = Callable[[StrategyRecord, list[str]], StrategySignal]
 
 
+def _rule_name(spec: object) -> str:
+    if isinstance(spec, Mapping):
+        rule = spec.get("rule")
+        if isinstance(rule, str) and rule.strip():
+            return rule.strip()
+    return RULE_REFERENCE_TREND
+
+
 def _default_strategy_factory(record: StrategyRecord, tickers: list[str]) -> StrategySignal:
-    return ReferenceTrendStrategy.from_spec(tickers[0], _params(record.spec))
+    rule = _rule_name(record.spec)
+    params = _params(record.spec)
+    if rule == RULE_CROSS_SECTIONAL_TREND:
+        return CrossSectionalTrendStrategy.from_spec(params)
+    if rule == RULE_CROSS_SECTIONAL_MOMENTUM:
+        return CrossSectionalMomentumStrategy.from_spec(params)
+    if rule != RULE_REFERENCE_TREND:
+        known = ", ".join(sorted({RULE_REFERENCE_TREND, *_CROSS_SECTIONAL_RULES}))
+        raise SpecHygieneError(f"spec names unknown rule {rule!r}; known rules are {known}")
+    if len(tickers) > 1:
+        raise SpecHygieneError(
+            f"rule {RULE_REFERENCE_TREND!r} trades one ticker but the strategy declares "
+            f"{len(tickers)} ({', '.join(tickers)}); use a cross-sectional rule or "
+            f"declare a single ticker"
+        )
+    return ReferenceTrendStrategy.from_spec(tickers[0], params)
+
+
+_CROSS_SECTIONAL_RULES: frozenset[str] = frozenset(
+    {RULE_CROSS_SECTIONAL_TREND, RULE_CROSS_SECTIONAL_MOMENTUM}
+)
 
 
 # The exact wording the spec requires in every evaluation report.
@@ -631,6 +706,10 @@ class EvaluationPipeline:
         # it must refuse a bad archetype on its own, whoever calls it. The
         # lookup is a pure dict read, so the second call in `evaluate` is free.
         _policy_for(record.archetype)
+        rule = _rule_name(record.spec)
+        deferred = DEFERRED_RULES.get(rule)
+        if deferred is not None:
+            raise SpecHygieneError(f"rule {rule!r} is not evaluable yet: {deferred}")
         tickers = _extract_tickers(record.tickers)
         if not tickers:
             raise SpecHygieneError("strategy declares no tickers")
@@ -887,7 +966,11 @@ __all__ = [
     "DEFAULT_TRIGGER",
     "PRODUCED_BY",
     "REQUIRED_DISCLAIMER",
+    "RULE_CROSS_SECTIONAL_MOMENTUM",
+    "RULE_CROSS_SECTIONAL_TREND",
+    "RULE_REFERENCE_TREND",
     "SCHEMA_VERSION",
+    "SINGLE_TICKER_RULES",
     "STREAM_STRATEGY_VERDICT",
     "ArchetypePolicy",
     "CommitResult",
