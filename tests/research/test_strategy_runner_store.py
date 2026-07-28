@@ -8,12 +8,13 @@ the primary key, so upsert idempotency is actually exercised: a repeated
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from shrap.research.strategy_runner.engine import PlannedStateWrite, TargetState
 from shrap.research.strategy_runner.store import (
     CREATE_RUNNER_STATE_TABLE_SQL,
+    SELECT_LATEST_EQUITY_SQL,
     SELECT_RUNNER_STATE_SQL,
     UPSERT_RUNNER_STATE_SQL,
     PostgresStrategyRunnerStateStore,
@@ -28,6 +29,7 @@ class FakeConn:
     def __init__(self) -> None:
         self.executed: list[str] = []
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}
+        self.fetchrow_result: dict[str, Any] | None = None
 
     async def execute(self, sql: str, *args: object) -> object:
         self.executed.append(sql)
@@ -46,6 +48,10 @@ class FakeConn:
         if sql == SELECT_RUNNER_STATE_SQL:
             return list(self.rows.values())
         return []
+
+    async def fetchrow(self, sql: str, *args: object) -> dict[str, Any] | None:
+        self.executed.append(sql)
+        return self.fetchrow_result
 
 
 class FakeAcquire:
@@ -110,3 +116,40 @@ async def test_read_state_handles_null_side() -> None:
     await store.upsert(PlannedStateWrite("s1", "NVDA", 0.0, None, SESSION))
     state = await store.read_state()
     assert state[("s1", "NVDA")].last_side is None
+
+
+# --- account equity, for notional sizing --------------------------------------
+
+
+async def test_latest_equity_reads_the_reconciliation_agent_s_snapshot() -> None:
+    """The Runner learns its account size from a table it does not own.
+
+    ADR-0003 keeps broker credentials inside broker-facing containers, and the
+    Runner is not one of them — so equity comes from ops.account_snapshots,
+    which the Reconciliation Agent writes every pass.
+    """
+
+    stamp = datetime(2026, 7, 28, 15, 0, tzinfo=UTC)
+    pool = FakePool()
+    pool.conn.fetchrow_result = {"equity": 10_000.0, "at": stamp}
+    store = PostgresStrategyRunnerStateStore(pool)  # type: ignore[arg-type]
+
+    assert await store.latest_equity() == (10_000.0, stamp)
+    assert "ops.account_snapshots" in SELECT_LATEST_EQUITY_SQL
+    assert "ORDER BY at DESC" in SELECT_LATEST_EQUITY_SQL
+
+
+async def test_latest_equity_is_none_when_no_snapshot_exists() -> None:
+    """Returns None rather than a default; the caller refuses to size on it."""
+
+    pool = FakePool()
+    pool.conn.fetchrow_result = None
+    store = PostgresStrategyRunnerStateStore(pool)  # type: ignore[arg-type]
+    assert await store.latest_equity() == (None, None)
+
+
+async def test_the_equity_query_skips_null_rows() -> None:
+    """A snapshot row can exist with a null equity; ordering by `at` alone would
+    return it and read as 'no equity' when a usable earlier row exists."""
+
+    assert "equity IS NOT NULL" in SELECT_LATEST_EQUITY_SQL
