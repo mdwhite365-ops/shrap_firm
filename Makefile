@@ -1,7 +1,10 @@
 .PHONY: install test lint fmt typecheck all deploy-drift
 
+# `.[dev]` is tooling only and cannot collect the test suite: tests import agent
+# modules directly, so 13 files failed on a clean environment while a stale
+# local venv reported green. The `test` extra pulls in every agent's deps.
 install:
-	pip install -e '.[dev]'
+	pip install -e '.[dev,test]'
 
 test:
 	pytest
