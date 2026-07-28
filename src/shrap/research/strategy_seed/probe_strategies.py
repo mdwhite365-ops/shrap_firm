@@ -31,6 +31,15 @@ protocol. That a pure protocol probe is forced to claim a world-changer is
 itself the defect recorded in KI-013 and ADR-0013: the anchor gate is a
 Framework #1 construct applied universally.
 
+**That defect is fixed (2026-07-28).** ``ARCHETYPE_POLICIES`` in the Evaluator's
+``pipeline.py`` makes the anchor gate archetype-conditional, and a
+``technical-catalyst`` strategy — which is what a moving-average crossover
+actually is — needs no anchor. These two seeds keep their original archetype and
+anchor: both are ``killed`` and terminal, their evaluations are already in the
+ledger, and rewriting them would change ``spec_hash`` and register new rows
+misrepresenting what was run. Any *future* probe should be seeded as
+``technical-catalyst`` with no anchor.
+
 Carries no numpy/pandas-bearing import so the ``shrap-strategy-seed`` CLI stays
 light, matching ``first_strategy.py``.
 """

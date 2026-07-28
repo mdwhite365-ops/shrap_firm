@@ -34,10 +34,17 @@ real money and killing real edge only costs the time to find it again.
 A strategy is read from `research.strategies` at status `hypothesis`. Before any
 backtest runs, it must clear spec hygiene:
 
-- **Archetype must be `infra-graph-play`.** This is the only evaluable archetype
-  this card. `bottleneck-rotation` is **refused** with an explicit reason: its
-  anchor table `research.bottlenecks` has no rows until Bottleneck Scout exists
-  (resequencing ruling, 2026-07-23). Any other archetype is likewise refused.
+- **Archetype must have a declared evaluation policy.** Policies live in
+  `ARCHETYPE_POLICIES` (`pipeline.py`) — one table, one place, per archetype:
+
+  | Archetype | Evaluable | Anchor gate |
+  |---|---|---|
+  | `infra-graph-play` (Framework #1) | yes | **required** |
+  | `technical-catalyst` (Framework #3) | yes | not applicable |
+  | `bottleneck-rotation` | **refused** — `research.bottlenecks` has no rows until Bottleneck Scout exists (resequencing ruling, 2026-07-23) | required |
+
+  An archetype absent from the table is **refused**, fail-closed: gates we have
+  not decided on are not gates we get to guess at.
 - **Tickers must be Tier-3 eligible** — present in `research.universe_tiers` at
   tier `active` (read-only; the Universe Curator owns that table).
 - **Parameters must be bounded** — every numeric parameter must be finite and
@@ -54,13 +61,38 @@ evaluated, so it does not earn a terminal verdict: the strategy stays at
 (dead anchor, too few trades, no edge, edge that dies under friction). Both are
 fail-closed; neither promotes anything.
 
-**Anchor freshness (spec step 2).** The strategy's `anchor` must reference a
+**Anchor freshness (spec step 2) — only where the archetype requires it.** For
+an anchor-bearing archetype the strategy's `anchor` must reference a
 world-changer that is currently `promoted` in `research.world_changers`. The
 anchor JSONB references it by `world_changer_id` (or `candidate_id`). If the
 anchor is missing, unresolved, or not `promoted`, the verdict is `kill` with
 reason `anchor-not-live`, and the backtest does not run. This card wires the
 anchor-freshness gate to `research.world_changers` **only**; the bottleneck leg
 is deferred with Bottleneck Scout.
+
+For an archetype whose policy sets `requires_anchor=False`, `world_changers` is
+**not queried at all** and any anchor the record happens to carry is ignored.
+The policy decides, never the payload — otherwise the exemption would depend on
+whoever wrote the row remembering to clear a field.
+
+**Two different meanings of `anchor_fresh=False`.** Once an archetype can be
+anchor-less the flag is ambiguous on its own, so `research.evaluations` carries
+`anchor_required` alongside it (added by `ALTER`, `DEFAULT TRUE` — correct for
+every row written before this change, when `infra-graph-play` was the only
+evaluable archetype). The dead-anchor set is
+`anchor_required AND NOT anchor_fresh`. Evaluation cards and the CLI summary
+render three states — `live`, `not-live`, `not-required` — and never a bare
+boolean, because a card reading "anchor: not live" for a strategy that never
+claimed a thesis reports a falsification that did not happen.
+
+**Why this is not a loosening.** Removing a gate to let more strategies through
+is how a firm promotes noise. This removes a gate *from the archetype it was
+never about*: a `technical-catalyst` strategy's thesis is price and flow
+structure, so a world-changer anchor is not a weaker falsifier for it — it is
+not a falsifier at all, and requiring one produced anchors invented to satisfy
+the gate. Every other gate (Tier-3 membership, bounded params, declared kill
+criteria, regime-as-modifier, the trade-count floor, the Sharpe floor, the
+friction stress) applies unchanged to both archetypes.
 
 ## 2. Dataset (spec step 3)
 
@@ -124,23 +156,45 @@ as fragile and does not promote.
 ## 6. Trade-count gate (spec step 6)
 
 Fewer than **150 trades** across the full walk-forward → `kill`, regardless of
-headline metrics. No exceptions this card. This intentionally kills most
-long-horizon infra-graph plays; the spec flags that tension as a known,
-Mike-owned, post-sprint question.
+headline metrics. No exceptions, and **the gate stays universal** — it is the
+one Framework #1 construct this card deliberately does *not* make
+archetype-conditional.
+
+That is a change of reasoning, not of code. The gate was previously logged as
+"too strict for structural strategies, pending a Mike-owned floor per
+archetype." The first three real evaluations (2026-07-27/28) argued the
+opposite. Fold 5 of the seed strategy produced an annualized Sharpe of **1.712
+from a single trade**, and three parameter pairs on the same rule, ticker and
+window produced trade counts of 20 / 43 / 145 against Sharpes of 0.415 /
+**−0.157** / 0.745 — monotonic in count, sign-changing in Sharpe. At these
+counts the statistic is not a small measurement, it is noise, and no threshold
+makes a Sharpe-based walk-forward able to judge one to five decisions per fold.
+
+So a lower floor for structural strategies would not measure them more
+leniently; it would report noise with more confidence. The open question is
+therefore **not** "what floor for `infra-graph-play`" but "what protocol
+evaluates a multi-year thesis at all" — an event-study or realized-vs-thesis
+comparison rather than a Sharpe walk-forward. That is a separate card, and
+until it exists `infra-graph-play` strategies will keep dying here, correctly.
+
+For `technical-catalyst` — the archetype the vision assigns most of the firm's
+trading, "fast loops, many trades" — 150 is the floor it was calibrated for and
+needs no exemption.
 
 ## 7. Verdict mapping (spec step 6, 10)
 
 A pure function of the metrics — no human tuning — applied in strict priority:
 
-1. anchor not live → `kill` (`anchor-not-live`)
+1. anchor required and not live → `kill` (`anchor-not-live`)
 2. trades < 150 → `kill` (`insufficient-trades`)
 3. aggregate Sharpe ≤ 0 → `kill` (`no-edge`)
 4. stressed Sharpe ≤ 0 → `kill` (`fails-friction-stress`)
 5. aggregate Sharpe < the promote floor → `hold-for-data` (`below-sharpe-floor`)
 6. otherwise → `promote` (`promote-criteria-met`)
 
-**Promote** therefore requires all of: anchor fresh, ≥150 trades, positive
-Sharpe surviving the friction stress, and Sharpe ≥ the promote floor.
+**Promote** therefore requires all of: a fresh anchor *where the archetype
+requires one*, ≥150 trades, positive Sharpe surviving the friction stress, and
+Sharpe ≥ the promote floor.
 
 On `promote` the strategy transitions `hypothesis → paper` through the strategy
 registry (the append-only transition row records the reasoning). On `kill`,

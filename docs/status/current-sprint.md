@@ -1,6 +1,6 @@
 # Current sprint status
 
-**Last updated:** 2026-07-27 (evening — session close, pivot to strategy loop)
+**Last updated:** 2026-07-28 (research loop closed; archetype-conditional gates in flight)
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
@@ -108,72 +108,92 @@ currently proposes **zero** universe names. That is the correct answer, not
 a bug — the one promoted thesis has no tradeable expression whose evidence
 has been confirmed within two years.
 
-## NEXT SESSION STARTS HERE — pivot to the strategy loop
+## THE RESEARCH LOOP CLOSED — 2026-07-27/28
 
-**Mike's ruling, 2026-07-27 (end of session).** Framework #1 work pauses; the
-next card is the **Strategy Evaluator's first verdict**. The reasoning, and it
-is grounded in the vision rather than a preference:
+**The runbook below this section has been executed and is now history.** The
+Research Department completed a full loop for the first time: seed → backfill →
+walk-forward → verdict → registry transition → published events → evaluation
+card. Three strategies have been evaluated end to end.
 
-`docs/00-vision.md` §7 says most of Shrap's strategies trade on "technical and
-short-term-catalyst signals — fast loops, many trades," while the structural
-department runs "on a much slower clock" and feeds "biases and sizing
-modifiers — **not entry triggers**." ADR-0007 has the funnel producing the
-*universe* ("the graph IS the trading universe"), not signals. So Framework #1
-answers *which names*, never *when to trade them* — it was never the day/swing
-edge and cannot become it.
+| Seed | fast/slow | Trades | Base Sharpe | Stress Sharpe | Verdict |
+|---|---|---|---|---|---|
+| first (`01KYGTRT…`) | 20/100 | 20 | 0.415 | 0.310 | kill / insufficient-trades |
+| control (`01KYKK48…K8`) | 10/50 | 43 | −0.157 | 0.048 | kill / insufficient-trades |
+| treatment (`01KYKK48…K9`) | 3/10 | 145 | 0.745 | 0.331 | kill / insufficient-trades |
 
-Two facts make the pause urgent rather than optional:
+All three killed, all three with `engine_ran=True` — real verdicts, not gate
+artifacts. The sprint's third minimum success criterion
+(`docs/00-vision.md:40`) is met in the "did it once" sense.
 
-1. **The funnel currently feeds nothing.** DQ-004 locked the 50-name universe
-   as a hand-chosen list and the Universe Curator's implementation card has not
-   shipped, so even a perfect funnel would not change what the firm trades
-   today. The Mapper's one graph proposes zero names (all four nodes stale).
-2. **The firm has never evaluated a single strategy.** The Evaluator is built
-   (#41, in-house walk-forward) and has never produced a verdict. The Librarian
-   is deployed and idles waiting for one. The only "strategy" in existence is
-   the disarmed fixture. The inner loop executes flawlessly and has nothing
-   real to execute.
+**The finding is worth more than the verdicts.** Trade count moved
+monotonically with the parameters; Sharpe did not, and changed sign. Same rule,
+same ticker, same window, same costs. Fold 5 of the first seed produced an
+annualized Sharpe of 1.712 from a **single trade**. At these counts the
+statistic is noise, so the 150-trade gate is not a hurdle placed in front of
+usable numbers — it is the line below which the numbers are not measurements.
+That reversed the mitigation KI-013 originally proposed (a lower floor per
+archetype) and is now recorded in `docs/research/eval-protocol.md` §6.
 
-**The chain to unblock:** market-data backfill → `shrap-strategy-evaluate` on
-the seeded strategy → first verdict → Librarian lifecycle transition. That is
-the first real test of whether the firm can find edge at all, which is a more
-load-bearing question than the Tech Watcher's filter calibration.
+The treatment landing 5 short of the gate is recorded deliberately so it is not
+tuned away later: at a floor of 140 it produces `HOLD / below-sharpe-floor`, not
+a promotion. A different label on the same non-edge.
 
-**The command block below replaces an earlier draft that would not have run.**
-Read against the code on 2026-07-27, that draft had four defects: it named a
-`strategy-seed` compose service that does not exist, backfilled
-`AAPL,MSFT,NVDA,SPY` when the seeded strategy trades **XLE and nothing else**,
-and skipped both of the pipeline's hard prerequisites. Corrected and verified
-chain:
+## NEXT — ADR-0013's sequencing, items 1 and 2
 
-**Two gates the Evaluator checks before it will backtest anything**
-(`src/shrap/research/strategy_evaluator/pipeline.py`):
+Accepted when PR #95 merged; nothing since has changed the order.
 
-1. **Tier-3 membership** (`_check_tickers_tradeable`, line 488). Every ticker
-   must be `active` in `research.universe_tiers` or it raises
-   `SpecHygieneError` and nothing runs. That table is **empty** — the
-   launch-list load has never been run on the Dell. This is no longer blocked:
-   DQ-004 was resolved 2026-07-23 and the 44 unprofiled names were
-   grandfathered in the same ruling, so `load-launch-list` is just an
-   un-run command now, not a pending decision.
-2. **Anchor freshness** (line 293). The strategy's world-changer must be
-   `promoted` in `research.world_changers`. **It is `proposed`** — the same
-   open item already logged below ("The Mapper's anchor thesis was never
-   promoted"). `first_strategy.py:52` claims "promoted 2026-07-18"; the
-   database disagrees, and the database is right.
+1. **Archetype-conditional Evaluator gates.** *In flight —
+   `phase1/archetype-conditional-evaluator-gates`.* The Evaluator could
+   evaluate exactly one archetype, `infra-graph-play`, which the vision assigns
+   to "biases and sizing modifiers — not entry triggers." The class of strategy
+   the firm is designed to trade could not be submitted at all. Note this was
+   **two** gates, not the one ADR-0013 named: `_check_spec_hygiene` refused any
+   other archetype outright and ran *before* the anchor check.
+2. **Seed a real `technical-catalyst` strategy and evaluate it.** The first
+   evaluation whose gates match its archetype, and the first that can reach the
+   four verdict branches no real run has touched (`no-edge`,
+   `fails-friction-stress`, `below-sharpe-floor`, `promote`). It also produces
+   the fresh `research.strategy.verdict` needed to live-verify PR #100's
+   Librarian fix, which is unit-tested only — `start_id` applies at
+   consumer-group creation, so the two acked verdicts cannot be replayed.
+3. **Evaluator trigger.** It is tools-profile and manual-only, so no Research is
+   automatic regardless of how many lenses exist. This is the item that turns
+   "we did it once by hand" into "the Research Department is functional."
 
-**The trap, and the reason `--dry-run` is not optional.** A dead anchor does
-*not* refuse. `map_verdict` returns `KILL / anchor-not-live` with
-`engine_ran=False` and zero trades (`verdict.py:61`), and a non-dry-run
-`commit()` **transitions the seed to `killed` on the registry**
-(`pipeline.py:376`). Because `shrap-strategy-seed load-first` is idempotent on
-`spec_hash`, it will then refuse to recreate the row — the firm's only
-strategy would be stuck killed, needing a manual registry transition to
-recover. That kill would also *look* like the milestone landing: a first
-verdict, persisted, with an evaluation card and published events. It would
-test nothing — the backtest never ran.
+Then: Hypothesis Generator (its spec predates ADR-0013 and allows only the two
+ADR-0007 archetypes — `technical-catalyst` must be added), Sweep Detector,
+Regime Router. Everything beyond is Phase 2.
 
-## THE FIRST-VERDICT RUNBOOK — one session, six steps
+**Open rulings, Mike's:**
+
+- **KI-015** — the friction stress is a scenario, not a bound. The control probe
+  scored *better* stressed (+0.048) than base (−0.157), because a +1 day lag can
+  skip false signals on a whipsawing rule. Not exploitable (`base_sharpe <= 0`
+  is checked first), but the card's wording implies a floor it does not provide.
+  Four options recorded in `known-issues.md`.
+- **Universe lock-in** and the **Regime Classifier calibration** items carried
+  from `CLAUDE.md`'s review queue.
+
+**Carried over, deliberately not done:** KI-008 auto-attach, KI-009's taxonomy
+question (should `cost-curve` admit leading indicators, or is industrial
+scale-up a separate archetype — Mike's artifact), KI-010's freshness /
+zero-new-rows alerting, and logging the Valar criticality item as a thesis
+observation against kill criterion 3.
+
+**Operational, on the Dell:** the `git reset --hard origin/main` to clear the
+local divergence, and `git config --global user.name/user.email`. Keep the Dell
+pull-only — no write token on a production deploy box.
+
+---
+
+## THE FIRST-VERDICT RUNBOOK — executed 2026-07-27/28 (historical)
+
+Kept as the record of how the loop was closed, and because four of its
+operational lessons are now in
+`docs/runbooks/deploying-after-a-code-change.md`: `docker compose run` never
+rebuilds; do not override the container user; a rebuild must name *every*
+service the change touched; and restarting a stream consumer does not replay
+acked events.
 
 **Why this is the whole priority.** The sprint's *minimum* success criteria
 (`docs/00-vision.md:40`) are three items. Two are met: Mike's daily time is
@@ -249,6 +269,15 @@ sudo docker compose logs --tail 50 strategy-librarian
 # the registry. This is the loop closing — it has idled since PR #40 waiting
 # for exactly this event.
 ```
+
+> **Two claims in this block were wrong, corrected in place rather than
+> deleted.** (1) The Librarian had not "idled since PR #40" — it had never been
+> deployed at all (KI-014), and it is a *second* consumer: the Evaluator does
+> its own registry transition inside `commit()` and never delegates. (2) The
+> dry-run output did not carry an anchor line for step 5's "READ THE ANCHOR
+> LINE" instruction to read; `summary()` omitted it, so the check was only
+> possible by opening the card. `anchor=` was added to the summary by the
+> archetype-gates card.
 
 **How to read the result, and why a kill is the win.** The seed is a plain
 MA(20/100) crossover on one ETF; it flips position a handful of times over five

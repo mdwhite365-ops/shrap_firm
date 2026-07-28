@@ -90,7 +90,8 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Evaluate one hypothesis-stage strategy end to end: walk-forward + "
             "friction stress + verdict, promoting to paper or killing on the "
-            "strategy registry. Anchor freshness is checked against "
+            "strategy registry. Anchor freshness applies only to archetypes "
+            "whose policy requires an anchor, and is checked against "
             "research.world_changers only (bottleneck leg deferred)."
         )
     )

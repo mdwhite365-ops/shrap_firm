@@ -14,6 +14,13 @@ Three outcomes, in strict priority order (spec Processing steps 6, 9-10):
 The mapping takes ``anchor_fresh`` as an explicit input so it is a total,
 side-effect-free function; the pipeline still short-circuits a dead anchor
 before it ever runs the engine, but the verdict function does not assume that.
+
+``anchor_required`` exists because a world-changer anchor is a Framework #1
+construct, not a universal one (ADR-0013). A ``technical-catalyst`` strategy is
+correctly anchor-*less*, and applying the anchor gate to it would kill it
+without the backtest ever running. The two inputs are kept separate rather than
+collapsed into one flag so that "no anchor was required" and "the anchor was
+live" stay distinguishable in the persisted evaluation row.
 """
 
 from __future__ import annotations
@@ -50,15 +57,20 @@ def map_verdict(
     stress_sharpe: float,
     min_trades: int,
     sharpe_floor: float,
+    anchor_required: bool = True,
 ) -> Verdict:
     """Map measured metrics to a verdict. Pure; deterministic; no tuning.
 
     Priority: dead anchor and the trade-count gate kill first (regardless of
     headline metrics), then absence of edge, then failure to survive friction,
     then the sub-floor hold, then promote.
+
+    ``anchor_required`` defaults to ``True`` so the anchor-bearing archetypes
+    keep their existing behaviour unchanged; only an archetype whose policy
+    says it carries no anchor passes ``False``.
     """
 
-    if not anchor_fresh:
+    if anchor_required and not anchor_fresh:
         return Verdict(VERDICT_KILL, REASON_ANCHOR_NOT_LIVE)
     if total_trades < min_trades:
         return Verdict(VERDICT_KILL, REASON_INSUFFICIENT_TRADES)

@@ -331,27 +331,47 @@ because no artifact tracks ADR implementation status.
 
 ## KI-013 — Evaluator gates are Framework #1 constructs applied to all strategies
 
-**Status:** Open, found 2026-07-27. Blocking for ADR-0013; see its Consequences.
+**Status:** Anchor leg **resolved 2026-07-28**; trade-count leg **closed as
+won't-fix**, superseded by a protocol question (below). Found 2026-07-27.
 
-Two gates in `research/strategy_evaluator/` are written as universal but are
+Two gates in `research/strategy_evaluator/` were written as universal but were
 Framework #1-specific:
 
-1. **Anchor freshness** (`pipeline.py:293`). Every strategy is checked for a
-   `promoted` world-changer anchor, and a missing one maps to
-   `KILL / anchor-not-live` with `engine_ran=False`. A `technical-catalyst`
-   strategy is correctly anchor-*less*; under the current code it would be
-   killed without the backtest ever running.
+1. **Anchor freshness.** Every strategy was checked for a `promoted`
+   world-changer anchor, and a missing one mapped to `KILL / anchor-not-live`
+   with `engine_ran=False`. A `technical-catalyst` strategy is correctly
+   anchor-*less*, so it would be killed without the backtest ever running.
 2. **`DEFAULT_MIN_TRADES = 150`** (`engine.py:51`). Calibrated for the vision's
    fast layer — "fast loops, many trades." Applied uniformly it guarantees that
    every structural strategy dies on trade count regardless of edge, which is
    why the seed strategy's write-up predicts its own death.
 
-Neither is wrong; both are miscategorized as universal. Until they are
-archetype-conditional the Evaluator can only meaningfully evaluate a class of
-strategy the firm cannot yet produce.
+**The anchor leg was worse than recorded here, and worse than ADR-0013
+described it.** Both documents named the anchor check as the blocker. In fact
+`_check_spec_hygiene` refused any archetype but `infra-graph-play` outright, and
+it ran *before* the anchor check — so a `technical-catalyst` record raised
+`SpecHygieneError` and produced no verdict at all, rather than the fake
+`anchor-not-live` kill both documents predicted. Two gates, not one.
 
-**Mitigation:** make both archetype-conditional. The min-trades band per
-archetype is a calibration decision and is Mike's.
+**Fix (2026-07-28).** Gate applicability is now declared per archetype in
+`ARCHETYPE_POLICIES` (`pipeline.py`) — `technical-catalyst` is evaluable and
+anchor-less, `infra-graph-play` keeps the anchor gate unchanged,
+`bottleneck-rotation` stays refused, and an archetype absent from the table is
+refused fail-closed. `research.evaluations` gained `anchor_required` so
+"no anchor was required" and "the anchor is dead" remain distinguishable in the
+ledger; cards and the CLI summary render `live` / `not-live` / `not-required`.
+
+**The trade-count leg is not being fixed, and the earlier mitigation was
+wrong.** "A min-trades band per archetype, Mike's calibration decision" assumed
+the gate was too strict for structural strategies. The first three real
+evaluations said otherwise: fold 5 of the seed produced an annualized Sharpe of
+1.712 from **one trade**, and three parameter pairs on the same rule and ticker
+gave 20/43/145 trades against Sharpes of 0.415 / −0.157 / 0.745 — monotonic in
+count, sign-changing in Sharpe. A lower floor would not evaluate structural
+strategies more fairly; it would promote noise with more confidence. The real
+question is what protocol judges a multi-year thesis at all (event study,
+realized-vs-thesis) — tracked as its own card, not as a threshold. 150 stands
+for both archetypes.
 
 ## KI-015 — The friction stress is a scenario, not a worst-case bound
 
