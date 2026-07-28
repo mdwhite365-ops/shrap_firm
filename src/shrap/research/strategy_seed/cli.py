@@ -40,8 +40,11 @@ from shrap.research.strategy_seed.probe_strategies import (
     probe_record,
 )
 from shrap.research.strategy_seed.technical_strategies import (
+    MOMENTUM_SEEDS,
+    MOMENTUM_SEEDS_BY_KEY,
     TECHNICAL_SEEDS,
     TECHNICAL_SEEDS_BY_KEY,
+    momentum_record,
     technical_record,
 )
 
@@ -192,6 +195,56 @@ async def load_technical(registry: RegistryPort, key: str) -> str:
     )
 
 
+async def load_momentum(registry: RegistryPort, key: str) -> str:
+    """Insert one cross-sectional momentum seed at ``hypothesis``, idempotently.
+
+    Unlike every other seed this one declares the whole launch universe, which
+    is what lets it clear the trade-count gate honestly: the engine counts a
+    trade per ticker per weight change, so breadth supplies sample size that a
+    single-name daily rule cannot.
+    """
+
+    seed = MOMENTUM_SEEDS_BY_KEY.get(key)
+    if seed is None:
+        available = ", ".join(sorted(MOMENTUM_SEEDS_BY_KEY))
+        raise SystemExit(f"refused: unknown momentum seed {key!r}; available: {available}")
+    record = momentum_record(seed)
+    existing = await registry.get_by_spec_hash(record.spec_hash)
+    if existing is not None:
+        return (
+            f"already present: {existing.strategy_id} ({existing.name}) "
+            f"status={existing.status} — skipped (no duplicate)"
+        )
+    inserted = await registry.register(
+        record,
+        reason="Mike-seed: cross-sectional momentum over the launch universe",
+        actor=SEED_ACTOR,
+        trigger_kind=SEED_TRIGGER_KIND,
+    )
+    if not inserted:
+        return f"already present: {record.strategy_id} — skipped (strategy_id conflict)"
+    return (
+        f"loaded: {record.strategy_id} ({record.name}) at status={record.status} "
+        f"over {len(seed.tickers)} tickers; evaluate with "
+        f"`shrap-strategy-evaluate --strategy-id {record.strategy_id} --dry-run`\n"
+        f"NOTE: every one of those {len(seed.tickers)} tickers needs daily bars in "
+        f"market_data.daily_bars and tier 'active' in research.universe_tiers, or the "
+        f"evaluation is REFUSED (not killed) with the first offending ticker named."
+    )
+
+
+def render_momentum_catalogue() -> str:
+    """List the available cross-sectional seeds without touching the database."""
+
+    lines = [f"Momentum seeds: {len(MOMENTUM_SEEDS)}"]
+    for s in MOMENTUM_SEEDS:
+        lines.append(
+            f"  {s.key:<24} lookback={s.lookback} skip={s.skip} top_n={s.top_n} "
+            f"tickers={len(s.tickers)}  {s.strategy_id}"
+        )
+    return "\n".join(lines)
+
+
 def render_technical_catalogue() -> str:
     """List the available Framework #3 seeds without touching the database."""
 
@@ -215,6 +268,8 @@ async def _run(args: argparse.Namespace) -> str:
         return render_probe_catalogue()
     if args.action == "list-technical":
         return render_technical_catalogue()
+    if args.action == "list-momentum":
+        return render_momentum_catalogue()
     pool = await create_asyncpg_pool(args.dsn)
     registry = PostgresStrategyRegistry(pool)
     try:
@@ -226,6 +281,8 @@ async def _run(args: argparse.Namespace) -> str:
             return await load_probe(registry, args.key)
         if args.action == "load-technical":
             return await load_technical(registry, args.key)
+        if args.action == "load-momentum":
+            return await load_momentum(registry, args.key)
         # list
         return render_list(await registry.list_all())
     finally:

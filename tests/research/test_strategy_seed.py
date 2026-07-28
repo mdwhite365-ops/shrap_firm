@@ -11,11 +11,14 @@ from typing import Any
 
 import pytest
 
+from shrap.research.strategy_evaluator.cross_sectional import CrossSectionalMomentumStrategy
 from shrap.research.strategy_evaluator.pipeline import (
     ARCHETYPE_INFRA_GRAPH_PLAY,
     ARCHETYPE_POLICIES,
     ARCHETYPE_TECHNICAL_CATALYST,
+    RULE_CROSS_SECTIONAL_MOMENTUM,
     EvaluationPipeline,
+    _default_strategy_factory,
     _validate_param_bounds,
 )
 from shrap.research.strategy_evaluator.reference_strategy import (
@@ -25,9 +28,11 @@ from shrap.research.strategy_evaluator.reference_strategy import (
 from shrap.research.strategy_registry import STATUS_HYPOTHESIS, StrategyRecord
 from shrap.research.strategy_seed.cli import (
     load_first,
+    load_momentum,
     load_probe,
     load_technical,
     render_list,
+    render_momentum_catalogue,
     render_probe_catalogue,
     render_technical_catalogue,
 )
@@ -47,7 +52,11 @@ from shrap.research.strategy_seed.probe_strategies import (
     probe_record,
 )
 from shrap.research.strategy_seed.technical_strategies import (
+    MOMENTUM_SEEDS,
     TECHNICAL_SEEDS,
+    compute_momentum_spec_hash,
+    momentum_kill_criteria,
+    momentum_record,
     technical_record,
 )
 from shrap.research.strategy_seed.technical_strategies import (
@@ -402,3 +411,125 @@ def test_render_technical_catalogue_lists_every_seed() -> None:
         assert seed.key in output
         assert seed.strategy_id in output
         assert seed.ticker in output
+
+
+# --- cross-sectional momentum seed -------------------------------------------
+
+
+def test_momentum_seed_trades_the_whole_launch_universe() -> None:
+    """Breadth is what lets a daily rule clear the trade-count gate honestly.
+
+    The engine counts a trade per ticker per weight change, so 50 names supply
+    the sample size a single-name daily rule cannot — 89 trades on one ticker
+    against 28,139 on fifty, measured in PR #110.
+    """
+
+    launch = {entry.ticker for entry in LAUNCH_LIST}
+    for seed in MOMENTUM_SEEDS:
+        record = momentum_record(seed)
+        assert set(record.tickers["long"]) == launch
+        assert record.tickers["short"] == []
+
+
+def test_momentum_seed_tickers_track_the_launch_list_rather_than_a_copy() -> None:
+    """A hand-listed universe would drift out of step with Tier 3 silently."""
+
+    for seed in MOMENTUM_SEEDS:
+        assert set(seed.tickers) == {entry.ticker for entry in LAUNCH_LIST}
+
+
+def test_momentum_seed_names_the_cross_sectional_rule() -> None:
+    for seed in MOMENTUM_SEEDS:
+        record = momentum_record(seed)
+        assert record.spec["rule"] == RULE_CROSS_SECTIONAL_MOMENTUM
+        assert record.archetype == ARCHETYPE_TECHNICAL_CATALYST
+        assert record.anchor == {}
+
+
+def test_momentum_seed_builds_the_rule_it_declares() -> None:
+    for seed in MOMENTUM_SEEDS:
+        record = momentum_record(seed)
+        rule = _default_strategy_factory(record, list(seed.tickers))
+        assert isinstance(rule, CrossSectionalMomentumStrategy)
+        assert (rule.lookback, rule.skip, rule.top_n) == (seed.lookback, seed.skip, seed.top_n)
+
+
+def test_momentum_seed_passes_spec_hygiene_for_every_ticker() -> None:
+    for seed in MOMENTUM_SEEDS:
+        record = momentum_record(seed)
+        assert _pipeline()._check_spec_hygiene(record) == sorted(seed.tickers)
+        _validate_param_bounds(record.spec)
+
+
+def test_momentum_kill_criteria_name_costs_and_the_benchmark() -> None:
+    """The two ways this specific effect is most likely to die.
+
+    A monthly top-decile rotation over 50 names has high turnover, and momentum
+    is small enough per name that friction is the likeliest killer. Losing to
+    buy-and-hold is the other — and now a measurable kill, not a hunch.
+    """
+
+    joined = " ".join(momentum_kill_criteria()).lower()
+    assert "cost" in joined
+    assert "buy-and-hold" in joined
+    assert "information ratio" in joined
+    assert "world-changer" not in joined
+
+
+def test_momentum_seed_id_is_a_real_ulid_distinct_from_every_other_seed() -> None:
+    crockford = set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+    others = {s.strategy_id for s in PROBE_SEEDS} | {s.strategy_id for s in TECHNICAL_SEEDS}
+    others.add(STRATEGY_ID)
+    for seed in MOMENTUM_SEEDS:
+        assert len(seed.strategy_id) == 26
+        assert set(seed.strategy_id) <= crockford
+        assert seed.strategy_id not in others
+
+
+def test_momentum_spec_hash_is_distinct_from_every_other_seed() -> None:
+    hashes = {compute_momentum_spec_hash(s) for s in MOMENTUM_SEEDS}
+    others = {compute_spec_hash(s) for s in PROBE_SEEDS}
+    others |= {technical_seed_hash(s) for s in TECHNICAL_SEEDS}
+    others.add(SPEC_HASH)
+    assert len(hashes) == len(MOMENTUM_SEEDS)
+    assert not (hashes & others)
+
+
+async def test_load_momentum_is_idempotent_and_coexists_with_every_seed() -> None:
+    registry = FakeRegistry()
+    await load_first(registry)
+    for probe in PROBE_SEEDS:
+        await load_probe(registry, probe.key)
+    for tech in TECHNICAL_SEEDS:
+        await load_technical(registry, tech.key)
+
+    first = await load_momentum(registry, "xs-momentum-126-21-10")
+    assert first.startswith("loaded:")
+    second = await load_momentum(registry, "xs-momentum-126-21-10")
+    assert second.startswith("already present:")
+
+    expected = 1 + len(PROBE_SEEDS) + len(TECHNICAL_SEEDS) + len(MOMENTUM_SEEDS)
+    assert len(registry.by_id) == expected
+    assert len(registry.by_hash) == expected
+
+
+async def test_load_momentum_warns_about_its_data_prerequisites() -> None:
+    """50 tickers means 50 chances to be refused; the message must say so."""
+
+    out = await load_momentum(FakeRegistry(), "xs-momentum-126-21-10")
+    assert "daily bars" in out
+    assert "universe_tiers" in out
+    assert "REFUSED" in out
+
+
+async def test_load_momentum_refuses_an_unknown_key() -> None:
+    with pytest.raises(SystemExit, match="unknown momentum seed"):
+        await load_momentum(FakeRegistry(), "nope")
+
+
+def test_render_momentum_catalogue_lists_every_seed() -> None:
+    out = render_momentum_catalogue()
+    assert f"Momentum seeds: {len(MOMENTUM_SEEDS)}" in out
+    for seed in MOMENTUM_SEEDS:
+        assert seed.key in out
+        assert seed.strategy_id in out
