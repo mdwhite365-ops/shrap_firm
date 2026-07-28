@@ -288,11 +288,31 @@ the loop-closing work precedes the new lenses in Consequences.
   `KILL / anchor-not-live` with `engine_ran=False`. A `technical-catalyst`
   strategy has no anchor by design and would be killed without the backtest
   ever running. This is the single hard code dependency in this ADR.
+
+  > **Correction, 2026-07-28 (implementation).** "The single hard code
+  > dependency" understated it: there were two gates, and the anchor check was
+  > the *second*. `_check_spec_hygiene` refused every archetype but
+  > `infra-graph-play` and ran first, so a `technical-catalyst` record raised
+  > `SpecHygieneError` and produced no verdict at all — not the fake
+  > `anchor-not-live` kill described above. Both are fixed together by
+  > `ARCHETYPE_POLICIES`; the sequencing below is unaffected. Left in place
+  > rather than edited away because the gap between what the ADR predicted and
+  > what the code did is the reason the policy is now a table instead of a
+  > scatter of conditionals.
 - **`DEFAULT_MIN_TRADES = 150` becomes archetype-conditional or is documented
   as Framework #3-calibrated.** It is currently applied uniformly, which
   guarantees every structural strategy dies on it. Either the gate varies by
   archetype or Framework #1 strategies are evaluated on a different protocol.
   This is a calibration decision and is Mike's.
+
+  > **Resolved 2026-07-28 by evidence, taking the second branch.** The first
+  > three real evaluations showed Sharpe is noise at these trade counts
+  > (annualized 1.712 from one trade in fold 5; 20/43/145 trades giving
+  > 0.415 / −0.157 / 0.745 on the same rule and ticker — monotonic in count,
+  > sign-changing in Sharpe). A per-archetype floor would report that noise
+  > with more confidence rather than measuring structural strategies more
+  > fairly. 150 stays universal and Framework #1 needs a *different protocol*,
+  > which is now its own card. See `docs/research/eval-protocol.md` §6.
 
 ### Implementation debt this ADR makes explicit
 

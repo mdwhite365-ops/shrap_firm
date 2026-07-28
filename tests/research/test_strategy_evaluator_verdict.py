@@ -25,6 +25,7 @@ def _v(
     total_trades: int = 200,
     base_sharpe: float = 1.5,
     stress_sharpe: float = 0.5,
+    anchor_required: bool = True,
 ) -> tuple[str, str]:
     verdict = map_verdict(
         anchor_fresh=anchor_fresh,
@@ -33,6 +34,7 @@ def _v(
         stress_sharpe=stress_sharpe,
         min_trades=_MIN_TRADES,
         sharpe_floor=_FLOOR,
+        anchor_required=anchor_required,
     )
     return verdict.verdict, verdict.reason
 
@@ -80,3 +82,47 @@ def test_floor_is_inclusive() -> None:
     # Exactly at the floor promotes; a hair below holds.
     assert _v(base_sharpe=_FLOOR, stress_sharpe=0.1)[0] == VERDICT_PROMOTE
     assert _v(base_sharpe=_FLOOR - 1e-9, stress_sharpe=0.1)[0] == VERDICT_HOLD
+
+
+# --- anchor_required (ADR-0013) ----------------------------------------------
+
+
+def test_anchor_gate_is_skipped_when_no_anchor_is_required() -> None:
+    """An anchor-less archetype must be judged on its metrics, not its anchor."""
+
+    assert _v(anchor_required=False, anchor_fresh=False) == (VERDICT_PROMOTE, REASON_PROMOTE)
+
+
+def test_anchor_required_defaults_to_true() -> None:
+    """Every existing caller keeps the gate it had; only an opt-out removes it.
+
+    A default of False would silently drop the Framework #1 falsifier from any
+    call site that had not been updated.
+    """
+
+    assert (
+        map_verdict(
+            anchor_fresh=False,
+            total_trades=200,
+            base_sharpe=1.5,
+            stress_sharpe=0.5,
+            min_trades=_MIN_TRADES,
+            sharpe_floor=_FLOOR,
+        ).reason
+        == REASON_ANCHOR_NOT_LIVE
+    )
+
+
+def test_skipping_the_anchor_gate_does_not_skip_any_other_gate() -> None:
+    """The exemption is scoped to the anchor and nothing else."""
+
+    assert _v(anchor_required=False, anchor_fresh=False, total_trades=149)[1] == (
+        REASON_INSUFFICIENT_TRADES
+    )
+    assert _v(anchor_required=False, anchor_fresh=False, base_sharpe=0.0)[1] == REASON_NO_EDGE
+    assert _v(anchor_required=False, anchor_fresh=False, stress_sharpe=0.0)[1] == (
+        REASON_FAILS_FRICTION_STRESS
+    )
+    assert _v(anchor_required=False, anchor_fresh=False, base_sharpe=0.5)[1] == (
+        REASON_BELOW_SHARPE_FLOOR
+    )

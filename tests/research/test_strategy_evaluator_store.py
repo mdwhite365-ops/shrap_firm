@@ -7,10 +7,12 @@ issues the expected SQL and the readers parse rows into the right shapes.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, date, datetime
 from typing import Any
 
 from shrap.research.strategy_evaluator.store import (
+    ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL,
     CREATE_EVALUATIONS_TABLE_SQL,
     INSERT_EVALUATION_SQL,
     SELECT_DAILY_BARS_SQL,
@@ -81,6 +83,7 @@ async def test_insert_evaluation_serializes_jsonb_and_binds_args() -> None:
         protocol_version="0.1",
         verdict="promote",
         reason="promote-criteria-met",
+        anchor_required=True,
         anchor_fresh=True,
         total_trades=210,
         from_stage="hypothesis",
@@ -98,11 +101,41 @@ async def test_insert_evaluation_serializes_jsonb_and_binds_args() -> None:
     args = calls[0]
     assert args[0] == "01EVAL"
     assert args[4] == "promote"
-    assert args[7] == 210
+    assert args[6] is True  # anchor_required
+    assert args[8] == 210  # total_trades
     # aggregate/fold/stress/config are json-encoded strings for ::jsonb cast.
-    assert json.loads(str(args[10]))["trade_count"] == 210
-    assert json.loads(str(args[11]))[0]["index"] == 0
-    assert json.loads(str(args[13]))["n_folds"] == 6
+    assert json.loads(str(args[11]))["trade_count"] == 210
+    assert json.loads(str(args[12]))[0]["index"] == 0
+    assert json.loads(str(args[14]))["n_folds"] == 6
+
+
+def test_insert_sql_placeholders_match_the_column_list() -> None:
+    """Positional binds drift silently; a column added mid-list shifts the rest.
+
+    Adding ``anchor_required`` in the middle of the INSERT is exactly the change
+    that renumbers every later ``$N``, so the arity is asserted against the SQL
+    itself rather than trusted.
+    """
+
+    columns = INSERT_EVALUATION_SQL.split("(", 1)[1].split(")", 1)[0]
+    n_columns = len([c for c in columns.split(",") if c.strip()])
+    placeholders = {int(m) for m in re.findall(r"\$(\d+)", INSERT_EVALUATION_SQL)}
+    assert placeholders == set(range(1, n_columns + 1))
+
+
+async def test_ensure_schema_backfills_anchor_required_on_existing_tables() -> None:
+    """The column must arrive by ALTER, not only in the CREATE.
+
+    ``CREATE TABLE IF NOT EXISTS`` is a no-op against the Dell's existing
+    ``research.evaluations``, so a column declared only there would never appear
+    in production and every insert would fail on an unknown column.
+    """
+
+    pool = FakePool()
+    store = PostgresEvaluationStore(pool)  # type: ignore[arg-type]
+    await store.ensure_schema()
+    assert ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL in _executed_sql(pool.conn)
+    assert "DEFAULT TRUE" in ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL
 
 
 async def test_world_changer_status_reads_status() -> None:

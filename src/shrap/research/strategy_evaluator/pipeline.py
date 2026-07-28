@@ -13,6 +13,12 @@ is exact:
   card, and the ``research.strategy.verdict`` / ``research.strategy.killed``
   events. ``--dry-run`` simply never calls this.
 
+Gates are **archetype-conditional**, not universal (ADR-0013). Which of them
+apply is declared once in :data:`ARCHETYPE_POLICIES` and nowhere else, because
+the previous arrangement — gates written as global that were in fact Framework
+#1 constructs — made a whole class of strategy unevaluable without anything in
+the code saying so.
+
 Failure taxonomy (deliberate — see ``docs/research/eval-protocol.md``):
 
 - **Refusal** (:class:`SpecHygieneError`): the spec is malformed or not yet
@@ -72,10 +78,9 @@ DEFAULT_TRIGGER = "on-demand"
 
 STREAM_STRATEGY_VERDICT = "research.strategy.verdict"
 
-# The only archetype this card can evaluate; bottleneck-rotation is deferred
-# until Bottleneck Scout populates research.bottlenecks (resequencing ruling).
 ARCHETYPE_INFRA_GRAPH_PLAY = "infra-graph-play"
 ARCHETYPE_BOTTLENECK_ROTATION = "bottleneck-rotation"
+ARCHETYPE_TECHNICAL_CATALYST = "technical-catalyst"
 
 # World-changer anchor is referenced by one of these keys in the strategy's
 # anchor JSONB (seam convention — see the protocol doc).
@@ -83,12 +88,61 @@ ANCHOR_WORLD_CHANGER_KEYS = ("world_changer_id", "candidate_id")
 WORLD_CHANGER_LIVE_STATUS = "promoted"
 TIER_ACTIVE = "active"
 
+
+@dataclass(frozen=True, slots=True)
+class ArchetypePolicy:
+    """Which Evaluator gates apply to one hypothesis archetype.
+
+    Before ADR-0013 the gates were written as universal and were in fact
+    Framework #1 constructs: every strategy was required to be
+    ``infra-graph-play`` *and* to carry a live world-changer anchor. A
+    ``technical-catalyst`` strategy is anchor-less by design, so under the old
+    code it was refused outright by spec hygiene — not even reaching the anchor
+    check, let alone the backtest. This table makes the categorisation explicit
+    and per-archetype instead of implicit and global.
+    """
+
+    archetype: str
+    requires_anchor: bool
+    deferred_reason: str | None = None
+    """Non-``None`` means refuse: the archetype is recognised but not yet
+    evaluable because a dependency it needs does not exist."""
+
+
+ARCHETYPE_POLICIES: dict[str, ArchetypePolicy] = {
+    ARCHETYPE_INFRA_GRAPH_PLAY: ArchetypePolicy(
+        archetype=ARCHETYPE_INFRA_GRAPH_PLAY,
+        # Framework #1. The thesis IS the world-changer, so an anchor that is no
+        # longer promoted means the strategy's reason to exist has been falsified.
+        requires_anchor=True,
+    ),
+    ARCHETYPE_TECHNICAL_CATALYST: ArchetypePolicy(
+        archetype=ARCHETYPE_TECHNICAL_CATALYST,
+        # Framework #3 (ADR-0013). Price/flow structure is the whole thesis;
+        # there is no world-changer to anchor to and inventing one to satisfy
+        # the gate is the failure this policy exists to prevent.
+        requires_anchor=False,
+    ),
+    ARCHETYPE_BOTTLENECK_ROTATION: ArchetypePolicy(
+        archetype=ARCHETYPE_BOTTLENECK_ROTATION,
+        requires_anchor=True,
+        deferred_reason=(
+            "research.bottlenecks has no rows until Bottleneck Scout exists "
+            "(resequencing ruling 2026-07-23)"
+        ),
+    ),
+}
+
 DEFAULT_CARD_ROOT = Path("docs/strategies/evaluations")
 
 # The record → signal-code binding. Until the strategy-authoring system exists
-# (a DSL / plugin registry — deferred), an infra-graph-play record is evaluated
-# by instantiating the REFERENCE trend rule from its params. This factory is the
-# seam that later card replaces; tests inject their own signal through it.
+# (a DSL / plugin registry — deferred), EVERY record is evaluated by
+# instantiating the REFERENCE trend rule from its params, whatever its
+# archetype. That is adequate for both archetypes evaluable today — a moving
+# average crossover is as legitimate an expression of `technical-catalyst` as of
+# `infra-graph-play` — but it means the archetype currently selects gates, not
+# code. This factory is the seam a later card replaces; tests inject their own
+# signal through it.
 StrategyFactory = Callable[[StrategyRecord, list[str]], StrategySignal]
 
 
@@ -147,6 +201,7 @@ class EvaluationStorePort(Protocol):
         protocol_version: str,
         verdict: str,
         reason: str,
+        anchor_required: bool,
         anchor_fresh: bool,
         total_trades: int,
         from_stage: str,
@@ -172,6 +227,7 @@ class EvaluationOutcome:
     protocol_version: str
     verdict: str
     reason: str
+    anchor_required: bool
     anchor_fresh: bool
     anchor_status: str | None
     total_trades: int
@@ -189,12 +245,26 @@ class EvaluationOutcome:
     card_markdown: str
 
     def summary(self) -> str:
+        # `anchor=` is in the one-liner because on a --dry-run it is the field
+        # you must read before dropping the flag: a dead anchor produces a
+        # verdict that looks like a real kill but never ran the engine. The
+        # previous summary omitted it, so the check the runbook asked for could
+        # only be made by opening the card.
         return (
             f"{self.verdict} ({self.reason}): {self.strategy_id} "
             f"[{self.from_stage} -> {self.to_stage or self.from_stage}] "
+            f"anchor={self.anchor_state} engine_ran={self.engine_ran} "
             f"trades={self.total_trades} sharpe={self.base_sharpe:.3f} "
             f"stress_sharpe={self.stress_sharpe:.3f} protocol={self.protocol_version}"
         )
+
+    @property
+    def anchor_state(self) -> str:
+        """``live`` / ``not-live`` / ``not-required`` — never a bare boolean."""
+
+        if not self.anchor_required:
+            return "not-required"
+        return "live" if self.anchor_fresh else "not-live"
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +299,26 @@ def _extract_tickers(tickers: object) -> list[str]:
             seen.add(sym)
             ordered.append(sym)
     return ordered
+
+
+def _policy_for(archetype: str) -> ArchetypePolicy:
+    """Resolve an archetype's gate policy, or refuse.
+
+    Fail-closed on an unknown archetype: a strategy whose gates we have not
+    decided on is not evaluable, and guessing a policy for it is exactly the
+    silent miscategorisation ADR-0013 was written to stop.
+    """
+
+    policy = ARCHETYPE_POLICIES.get(archetype)
+    if policy is None:
+        known = ", ".join(sorted(ARCHETYPE_POLICIES))
+        raise SpecHygieneError(
+            f"archetype {archetype!r} has no declared evaluation policy; "
+            f"known archetypes are {known}"
+        )
+    if policy.deferred_reason is not None:
+        raise SpecHygieneError(f"{archetype} is not evaluable yet: {policy.deferred_reason}")
+    return policy
 
 
 def _anchor_world_changer_id(anchor: Mapping[str, Any] | None) -> str | None:
@@ -287,16 +377,28 @@ class EvaluationPipeline:
                 f"only {STATUS_HYPOTHESIS!r}-stage strategies"
             )
 
+        policy = _policy_for(record.archetype)
         tickers = self._check_spec_hygiene(record)
         await self._check_tickers_tradeable(tickers)
 
-        anchor_id = _anchor_world_changer_id(record.anchor)
-        anchor_status = await self._reader.world_changer_status(anchor_id) if anchor_id else None
-        anchor_fresh = anchor_status == WORLD_CHANGER_LIVE_STATUS
+        anchor_status: str | None = None
+        anchor_fresh = False
+        if policy.requires_anchor:
+            anchor_id = _anchor_world_changer_id(record.anchor)
+            anchor_status = (
+                await self._reader.world_changer_status(anchor_id) if anchor_id else None
+            )
+            anchor_fresh = anchor_status == WORLD_CHANGER_LIVE_STATUS
+        # Otherwise the anchor is not consulted at all: no query, and no claim of
+        # freshness we did not measure. `anchor_fresh=False` alongside
+        # `anchor_required=False` is the honest pair — "not applicable", not
+        # "checked and dead". Any anchor such a record happens to declare is
+        # ignored rather than quietly re-imposed as a gate.
 
         ts = self._clock()
-        if not anchor_fresh:
+        if policy.requires_anchor and not anchor_fresh:
             verdict = map_verdict(
+                anchor_required=True,
                 anchor_fresh=False,
                 total_trades=0,
                 base_sharpe=0.0,
@@ -307,6 +409,7 @@ class EvaluationPipeline:
             return self._build_outcome(
                 record=record,
                 verdict=verdict,
+                anchor_required=True,
                 anchor_fresh=False,
                 anchor_status=anchor_status,
                 engine_ran=False,
@@ -329,7 +432,8 @@ class EvaluationPipeline:
             return self._build_outcome(
                 record=record,
                 verdict=verdict,
-                anchor_fresh=True,
+                anchor_required=policy.requires_anchor,
+                anchor_fresh=anchor_fresh,
                 anchor_status=anchor_status,
                 engine_ran=False,
                 total_trades=0,
@@ -343,7 +447,8 @@ class EvaluationPipeline:
             )
 
         verdict = map_verdict(
-            anchor_fresh=True,
+            anchor_required=policy.requires_anchor,
+            anchor_fresh=anchor_fresh,
             total_trades=result.aggregate.trade_count,
             base_sharpe=result.aggregate.sharpe,
             stress_sharpe=result.stress.sharpe,
@@ -353,7 +458,8 @@ class EvaluationPipeline:
         return self._build_outcome(
             record=record,
             verdict=verdict,
-            anchor_fresh=True,
+            anchor_required=policy.requires_anchor,
+            anchor_fresh=anchor_fresh,
             anchor_status=anchor_status,
             engine_ran=True,
             total_trades=result.aggregate.trade_count,
@@ -396,6 +502,7 @@ class EvaluationPipeline:
             protocol_version=outcome.protocol_version,
             verdict=outcome.verdict,
             reason=outcome.reason,
+            anchor_required=outcome.anchor_required,
             anchor_fresh=outcome.anchor_fresh,
             total_trades=outcome.total_trades,
             from_stage=outcome.from_stage,
@@ -461,16 +568,10 @@ class EvaluationPipeline:
         return streams
 
     def _check_spec_hygiene(self, record: StrategyRecord) -> list[str]:
-        if record.archetype == ARCHETYPE_BOTTLENECK_ROTATION:
-            raise SpecHygieneError(
-                "bottleneck-rotation is not evaluable yet: research.bottlenecks has no "
-                "rows until Bottleneck Scout exists (resequencing ruling 2026-07-23)"
-            )
-        if record.archetype != ARCHETYPE_INFRA_GRAPH_PLAY:
-            raise SpecHygieneError(
-                f"archetype {record.archetype!r} is not evaluable; this card evaluates "
-                f"only {ARCHETYPE_INFRA_GRAPH_PLAY!r}"
-            )
+        # Re-resolved here rather than passed in so hygiene is self-contained:
+        # it must refuse a bad archetype on its own, whoever calls it. The
+        # lookup is a pure dict read, so the second call in `evaluate` is free.
+        _policy_for(record.archetype)
         tickers = _extract_tickers(record.tickers)
         if not tickers:
             raise SpecHygieneError("strategy declares no tickers")
@@ -507,6 +608,7 @@ class EvaluationPipeline:
         *,
         record: StrategyRecord,
         verdict: Verdict,
+        anchor_required: bool,
         anchor_fresh: bool,
         anchor_status: str | None,
         engine_ran: bool,
@@ -530,6 +632,7 @@ class EvaluationPipeline:
             protocol_version=PROTOCOL_VERSION,
             verdict=verdict.verdict,
             reason=verdict.reason,
+            anchor_required=anchor_required,
             anchor_fresh=anchor_fresh,
             anchor_status=anchor_status,
             total_trades=total_trades,
@@ -567,6 +670,7 @@ def _with_card(outcome: EvaluationOutcome, card: str) -> EvaluationOutcome:
         protocol_version=outcome.protocol_version,
         verdict=outcome.verdict,
         reason=outcome.reason,
+        anchor_required=outcome.anchor_required,
         anchor_fresh=outcome.anchor_fresh,
         anchor_status=outcome.anchor_status,
         total_trades=outcome.total_trades,
@@ -626,8 +730,7 @@ def render_evaluation_card(outcome: EvaluationOutcome) -> str:
         f"- **Stage:** {outcome.from_stage} -> {outcome.to_stage or outcome.from_stage}",
         f"- **Protocol version:** {outcome.protocol_version}",
         f"- **Spec hash:** `{outcome.spec_hash}`",
-        f"- **Anchor:** {'live' if outcome.anchor_fresh else 'not live'} "
-        f"(world_changer status: {outcome.anchor_status or 'n/a'})",
+        f"- **Anchor:** {_anchor_line(outcome)}",
         f"- **Trigger:** {outcome.trigger}",
         f"- **Evaluated at:** {outcome.ts.isoformat()}",
         "",
@@ -681,6 +784,19 @@ def render_evaluation_card(outcome: EvaluationOutcome) -> str:
     return "\n".join(lines)
 
 
+def _anchor_line(outcome: EvaluationOutcome) -> str:
+    """The card's anchor line, which must not imply a check that never ran.
+
+    ``anchor_fresh=False`` means two different things depending on whether the
+    archetype requires an anchor at all, and a card that rendered both as
+    "not live" would report a dead thesis for a strategy that never had one.
+    """
+
+    if not outcome.anchor_required:
+        return "not required (archetype carries no world-changer anchor)"
+    return f"{outcome.anchor_state} (world_changer status: {outcome.anchor_status or 'n/a'})"
+
+
 def write_evaluation_card(root: Path, strategy_id: str, ts: datetime, markdown: str) -> Path:
     """Write the card to ``<root>/<strategy_id>/<ts>.md`` and return its path."""
 
@@ -706,12 +822,15 @@ def _pct(value: object) -> str:
 __all__ = [
     "ARCHETYPE_BOTTLENECK_ROTATION",
     "ARCHETYPE_INFRA_GRAPH_PLAY",
+    "ARCHETYPE_POLICIES",
+    "ARCHETYPE_TECHNICAL_CATALYST",
     "DEFAULT_CARD_ROOT",
     "DEFAULT_TRIGGER",
     "PRODUCED_BY",
     "REQUIRED_DISCLAIMER",
     "SCHEMA_VERSION",
     "STREAM_STRATEGY_VERDICT",
+    "ArchetypePolicy",
     "CommitResult",
     "EvaluationError",
     "EvaluationOutcome",

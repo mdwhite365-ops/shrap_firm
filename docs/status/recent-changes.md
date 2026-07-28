@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-27 (afternoon)
+**Last updated:** 2026-07-28 (archetype-conditional gates; #92-#101 backfilled)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -216,6 +216,58 @@ what exists.
   licensing throughput regresses to pre-2025 rates for two consecutive
   quarters. Motivating case: Valar Atomics Ward 250 criticality
   (DOE Reactor Pilot Program, 2026-06-18).
+
+## ARCHETYPE-CONDITIONAL EVALUATOR GATES — 2026-07-28
+
+ADR-0013's item 1, the sequencing's one hard code dependency. Before this the
+Evaluator could evaluate exactly **one** archetype, `infra-graph-play` — which
+`docs/00-vision.md` §7 assigns to "biases and sizing modifiers — **not** entry
+triggers." The class of strategy the firm is designed to trade could not be
+submitted for evaluation at all.
+
+**ADR-0013 understated the problem, and the code said so.** The ADR named the
+anchor gate as "the single hard code dependency." There were two, and the anchor
+check was the *second*: `_check_spec_hygiene` refused every archetype but
+`infra-graph-play` and ran three lines earlier, so a `technical-catalyst` record
+raised `SpecHygieneError` and produced no verdict at all — not the fake
+`KILL / anchor-not-live` the ADR predicted. The correction is annotated in the
+ADR rather than edited away, because that gap is the reason gate applicability
+is now one table (`ARCHETYPE_POLICIES`) instead of scattered conditionals.
+
+| Archetype | Evaluable | Anchor gate |
+|---|---|---|
+| `infra-graph-play` | yes | required (unchanged) |
+| `technical-catalyst` | **yes (new)** | not applicable |
+| `bottleneck-rotation` | refused — no Bottleneck Scout | required |
+| anything else | refused, fail-closed | — |
+
+**`anchor_fresh=False` now means two different things**, so
+`research.evaluations` gained `anchor_required` (by `ALTER … DEFAULT TRUE`,
+correct for every row written when `infra-graph-play` was the only evaluable
+archetype). Cards and the CLI summary render `live` / `not-live` /
+`not-required`, never a bare boolean: a card reading "anchor: not live" for a
+strategy that never claimed a thesis reports a falsification that did not
+happen. The dead-anchor set stays queryable as
+`anchor_required AND NOT anchor_fresh`.
+
+**This is not a loosening.** The gate is removed from the archetype it was never
+about: a `technical-catalyst` strategy's thesis is price and flow structure, so
+a world-changer anchor is not a weaker falsifier for it — it is not a falsifier
+at all, and requiring one produced anchors invented to satisfy the gate (see the
+honesty note in `probe_strategies.py`). Every other gate applies unchanged to
+both archetypes.
+
+**`DEFAULT_MIN_TRADES = 150` stays universal**, reversing the mitigation KI-013
+originally proposed. See the probe results below: a per-archetype floor would
+report noise with more confidence rather than measuring structural strategies
+more fairly. Framework #1 needs a different *protocol*, not a different
+threshold — its own card.
+
+Two smaller things found on the way: the dry-run summary never printed the
+anchor state, so step 5 of the first-verdict runbook asked for a check the
+output did not support (`anchor=` added to `summary()`); and the store's
+positional binds now have an arity test, since adding a column mid-INSERT
+renumbers every later `$N` silently.
 
 ## THE PROBE RESULTS — 2026-07-28 06:05 UTC
 
@@ -532,6 +584,33 @@ guarding, so it acks and skips an already-applied verdict by design
   keying on prompt alone meant a model swap selected nothing and the pass
   silently declined to test the change being made.
 - PR #91 — USASpending fetches new awards newest-first.
+- PR #92 — Session handoff: pivot from Framework #1 to the strategy loop.
+- PR #93 — Ollama Cloud authenticated by bearer token, not daemon signin.
+- PR #94 — The first-verdict runbook, corrected against the code (an earlier
+  draft named a compose service that does not exist, backfilled the wrong
+  tickers, and skipped both of the pipeline's hard prerequisites).
+- PR #95 — **ADR-0013** (fast layer, cross-lens synthesis, Framework #3) and
+  **ADR-0014** (Development Department descope to the three-tier compute
+  boundary; no autonomous capability may depend on Tier 3 — a human opening a
+  Claude Code session).
+- PR #96 — Evaluator card root wired through compose; the firm's first verdict
+  recorded.
+- PR #97 — Deploy-drift check (`infra/check-deploy-drift.sh`), plus KI-014: the
+  Strategy Librarian and Strategy Runner had never been deployed at all.
+- PR #98 — The drift check was hiding its own error. `2>/dev/null` swallowed a
+  `permission denied … docker.sock`; stderr is surfaced and the sudo cause
+  named. Shipped one message after agreeing not to hide unknowns.
+- PR #99 — The firm's first evaluation card.
+- PR #100 — Librarian logs verdict convergence at INFO rather than ERROR (the
+  Evaluator transitions in `commit()`, so the Librarian's second transition is
+  a designed no-op, not a failure); control/treatment probe seeds added.
+- PR #101 — Probe results: Sharpe is parameter noise at these trade counts.
+  KI-015 raised. `docs/runbooks/deploying-after-a-code-change.md` added after
+  the Librarian ran stale code — a rebuild must name *every* service the change
+  touched.
+**These ten (#92–#101) were backfilled on 2026-07-28.** They had gone unrecorded
+in both status docs — the identical gap that hid #72–80 and caused a runbook to
+be drafted against a repo state that had already moved.
 
 **Outcome, honestly: the funnel is still blocked, and the diagnosis moved
 twice.** The 9B local model was confabulating (it called a fission reactor
