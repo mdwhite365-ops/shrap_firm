@@ -939,6 +939,54 @@ services:
     networks:
       - shrap_net
 
+  # -------------------------------------------------------------------------
+  # Strategy Evaluator TRIGGER - the always-on half (ADR-0013 item 2). Same
+  # image as strategy-evaluator above, different command: instead of one
+  # evaluation on demand, it sweeps hypothesis-stage strategies on an interval
+  # and evaluates each through the identical pipeline. NOT tools-profile: this
+  # one is meant to be running.
+  #
+  # ADR-0015 - kills apply unattended, promotes do not. A promote is recorded
+  # (card + research.evaluations row + research.strategy.promotion-pending
+  # event) but the registry transition is withheld, because hypothesis -> paper
+  # is what makes the Strategy Runner start emitting trading signals for it.
+  # Applying a held promotion = running the ordinary CLI on the same strategy:
+  #   docker compose --profile tools run --rm strategy-evaluator \
+  #     shrap-strategy-evaluate --strategy-id 01STRAT...
+  #
+  # It shares the card bind mount, so the SAME one-time host chown documented
+  # on strategy-evaluator applies - and this service writes cards unattended,
+  # so a missing chown fails on a schedule rather than when someone is looking.
+  # -------------------------------------------------------------------------
+  strategy-evaluator-trigger:
+    build:
+      context: ../
+      dockerfile: infra/strategy-evaluator.Dockerfile
+    container_name: shrap_strategy_evaluator_trigger
+    command: ["shrap-strategy-evaluator-trigger"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      STRATEGY_EVALUATOR_TRIGGER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      STRATEGY_EVALUATOR_TRIGGER_REDIS_URL: "redis://redis:6379/0"
+      STRATEGY_EVALUATOR_TRIGGER_CARD_ROOT: "/cards"
+      # 15 minutes between sweeps; a strategy is not re-evaluated for 24h unless
+      # its spec_hash or the protocol version changes. The sweep interval is
+      # responsiveness; the re-evaluation floor is what stops duplicate work.
+      STRATEGY_EVALUATOR_TRIGGER_SWEEP_INTERVAL_SECONDS: "900"
+      STRATEGY_EVALUATOR_TRIGGER_REEVAL_INTERVAL_HOURS: "24"
+      STRATEGY_EVALUATOR_TRIGGER_LOG_LEVEL: "INFO"
+    volumes:
+      - ../docs/strategies/evaluations:/cards
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
   # Infrastructure Mapper (Month-2) - deterministic, run-on-demand (tools
   # profile, not started by default). Loads the hand-seeded world-changer graph
   # into research.graphs* and inspects graph state. Run pattern:

@@ -72,6 +72,10 @@ DEFAULT_TRIGGER = "on-demand"
 
 STREAM_STRATEGY_VERDICT = "research.strategy.verdict"
 
+# ADR-0015: where an unattended promote goes instead of the verdict stream.
+# Nothing consumes this to apply a transition — that is the whole point.
+STREAM_STRATEGY_PROMOTION_PENDING = "research.strategy.promotion-pending"
+
 # The only archetype this card can evaluate; bottleneck-rotation is deferred
 # until Bottleneck Scout populates research.bottlenecks (resequencing ruling).
 ARCHETYPE_INFRA_GRAPH_PLAY = "infra-graph-play"
@@ -206,6 +210,10 @@ class CommitResult:
     to_stage: str | None
     card_path: str
     streams: list[str] = field(default_factory=list)
+    promotion_held: bool = False
+    """A ``promote`` verdict was recorded but not applied — ADR-0015's review
+    gate. The strategy is still at ``hypothesis``; ``to_stage`` is what the
+    verdict *recommended*, not where the strategy now sits."""
 
 
 def _extract_tickers(tickers: object) -> list[str]:
@@ -366,14 +374,28 @@ class EvaluationPipeline:
             ts=ts,
         )
 
-    async def commit(self, outcome: EvaluationOutcome) -> CommitResult:
-        """Apply the verdict: transition, persist, write the card, publish."""
+    async def commit(
+        self, outcome: EvaluationOutcome, *, promote_requires_review: bool = False
+    ) -> CommitResult:
+        """Apply the verdict: transition, persist, write the card, publish.
+
+        ``promote_requires_review`` implements ADR-0015's asymmetry. With it
+        set, a ``promote`` verdict is fully *recorded* — card, evaluation row,
+        a ``promotion-pending`` event — but the registry transition is not
+        applied, so the strategy stays at ``hypothesis`` and does not reach the
+        Strategy Runner's trading path. Kills and holds are unaffected.
+
+        It defaults to ``False`` because the manual CLI *is* the review: a human
+        running ``shrap-strategy-evaluate`` has already made the decision the
+        gate exists to require. Only the unattended trigger passes ``True``.
+        """
 
         card_path = write_evaluation_card(
             self._card_root, outcome.strategy_id, outcome.ts, outcome.card_markdown
         )
+        promotion_held = promote_requires_review and outcome.verdict == VERDICT_PROMOTE
         transitioned = False
-        if outcome.to_stage is not None:
+        if outcome.to_stage is not None and not promotion_held:
             await self._registry.transition(
                 outcome.strategy_id,
                 outcome.to_stage,
@@ -409,7 +431,7 @@ class EvaluationPipeline:
             created_at=outcome.ts,
         )
 
-        streams = await self._publish(outcome)
+        streams = await self._publish(outcome, promotion_held=promotion_held)
         log.info(
             "strategy_evaluator.committed",
             strategy_id=outcome.strategy_id,
@@ -417,6 +439,7 @@ class EvaluationPipeline:
             reason=outcome.reason,
             to_stage=outcome.to_stage,
             evaluation_id=outcome.evaluation_id,
+            promotion_held=promotion_held,
         )
         return CommitResult(
             evaluation_id=outcome.evaluation_id,
@@ -424,9 +447,45 @@ class EvaluationPipeline:
             to_stage=outcome.to_stage,
             card_path=str(card_path),
             streams=streams,
+            promotion_held=promotion_held,
         )
 
-    async def _publish(self, outcome: EvaluationOutcome) -> list[str]:
+    async def _publish(
+        self, outcome: EvaluationOutcome, *, promotion_held: bool = False
+    ) -> list[str]:
+        if promotion_held:
+            # Deliberately NOT research.strategy.verdict. The Strategy Librarian
+            # consumes that stream and applies the transition itself, so
+            # publishing a promote verdict here would promote the strategy
+            # through the back door — the gate would hold the Evaluator's own
+            # transition and nothing else. This stream has no such consumer.
+            await self._publisher.publish(
+                stream=STREAM_STRATEGY_PROMOTION_PENDING,
+                produced_by=PRODUCED_BY,
+                schema_version=SCHEMA_VERSION,
+                payload={
+                    "strategy_id": outcome.strategy_id,
+                    "strategy_name": outcome.strategy_name,
+                    "verdict": outcome.verdict,
+                    "reason": outcome.reason,
+                    "from_stage": outcome.from_stage,
+                    "recommended_stage": outcome.to_stage,
+                    "metrics_ref": outcome.evaluation_id,
+                    "trigger": outcome.trigger,
+                    "total_trades": outcome.total_trades,
+                    "base_sharpe": outcome.base_sharpe,
+                    "stress_sharpe": outcome.stress_sharpe,
+                    # Reviewing IS re-running the manual CLI: it defaults to
+                    # promote_requires_review=False, so a human running this
+                    # applies the promotion. No separate approval tool exists,
+                    # and adding one would be a second path to the same effect.
+                    "review_command": (
+                        f"shrap-strategy-evaluate --strategy-id {outcome.strategy_id}"
+                    ),
+                },
+            )
+            return [STREAM_STRATEGY_PROMOTION_PENDING]
+
         streams: list[str] = []
         await self._publisher.publish(
             stream=STREAM_STRATEGY_VERDICT,

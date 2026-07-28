@@ -72,6 +72,24 @@ first created. A logging or handling fix therefore cannot be observed against
 old events; it needs a new one. Do not record such a fix as verified live until
 a fresh event has exercised it.
 
+### One image can back more than one service
+
+`strategy-evaluator` (tools profile, on demand) and
+`strategy-evaluator-trigger` (always-on sweep) are built from the **same**
+`infra/strategy-evaluator.Dockerfile`. A change to
+`src/shrap/research/strategy_evaluator/` affects both, and rebuilding one does
+not recreate the other:
+
+```bash
+sudo docker compose --profile tools build strategy-evaluator
+sudo docker compose up -d --build --force-recreate strategy-evaluator-trigger
+```
+
+This is the librarian mistake generalised: the question is never "which service
+did I run" but "which containers are running code this change touched."
+`docker compose config --services` lists every service; grep the compose file
+for the Dockerfile you changed to find all of its consumers.
+
 ## 2. Do not override the container user
 
 Tools containers run as `USER shrap` (uid **10001**), and bind-mounted output

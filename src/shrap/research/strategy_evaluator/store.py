@@ -66,6 +66,16 @@ VALUES (
 )
 """.strip()
 
+# The store reads its own table for the trigger's re-evaluation floor. Keyed on
+# (strategy_id, spec_hash, protocol_version) rather than strategy_id alone,
+# because a changed spec or a bumped protocol is a genuinely different question
+# and should be re-asked immediately rather than waiting out the interval.
+SELECT_LATEST_EVALUATION_AT_SQL = """
+SELECT max(created_at) AS latest
+FROM research.evaluations
+WHERE strategy_id = $1 AND spec_hash = $2 AND protocol_version = $3
+""".strip()
+
 # Read-only. The Evaluator consumes these tables; other agents own them.
 SELECT_WORLD_CHANGER_STATUS_SQL = """
 SELECT status FROM research.world_changers WHERE candidate_id = $1
@@ -156,6 +166,25 @@ class PostgresEvaluationStore:
                 created_at,
             )
 
+    async def latest_evaluation_at(
+        self, strategy_id: str, spec_hash: str, protocol_version: str
+    ) -> datetime | None:
+        """When this exact question was last asked, or ``None`` if never.
+
+        The trigger's re-evaluation floor reads this. Returning ``None`` for a
+        changed spec or protocol is intentional, not a miss: it is a different
+        question and gets re-asked at once.
+        """
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                SELECT_LATEST_EVALUATION_AT_SQL, strategy_id, spec_hash, protocol_version
+            )
+        if row is None:
+            return None
+        latest = row["latest"]
+        return latest if isinstance(latest, datetime) else None
+
 
 class PostgresEvaluatorReader:
     """Read-only consumer of market data and foreign anchor/tier tables."""
@@ -196,6 +225,7 @@ __all__ = [
     "CREATE_RESEARCH_SCHEMA_SQL",
     "INSERT_EVALUATION_SQL",
     "SELECT_DAILY_BARS_SQL",
+    "SELECT_LATEST_EVALUATION_AT_SQL",
     "SELECT_TICKER_TIER_SQL",
     "SELECT_WORLD_CHANGER_STATUS_SQL",
     "AsyncPool",

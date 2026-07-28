@@ -14,6 +14,7 @@ from shrap.research.strategy_evaluator.store import (
     CREATE_EVALUATIONS_TABLE_SQL,
     INSERT_EVALUATION_SQL,
     SELECT_DAILY_BARS_SQL,
+    SELECT_LATEST_EVALUATION_AT_SQL,
     SELECT_TICKER_TIER_SQL,
     SELECT_WORLD_CHANGER_STATUS_SQL,
     PostgresEvaluationStore,
@@ -157,3 +158,36 @@ async def test_read_bars_parses_rows_to_bar_samples() -> None:
     _, args = pool.conn.fetched[0]
     assert args[0] == "NVDA"
     assert args[1] == "all"
+
+
+async def test_latest_evaluation_at_reads_the_ledger_keyed_on_all_three_fields() -> None:
+    """The trigger's re-evaluation floor. Keying on strategy_id alone would make
+    a re-spec'd or re-protocoled strategy wait out an interval it should skip."""
+
+    pool = FakePool()
+    stamp = datetime(2026, 7, 28, 6, 0, tzinfo=UTC)
+    pool.conn.fetchrow_result = {"latest": stamp}
+    store = PostgresEvaluationStore(pool)  # type: ignore[arg-type]
+
+    assert await store.latest_evaluation_at("01S", "hash", "0.1") == stamp
+    assert "spec_hash = $2" in SELECT_LATEST_EVALUATION_AT_SQL
+    assert "protocol_version = $3" in SELECT_LATEST_EVALUATION_AT_SQL
+
+
+async def test_latest_evaluation_at_is_none_when_never_evaluated() -> None:
+    pool = FakePool()
+    pool.conn.fetchrow_result = None
+    store = PostgresEvaluationStore(pool)  # type: ignore[arg-type]
+    assert await store.latest_evaluation_at("01S", "hash", "0.1") is None
+
+
+async def test_latest_evaluation_at_is_none_when_the_aggregate_is_null() -> None:
+    """`max()` over zero rows returns a row containing NULL, not no row at all.
+
+    Returning that NULL as a timestamp would crash the sweep's subtraction.
+    """
+
+    pool = FakePool()
+    pool.conn.fetchrow_result = {"latest": None}
+    store = PostgresEvaluationStore(pool)  # type: ignore[arg-type]
+    assert await store.latest_evaluation_at("01S", "hash", "0.1") is None

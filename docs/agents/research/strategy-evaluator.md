@@ -50,19 +50,52 @@ What this agent cannot do, stated clearly:
 
 ## Trigger
 
-- **Schedule:** Overnight queue runner starting 19:30 ET, per-job timeout
-  configurable. Sunday weekly run for stratified re-evaluation of all
-  paper-stage strategies.
-- **Event:** Subscribes to:
-  - `research.hypothesis.proposed` → enqueues a fresh evaluation.
-  - `research.strategy.refit.request` → enqueues a parameter refresh.
-  - **Thesis-broken events (new):**
-    - `research.world-changer.thesis-broken` from Tech Watcher.
-    - `research.bottleneck.no-longer-binding` from Bottleneck Scout.
-    - `research.infra.graph.node-failed` from Infrastructure Mapper.
-    These do not enqueue a re-evaluation; they directly enqueue a **kill
-    review** job for every strategy referencing the named anchor.
-- **On-demand:** Mike can promote a job to the head of the queue.
+### As built (2026-07-28, `shrap-strategy-evaluator-trigger`)
+
+- **Schedule:** an interval sweep (default 900s) over `hypothesis`-stage
+  strategies in `research.strategies`, each evaluated through the same
+  `EvaluationPipeline` the manual CLI uses. No queue, no per-job timeout.
+- **Re-evaluation floor:** a strategy is skipped while an evaluation of the same
+  `(strategy_id, spec_hash, protocol_version)` exists within
+  `reeval_interval_hours` (default 24). A changed spec or a bumped protocol
+  resets it at once, because that is a different question. Without the floor the
+  sweep would re-evaluate every `hold-for-data` and every held promote on every
+  pass.
+- **Autonomy boundary (ADR-0015):** kills and holds are applied unattended;
+  a `promote` is recorded in full but its registry transition is withheld and
+  published to `research.strategy.promotion-pending` instead. Applying it is
+  running the ordinary CLI, which is unchanged.
+- **On-demand:** `shrap-strategy-evaluate --strategy-id <id>`, unchanged. This
+  is also the review action for a held promotion.
+
+### Specified but not built, and why
+
+The 19:30 ET overnight *queue* runner and the Sunday stratified re-evaluation
+of paper-stage strategies are not implemented. Neither is any event leg. The
+reason is not scope-trimming — it is that the named producers do not exist:
+
+| Specified trigger | Producer status (2026-07-28) |
+|---|---|
+| `research.hypothesis.proposed` | No Hypothesis Generator; zero publishers in `src/shrap/` |
+| `research.strategy.refit.request` | Nothing publishes it |
+| `research.world-changer.thesis-broken` | Nothing publishes it |
+| `research.bottleneck.no-longer-binding` | No Bottleneck Scout |
+| `research.infra.graph.node-failed` | Nothing publishes it |
+
+Building a queue and five subscriptions for events nothing emits would be
+scaffolding around a hole, and would have to be rewritten when the producers
+arrive and their payloads are actually known.
+
+**One stream the spec does not mention does have a producer:**
+`research.strategy.registered`, published by the registry on every new
+strategy. Subscribing to it would reduce latency from one sweep interval to
+seconds. It is deferred rather than overlooked — the sweep already catches
+every registration within 15 minutes, and evaluation is a batch concern.
+
+The Sunday paper-stage re-evaluation is a genuine gap rather than a deferral:
+nothing currently re-examines a promoted strategy, so a strategy that decays
+after promotion is caught only by the Strategy Runner's own kill criteria. That
+is its own card.
 
 ## Cross-references
 
