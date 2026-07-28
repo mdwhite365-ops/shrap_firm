@@ -304,7 +304,7 @@ legitimate. Setting it to whatever number lets this seed through is the
 not. The ruling wants a rationale, not a number.
 
 **After the loop closes.** The remaining sprint weeks go to making it *repeat*
-without Mike — the Evaluator has no trigger and is tools-profile/manual-only,
+without Mike — at the time of writing the Evaluator had no trigger and was tools-profile/manual-only,
 so nothing in Research is automatic regardless of how many lenses exist. That
 is the difference between "we did it once by hand" and "the Research Department
 is functional." Everything in ADR-0013 beyond merging it is Phase 2.

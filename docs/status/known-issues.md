@@ -464,3 +464,73 @@ still verified only when someone chooses to run `pytest`.
 **Still open even once CI lands:** CI reports the breakage, it does not prevent
 it. When two open PRs touch the same file, prefer inserting near the relevant
 section over appending to the tail, and merge one then rebase the other.
+
+## KI-017 — `research.strategy.registered` has no producer, and a spec says it does
+
+**Status:** Open, found 2026-07-28 by the full-firm audit.
+
+`STREAM_STRATEGY_REGISTERED` is defined (`strategy_registry.py`) and
+`stream_for_transition` returns it when `from_status is None` — but nothing
+reaches that path in normal operation:
+
+- `PostgresStrategyRegistry.register()` inserts the strategy row and its first
+  transition row. It publishes **nothing**.
+- `shrap-strategy-seed` states in its own module docstring that it does not
+  publish.
+- The Strategy Librarian is the only caller of `stream_for_transition`, and it
+  only runs on verdict events, which always carry a `from_stage`.
+
+So the stream is never written. Anything built to consume it would wait forever.
+
+**The spec asserts the opposite, and I wrote it.**
+`docs/agents/research/strategy-evaluator.md` (added in PR #103) says:
+
+> "One stream the spec does not mention *does* have a producer:
+> `research.strategy.registered`, published by the registry on every new
+> strategy."
+
+That was reasoning from a constant's existence rather than from a call site,
+and it is the exact pattern this project's no-guessing rule exists to catch:
+the repo artifact was verified, the claim about it was not.
+
+**Mitigation:** the spec text is corrected in the same card as this entry. The
+underlying gap — that registration is invisible on the bus — stays open. It is
+not urgent while the Evaluator trigger sweeps on an interval, but the moment
+anything wants to react to a new strategy, `register()` needs to publish.
+
+## KI-018 — Langfuse is deployed and nothing writes to it
+
+**Status:** Open, found 2026-07-28 by the full-firm audit. Blocking for a Month-4
+exit criterion.
+
+`infra/docker-compose.yml` runs Langfuse and a dedicated Postgres for it, with a
+persistent volume. A grep across `src/` for `langfuse` returns **zero matches**.
+No LLM call from any agent — Tech Watcher filter and synthesis, News Analyzer,
+Filing Processor — is traced.
+
+**Why this is more than an idle container:**
+
+1. `docs/infrastructure/llm-routing.md` builds the entire cloud→local migration
+   path on trace data: *"Once the cloud-primary agent has accumulated at least 50
+   task instances of the relevant type (recorded in Langfuse with full
+   input/output), the sample is the candidate evaluation set."*
+2. `01-roadmap.md` Month 4 requires the **LLM Migration Evaluator** to run shadow
+   evaluations on that accumulated data, and names "at least one agent migrated
+   to local based on shadow-eval evidence" as a deliverable.
+3. The **Cost Monitor** spec (Platform, Month 1, unbuilt) is defined as tracking
+   "Langfuse spend."
+
+None of the three is reachable, and the shortfall compounds: every LLM call made
+untraced is evaluation sample that cannot be recovered afterwards. The Tech
+Watcher has been filtering roughly 1,900 items against several prompt versions
+with no retrievable record of the model's reasoning beyond the verdict rows in
+`research.filter_verdict_history`.
+
+It also leaves a hole in the "audit trails sufficient to analyse every decision"
+success criterion: bus events are fully persisted by the Audit Logger, but *why*
+a model rejected an item is not reconstructible.
+
+**Mitigation:** instrument the shared `TierLLMClient` (`src/shrap/llm/client.py`)
+rather than each agent — every LLM-using agent already routes through it, so one
+card covers all of them. Tracked as Phase 3.1 in
+`docs/roadmap/implementation-timeline.md`.

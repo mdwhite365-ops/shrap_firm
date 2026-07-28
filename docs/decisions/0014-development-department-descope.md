@@ -1,6 +1,6 @@
 # ADR-0014: Development Department Descope, and the Three-Tier Compute Boundary
 
-**Status:** Proposed
+**Status:** Accepted (by merge, 2026-07-27)
 **Date:** 2026-07-27
 **Deciders:** Mike White
 

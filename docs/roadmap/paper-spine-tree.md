@@ -1,5 +1,11 @@
 # Paper spine roadmap tree
 
+> **HISTORICAL — superseded 2026-07-28.** This is the Month-1/2 paper-spine
+> plan. Its last card (Card 18) shipped weeks ago and it has not tracked
+> anything since. The live plan is
+> **`docs/roadmap/implementation-timeline.md`**. Kept because the card sequence
+> is the record of how the spine was actually built.
+
 **Last updated:** 2026-07-18
 **Principle:** Finish the paper-trading spine before Research implementation.
 **Spine status: CLOSED** — market-hours smoke passed 9/9 on the Dell 2026-07-15.

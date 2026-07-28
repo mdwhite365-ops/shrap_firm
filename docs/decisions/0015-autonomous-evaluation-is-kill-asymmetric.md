@@ -1,6 +1,6 @@
 # ADR-0015: Autonomous Evaluation Is Kill-Asymmetric
 
-**Status:** Proposed
+**Status:** Accepted (by merge, 2026-07-28)
 **Date:** 2026-07-28
 **Deciders:** Mike White
 

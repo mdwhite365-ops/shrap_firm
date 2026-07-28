@@ -1,6 +1,6 @@
 # ADR-0013: The Fast Layer, and Cross-Lens Synthesis as a First-Class Function
 
-**Status:** Proposed
+**Status:** Accepted (by merge, 2026-07-27)
 **Date:** 2026-07-27
 **Deciders:** Mike White
 

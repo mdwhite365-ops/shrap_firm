@@ -72,10 +72,10 @@ via CLI (no trigger) · **Spec only** = spec written, no implementation ·
 | Deployment Agent | ~~Development~~ Operations | post-loop-closure | Not built — retained per ADR-0014 §2 (`no-llm`) |
 | Regime Classifier | Research | Month 2 | **Deployed** (lives under Intelligence in code) |
 | Regime Researcher | Research | Month 3 | Not built |
-| Hypothesis Generator | Research | Month 2 | Spec only — ADR-0013 adds `technical-catalyst` |
-| Strategy Evaluator | Research | Month 2 | **On-demand** — no trigger; never produced a verdict |
+| Hypothesis Generator | Research | Month 2 | Spec only — spec predates ADR-0013 and still allows only the two ADR-0007 archetypes |
+| Strategy Evaluator | Research | Month 2 | **Deployed** — on-demand CLI plus an interval-sweep trigger (ADR-0013 item 2); three verdicts produced |
 | Bayesian Updater | Research | Month 3 | Not built |
-| Strategy Librarian | Research | Month 2 | **Deployed** — idles awaiting a verdict |
+| Strategy Librarian | Research | Month 2 | **Deployed** — converges on verdicts the Evaluator already applied; INFO path not yet exercised live |
 | Decision Maker | Trading Floor | Month 2 | **Deployed** |
 | Regime Router | Trading Floor | Month 2 | Not built — ADR-0010 §4 unimplemented |
 | Execution Agent | Trading Floor | Month 2 | **Deployed** |
