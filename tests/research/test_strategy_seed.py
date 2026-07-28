@@ -19,7 +19,12 @@ from shrap.research.strategy_evaluator.reference_strategy import (
     ReferenceTrendStrategy,
 )
 from shrap.research.strategy_registry import STATUS_HYPOTHESIS, StrategyRecord
-from shrap.research.strategy_seed.cli import load_first, render_list
+from shrap.research.strategy_seed.cli import (
+    load_first,
+    load_probe,
+    render_list,
+    render_probe_catalogue,
+)
 from shrap.research.strategy_seed.first_strategy import (
     ARCHETYPE,
     KILL_CRITERIA,
@@ -29,6 +34,11 @@ from shrap.research.strategy_seed.first_strategy import (
     TICKERS,
     WORLD_CHANGER_ID,
     first_strategy_record,
+)
+from shrap.research.strategy_seed.probe_strategies import (
+    PROBE_SEEDS,
+    compute_spec_hash,
+    probe_record,
 )
 from shrap.research.universe_curator.launch_list import LAUNCH_LIST
 
@@ -160,3 +170,102 @@ async def test_render_list_shows_findable_rows() -> None:
     assert "<infra-graph-play>" in output
     assert f"[{STATUS_HYPOTHESIS}]" in output
     assert "XLE" in output
+
+
+# --- Protocol-probe seeds -------------------------------------------------
+
+
+def test_probe_seeds_have_valid_ulid_strategy_ids() -> None:
+    """strategy_id is TEXT with no format validation, so nothing enforces this.
+
+    A string called a ULID that is not one is a trap for anything that later
+    parses or timestamp-sorts them, so it is asserted here instead.
+    """
+
+    crockford = set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+    for seed in PROBE_SEEDS:
+        assert len(seed.strategy_id) == 26, seed.key
+        assert set(seed.strategy_id) <= crockford, seed.key
+
+
+def test_probe_seeds_have_distinct_ids_and_hashes_including_from_the_first() -> None:
+    """Distinct spec_hash is what lets probes coexist with the first seed.
+
+    load-* dedups on spec_hash, so a collision would silently skip the load.
+    """
+
+    ids = {s.strategy_id for s in PROBE_SEEDS} | {STRATEGY_ID}
+    hashes = {compute_spec_hash(s) for s in PROBE_SEEDS} | {SPEC_HASH}
+    assert len(ids) == len(PROBE_SEEDS) + 1
+    assert len(hashes) == len(PROBE_SEEDS) + 1
+
+
+def test_probe_seeds_pass_spec_hygiene_and_the_reference_rule() -> None:
+    """Same bar the first seed meets — params the rule consumes, bounds honoured."""
+
+    pipeline = _pipeline()
+    for seed in PROBE_SEEDS:
+        record = probe_record(seed)
+        assert record.archetype == ARCHETYPE_INFRA_GRAPH_PLAY
+        assert record.status == STATUS_HYPOTHESIS
+        tickers = pipeline._check_spec_hygiene(record)
+        assert tickers == ["XLE"]
+        _validate_param_bounds(record.spec)
+        rule = ReferenceTrendStrategy.from_spec(tickers[0], record.spec["params"])
+        assert rule.fast == seed.fast
+        assert rule.slow == seed.slow
+        assert rule.fast < rule.slow
+
+
+def test_probe_params_lie_inside_declared_bounds() -> None:
+    for seed in PROBE_SEEDS:
+        for name, value in (("fast", seed.fast), ("slow", seed.slow)):
+            lo, hi = PARAM_BOUNDS[name]
+            assert lo <= value <= hi, f"{seed.key}.{name}={value} outside [{lo}, {hi}]"
+
+
+def test_probe_seeds_carry_the_anchor_the_evaluator_gate_requires() -> None:
+    """Without an anchor the Evaluator returns KILL/anchor-not-live, engine_ran=False.
+
+    Documented in probe_strategies as a gate artifact rather than a thesis claim.
+    """
+
+    for seed in PROBE_SEEDS:
+        assert probe_record(seed).anchor == {"world_changer_id": WORLD_CHANGER_ID}
+
+
+def test_control_trades_less_often_than_treatment() -> None:
+    """The probes must differ in the one variable they exist to isolate."""
+
+    by_key = {s.key: s for s in PROBE_SEEDS}
+    control, treatment = by_key["trend-10-50"], by_key["trend-3-10"]
+    assert treatment.fast < control.fast
+    assert treatment.slow < control.slow
+
+
+async def test_load_probe_is_idempotent_on_spec_hash() -> None:
+    registry = FakeRegistry()
+
+    first = await load_probe(registry, "trend-3-10")
+    assert first.startswith("loaded:")
+    second = await load_probe(registry, "trend-3-10")
+    assert second.startswith("already present:")
+    assert len(registry.by_id) == 1
+
+
+async def test_load_probe_coexists_with_the_first_seed() -> None:
+    registry = FakeRegistry()
+    await load_first(registry)
+    for seed in PROBE_SEEDS:
+        await load_probe(registry, seed.key)
+
+    assert len(registry.by_id) == len(PROBE_SEEDS) + 1
+    assert len(registry.by_hash) == len(PROBE_SEEDS) + 1
+
+
+def test_render_probe_catalogue_lists_every_probe() -> None:
+    output = render_probe_catalogue()
+    assert f"Probe seeds: {len(PROBE_SEEDS)}" in output
+    for seed in PROBE_SEEDS:
+        assert seed.key in output
+        assert seed.strategy_id in output
