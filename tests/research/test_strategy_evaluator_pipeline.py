@@ -454,52 +454,6 @@ async def test_zero_cost_config_is_accepted() -> None:
     assert cfg.cost_model.commission_bps == 0.0
 
 
-# --- the promote review gate (ADR-0015) --------------------------------------
-
-
-async def test_promote_requires_review_records_everything_but_the_transition(
-    tmp_path: Path,
-) -> None:
-    """A held promote must still be fully auditable — only the move is withheld."""
-
-    registry = FakeRegistry(_record())
-    store, redis = FakeStore(), FakeRedis()
-    pipeline = _pipeline(
-        registry=registry,
-        reader=FakeReader(bars=_square_wave_bars()),
-        store=store,
-        redis=redis,
-        card_root=tmp_path,
-        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
-    )
-    outcome = await pipeline.evaluate("01STRAT")
-    assert outcome.verdict == VERDICT_PROMOTE
-
-    result = await pipeline.commit(outcome, promote_requires_review=True)
-
-    assert result.promotion_held is True
-    assert result.transitioned is False
-    assert registry.transitions == []  # the strategy is still at hypothesis
-    assert len(store.inserted) == 1  # but the ledger row exists
-    assert Path(result.card_path).exists()  # and so does the card
-
-
-async def test_a_held_promote_never_publishes_the_verdict_stream(tmp_path: Path) -> None:
-    """The gate's one real failure mode, and the reason it is asserted here.
-
-    The Strategy Librarian consumes `research.strategy.verdict` and applies the
-    transition itself. Publishing a promote verdict while withholding the
-    Evaluator's own transition would promote the strategy anyway, one hop later
-    — a review gate that holds nothing.
-    """
-
-    registry = FakeRegistry(_record())
-    redis = FakeRedis()
-    pipeline = _pipeline(
-        registry=registry,
-        reader=FakeReader(bars=_square_wave_bars()),
-        store=FakeStore(),
-        redis=redis,
 # --- archetype-conditional gates (ADR-0013) ----------------------------------
 
 
@@ -544,30 +498,6 @@ async def test_technical_catalyst_can_reach_promote(tmp_path: Path) -> None:
         strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
     )
     outcome = await pipeline.evaluate("01STRAT")
-    result = await pipeline.commit(outcome, promote_requires_review=True)
-
-    assert STREAM_STRATEGY_VERDICT not in redis.streams
-    assert STREAM_STRATEGY_KILLED not in redis.streams
-    assert redis.streams == [STREAM_STRATEGY_PROMOTION_PENDING]
-    assert result.streams == [STREAM_STRATEGY_PROMOTION_PENDING]
-
-    payload = _payload(redis, 0)
-    assert payload["strategy_id"] == "01STRAT"
-    # `recommended_stage`, not `to_stage`: the strategy did not go there.
-    assert payload["recommended_stage"] == STATUS_PAPER
-    assert "shrap-strategy-evaluate --strategy-id 01STRAT" in str(payload["review_command"])
-
-
-async def test_the_review_gate_does_not_touch_kills(tmp_path: Path) -> None:
-    """Asymmetric by design: kills apply unattended, promotes do not."""
-
-    registry = FakeRegistry(_record())
-    redis = FakeRedis()
-    pipeline = _pipeline(
-        registry=registry,
-        reader=FakeReader(bars=_uptrend_bars()),
-        store=FakeStore(),
-        redis=redis,
     assert outcome.verdict == VERDICT_PROMOTE
     assert outcome.reason == REASON_PROMOTE
     assert outcome.to_stage == STATUS_PAPER
@@ -612,35 +542,6 @@ async def test_infra_graph_play_still_dies_on_a_dead_anchor(tmp_path: Path) -> N
     )
     outcome = await pipeline.evaluate("01STRAT")
     assert outcome.verdict == VERDICT_KILL
-
-    result = await pipeline.commit(outcome, promote_requires_review=True)
-
-    assert result.promotion_held is False
-    assert result.transitioned is True
-    assert registry.transitions == [("01STRAT", STATUS_KILLED, STATUS_HYPOTHESIS)]
-    assert redis.streams == [STREAM_STRATEGY_VERDICT, STREAM_STRATEGY_KILLED]
-
-
-async def test_the_gate_is_off_by_default_so_the_manual_cli_still_promotes(
-    tmp_path: Path,
-) -> None:
-    """Running the CLI by hand IS the review; it must not need a second step."""
-
-    registry = FakeRegistry(_record())
-    pipeline = _pipeline(
-        registry=registry,
-        reader=FakeReader(bars=_square_wave_bars()),
-        store=FakeStore(),
-        redis=FakeRedis(),
-        card_root=tmp_path,
-        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
-    )
-    outcome = await pipeline.evaluate("01STRAT")
-    result = await pipeline.commit(outcome)
-
-    assert result.promotion_held is False
-    assert result.transitioned is True
-    assert registry.transitions == [("01STRAT", STATUS_PAPER, STATUS_HYPOTHESIS)]
     assert outcome.reason == REASON_ANCHOR_NOT_LIVE
     assert outcome.engine_ran is False
     assert outcome.anchor_required is True
@@ -711,3 +612,112 @@ async def test_anchor_required_is_persisted_with_the_evaluation(tmp_path: Path) 
     await pipeline.commit(outcome)
     assert store.inserted[0]["anchor_required"] is False
     assert store.inserted[0]["anchor_fresh"] is False
+
+
+# --- the promote review gate (ADR-0015) --------------------------------------
+
+
+async def test_promote_requires_review_records_everything_but_the_transition(
+    tmp_path: Path,
+) -> None:
+    """A held promote must still be fully auditable — only the move is withheld."""
+
+    registry = FakeRegistry(_record())
+    store, redis = FakeStore(), FakeRedis()
+    pipeline = _pipeline(
+        registry=registry,
+        reader=FakeReader(bars=_square_wave_bars()),
+        store=store,
+        redis=redis,
+        card_root=tmp_path,
+        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
+    )
+    outcome = await pipeline.evaluate("01STRAT")
+    assert outcome.verdict == VERDICT_PROMOTE
+
+    result = await pipeline.commit(outcome, promote_requires_review=True)
+
+    assert result.promotion_held is True
+    assert result.transitioned is False
+    assert registry.transitions == []  # the strategy is still at hypothesis
+    assert len(store.inserted) == 1  # but the ledger row exists
+    assert Path(result.card_path).exists()  # and so does the card
+
+
+async def test_a_held_promote_never_publishes_the_verdict_stream(tmp_path: Path) -> None:
+    """The gate's one real failure mode, and the reason it is asserted here.
+
+    The Strategy Librarian consumes `research.strategy.verdict` and applies the
+    transition itself. Publishing a promote verdict while withholding the
+    Evaluator's own transition would promote the strategy anyway, one hop later
+    — a review gate that holds nothing.
+    """
+
+    registry = FakeRegistry(_record())
+    redis = FakeRedis()
+    pipeline = _pipeline(
+        registry=registry,
+        reader=FakeReader(bars=_square_wave_bars()),
+        store=FakeStore(),
+        redis=redis,
+        card_root=tmp_path,
+        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
+    )
+    outcome = await pipeline.evaluate("01STRAT")
+    result = await pipeline.commit(outcome, promote_requires_review=True)
+
+    assert STREAM_STRATEGY_VERDICT not in redis.streams
+    assert STREAM_STRATEGY_KILLED not in redis.streams
+    assert redis.streams == [STREAM_STRATEGY_PROMOTION_PENDING]
+    assert result.streams == [STREAM_STRATEGY_PROMOTION_PENDING]
+
+    payload = _payload(redis, 0)
+    assert payload["strategy_id"] == "01STRAT"
+    # `recommended_stage`, not `to_stage`: the strategy did not go there.
+    assert payload["recommended_stage"] == STATUS_PAPER
+    assert "shrap-strategy-evaluate --strategy-id 01STRAT" in str(payload["review_command"])
+
+
+async def test_the_review_gate_does_not_touch_kills(tmp_path: Path) -> None:
+    """Asymmetric by design: kills apply unattended, promotes do not."""
+
+    registry = FakeRegistry(_record())
+    redis = FakeRedis()
+    pipeline = _pipeline(
+        registry=registry,
+        reader=FakeReader(bars=_uptrend_bars()),
+        store=FakeStore(),
+        redis=redis,
+        card_root=tmp_path,
+    )
+    outcome = await pipeline.evaluate("01STRAT")
+    assert outcome.verdict == VERDICT_KILL
+
+    result = await pipeline.commit(outcome, promote_requires_review=True)
+
+    assert result.promotion_held is False
+    assert result.transitioned is True
+    assert registry.transitions == [("01STRAT", STATUS_KILLED, STATUS_HYPOTHESIS)]
+    assert redis.streams == [STREAM_STRATEGY_VERDICT, STREAM_STRATEGY_KILLED]
+
+
+async def test_the_gate_is_off_by_default_so_the_manual_cli_still_promotes(
+    tmp_path: Path,
+) -> None:
+    """Running the CLI by hand IS the review; it must not need a second step."""
+
+    registry = FakeRegistry(_record())
+    pipeline = _pipeline(
+        registry=registry,
+        reader=FakeReader(bars=_square_wave_bars()),
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
+    )
+    outcome = await pipeline.evaluate("01STRAT")
+    result = await pipeline.commit(outcome)
+
+    assert result.promotion_held is False
+    assert result.transitioned is True
+    assert registry.transitions == [("01STRAT", STATUS_PAPER, STATUS_HYPOTHESIS)]
