@@ -7,15 +7,14 @@ asks how it got there — so whatever this tool permits, the firm will do.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from shrap.research.strategy_evaluator.pipeline import (
-    DEFERRED_RULES,
-    RULE_CROSS_SECTIONAL_MOMENTUM,
-)
+from shrap.research.strategy_evaluator.pipeline import DEFERRED_RULES
 from shrap.research.strategy_registry import (
     STATUS_HYPOTHESIS,
     STATUS_KILLED,
@@ -34,6 +33,24 @@ from shrap.research.strategy_stage_cli import (
 )
 
 _NOW = datetime(2026, 7, 28, tzinfo=UTC)
+
+# A rule that exists only for these tests. The gate is what is under test, not
+# whichever rules happen to be deferred today — depending on a real one made
+# this file go red the moment #112 emptied DEFERRED_RULES, which is a test
+# coupled to a table's contents rather than to the behaviour it checks.
+_FUTURE_RULE = "some-future-rule"
+_FUTURE_REASON = "its dependency does not exist yet"
+
+
+@contextmanager
+def deferred_rule(rule: str = _FUTURE_RULE, reason: str = _FUTURE_REASON) -> Iterator[None]:
+    """Temporarily list a rule as deferred, restoring the real table after."""
+
+    DEFERRED_RULES[rule] = reason
+    try:
+        yield
+    finally:
+        DEFERRED_RULES.pop(rule, None)
 
 
 def _record(
@@ -216,9 +233,7 @@ async def test_moving_to_the_current_stage_is_a_no_op_not_an_error() -> None:
 
 
 def _deferred_record() -> StrategyRecord:
-    return _record(
-        spec={"rule": RULE_CROSS_SECTIONAL_MOMENTUM, "params": {"lookback": 126, "top_n": 10}}
-    )
+    return _record(spec={"rule": _FUTURE_RULE, "params": {}})
 
 
 async def test_a_deferred_rule_cannot_be_promoted_into_trading_by_default() -> None:
@@ -230,9 +245,8 @@ async def test_a_deferred_rule_cannot_be_promoted_into_trading_by_default() -> N
     the only place a human sees that happening.
     """
 
-    assert RULE_CROSS_SECTIONAL_MOMENTUM in DEFERRED_RULES
     registry = FakeRegistry(_deferred_record())
-    with pytest.raises(SystemExit, match="which spec hygiene defers"):
+    with deferred_rule(), pytest.raises(SystemExit, match="which spec hygiene defers"):
         await move_stage(
             registry,  # type: ignore[arg-type]
             None,
@@ -247,31 +261,34 @@ async def test_the_acknowledgement_is_recorded_in_the_reason() -> None:
     """An override that leaves no trace is indistinguishable from not knowing."""
 
     registry = FakeRegistry(_deferred_record())
-    await move_stage(
-        registry,  # type: ignore[arg-type]
-        None,
-        "01STRAT",
-        to_stage=STATUS_PAPER,
-        reason="deliberate systems test",
-        acknowledge_unevaluated=True,
-    )
+    with deferred_rule():
+        await move_stage(
+            registry,  # type: ignore[arg-type]
+            None,
+            "01STRAT",
+            to_stage=STATUS_PAPER,
+            reason="deliberate systems test",
+            acknowledge_unevaluated=True,
+        )
     reason = registry.calls[0]["reason"]
     assert reason.startswith("deliberate systems test")
     assert "acknowledged unevaluated" in reason
-    assert RULE_CROSS_SECTIONAL_MOMENTUM in reason
+    assert _FUTURE_RULE in reason
+    assert _FUTURE_REASON in reason
 
 
 async def test_a_deferred_rule_may_still_move_to_a_non_trading_stage() -> None:
     """The gate guards trading, not bookkeeping — killing one must stay possible."""
 
     registry = FakeRegistry(_deferred_record())
-    await move_stage(
-        registry,  # type: ignore[arg-type]
-        None,
-        "01STRAT",
-        to_stage=STATUS_KILLED,
-        reason="superseded",
-    )
+    with deferred_rule():
+        await move_stage(
+            registry,  # type: ignore[arg-type]
+            None,
+            "01STRAT",
+            to_stage=STATUS_KILLED,
+            reason="superseded",
+        )
     assert registry.calls[0]["to"] == STATUS_KILLED
 
 
