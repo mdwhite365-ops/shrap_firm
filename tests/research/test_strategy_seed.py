@@ -9,8 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from shrap.research.strategy_evaluator.pipeline import (
     ARCHETYPE_INFRA_GRAPH_PLAY,
+    ARCHETYPE_POLICIES,
+    ARCHETYPE_TECHNICAL_CATALYST,
     EvaluationPipeline,
     _validate_param_bounds,
 )
@@ -22,8 +26,10 @@ from shrap.research.strategy_registry import STATUS_HYPOTHESIS, StrategyRecord
 from shrap.research.strategy_seed.cli import (
     load_first,
     load_probe,
+    load_technical,
     render_list,
     render_probe_catalogue,
+    render_technical_catalogue,
 )
 from shrap.research.strategy_seed.first_strategy import (
     ARCHETYPE,
@@ -39,6 +45,13 @@ from shrap.research.strategy_seed.probe_strategies import (
     PROBE_SEEDS,
     compute_spec_hash,
     probe_record,
+)
+from shrap.research.strategy_seed.technical_strategies import (
+    TECHNICAL_SEEDS,
+    technical_record,
+)
+from shrap.research.strategy_seed.technical_strategies import (
+    compute_spec_hash as technical_seed_hash,
 )
 from shrap.research.universe_curator.launch_list import LAUNCH_LIST
 
@@ -269,3 +282,123 @@ def test_render_probe_catalogue_lists_every_probe() -> None:
     for seed in PROBE_SEEDS:
         assert seed.key in output
         assert seed.strategy_id in output
+
+
+# --- Framework #3 seeds (ADR-0013) -------------------------------------------
+
+
+def test_technical_seed_carries_no_anchor_at_all() -> None:
+    """The point of the module. An anchor here would be the reintroduced lie.
+
+    The probes had to claim a fission thesis to get past the anchor gate; ADR-0013
+    made the gate archetype-conditional so a technical strategy no longer has to.
+    """
+
+    for seed in TECHNICAL_SEEDS:
+        record = technical_record(seed)
+        assert record.anchor == {}
+        assert record.archetype == ARCHETYPE_TECHNICAL_CATALYST
+
+
+def test_technical_seed_is_evaluable_and_the_anchor_is_never_consulted() -> None:
+    """Spec hygiene admits it, and the policy says the anchor is not a gate."""
+
+    pipeline = _pipeline()
+    for seed in TECHNICAL_SEEDS:
+        record = technical_record(seed)
+        tickers = pipeline._check_spec_hygiene(record)
+        assert tickers == [seed.ticker]
+        _validate_param_bounds(record.spec)
+        assert ARCHETYPE_POLICIES[record.archetype].requires_anchor is False
+
+
+def test_technical_seed_params_drive_the_reference_rule() -> None:
+    for seed in TECHNICAL_SEEDS:
+        record = technical_record(seed)
+        rule = ReferenceTrendStrategy.from_spec(seed.ticker, record.spec["params"])
+        assert rule.ticker == seed.ticker
+        assert rule.fast == seed.fast
+        assert rule.slow == seed.slow
+        assert rule.fast < rule.slow
+
+
+def test_technical_seed_tickers_are_tier3_launch_names() -> None:
+    launch = {entry.ticker for entry in LAUNCH_LIST}
+    for seed in TECHNICAL_SEEDS:
+        assert seed.ticker in launch, seed.key
+
+
+def test_technical_seed_ids_are_real_ulids_and_globally_distinct() -> None:
+    crockford = set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+    ids = {s.strategy_id for s in TECHNICAL_SEEDS}
+    for seed in TECHNICAL_SEEDS:
+        assert len(seed.strategy_id) == 26, seed.key
+        assert set(seed.strategy_id) <= crockford, seed.key
+    # Distinct from every other seed family, or load-* would dedup them away.
+    others = {s.strategy_id for s in PROBE_SEEDS} | {STRATEGY_ID}
+    assert not (ids & others)
+
+
+def test_technical_spec_hashes_are_distinct_from_every_other_seed() -> None:
+    """spec_hash is the dedup key; a collision would silently skip the load."""
+
+    technical = {technical_seed_hash(s) for s in TECHNICAL_SEEDS}
+    others = {compute_spec_hash(s) for s in PROBE_SEEDS} | {SPEC_HASH}
+    assert len(technical) == len(TECHNICAL_SEEDS)
+    assert not (technical & others)
+
+
+def test_technical_kill_criteria_name_no_world_changer() -> None:
+    """A Framework #3 strategy has no thesis a world-changer could break.
+
+    The probes inherited that falsifier with their borrowed anchor, and it was
+    already satisfied on the day they were written.
+    """
+
+    for seed in TECHNICAL_SEEDS:
+        record = technical_record(seed)
+        assert record.kill_criteria
+        joined = " ".join(record.kill_criteria).lower()
+        assert "world-changer" not in joined
+        assert "world changer" not in joined
+
+
+def test_technical_seed_declares_no_regime_gate() -> None:
+    """Regime is a sizing modifier; a gate is refused by spec hygiene."""
+
+    for seed in TECHNICAL_SEEDS:
+        record = technical_record(seed)
+        assert "regime_gate" not in record.spec
+        assert record.regime_sizing_modifier
+        assert set(record.regime_sizing_modifier.values()) == {1.0}
+
+
+async def test_load_technical_is_idempotent_and_coexists_with_the_other_seeds() -> None:
+    registry = FakeRegistry()
+    await load_first(registry)
+    for probe in PROBE_SEEDS:
+        await load_probe(registry, probe.key)
+
+    first = await load_technical(registry, "spy-trend-5-20")
+    assert first.startswith("loaded:")
+    second = await load_technical(registry, "spy-trend-5-20")
+    assert second.startswith("already present:")
+
+    expected = 1 + len(PROBE_SEEDS) + len(TECHNICAL_SEEDS)
+    assert len(registry.by_id) == expected
+    assert len(registry.by_hash) == expected
+
+
+async def test_load_technical_refuses_an_unknown_key() -> None:
+    registry = FakeRegistry()
+    with pytest.raises(SystemExit, match="unknown technical seed"):
+        await load_technical(registry, "does-not-exist")
+
+
+def test_render_technical_catalogue_lists_every_seed() -> None:
+    output = render_technical_catalogue()
+    assert f"Technical seeds: {len(TECHNICAL_SEEDS)}" in output
+    for seed in TECHNICAL_SEEDS:
+        assert seed.key in output
+        assert seed.strategy_id in output
+        assert seed.ticker in output
