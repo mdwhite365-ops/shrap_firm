@@ -345,3 +345,30 @@ async def test_backfill_tickers_writes_when_not_dry_run() -> None:
 def test_backfill_summary_render_format() -> None:
     summary = BackfillSummary(tickers=2, rows_fetched=10, rows_upserted=10, dry_run=False)
     assert summary.render() == "tickers=2 rows_fetched=10 rows_upserted=10 dry_run=False"
+
+
+def test_launch_list_flag_resolves_the_whole_tier3_universe() -> None:
+    """One command instead of pasting 50 tickers, and it cannot drift.
+
+    A hand-pasted list would silently diverge from the universe the Evaluator
+    checks against, and the divergence would only surface as a refusal naming
+    one ticker.
+    """
+
+    from shrap.research.universe_curator.launch_list import LAUNCH_LIST
+
+    resolved = resolve_tickers(None, None, launch_list=True)
+    assert set(resolved) == {entry.ticker for entry in LAUNCH_LIST}
+    assert len(resolved) == len(set(resolved))
+
+
+def test_launch_list_composes_with_explicit_tickers_without_duplicating() -> None:
+    """The three sources merge rather than conflict."""
+
+    resolved = resolve_tickers("SPY,ZZZZ", None, launch_list=True)
+    assert "ZZZZ" in resolved
+    assert resolved.count("SPY") == 1
+
+
+def test_launch_list_off_by_default_leaves_behaviour_unchanged() -> None:
+    assert resolve_tickers("AAPL,MSFT", None) == ["AAPL", "MSFT"]

@@ -92,12 +92,28 @@ def read_tickers_file(path: str | Path) -> list[str]:
     return tickers
 
 
-def resolve_tickers(tickers: str | None, tickers_file: str | Path | None) -> list[str]:
-    """Merge ``--tickers`` and ``--tickers-file`` into a deduped, ordered list."""
+def resolve_tickers(
+    tickers: str | None,
+    tickers_file: str | Path | None,
+    *,
+    launch_list: bool = False,
+) -> list[str]:
+    """Merge ``--tickers``, ``--tickers-file`` and ``--launch-list`` into one list.
+
+    Deduped and order-preserving, so the three sources compose rather than
+    conflict — asking for the launch list plus an extra name is one command.
+    """
 
     merged = parse_tickers(tickers)
     if tickers_file is not None:
         merged += read_tickers_file(tickers_file)
+    if launch_list:
+        # Imported here rather than at module scope: the backfill is a
+        # market-data tool and should not fail to start because a Research
+        # module moved.
+        from shrap.research.universe_curator.launch_list import LAUNCH_LIST
+
+        merged += sorted(entry.ticker for entry in LAUNCH_LIST)
     seen: set[str] = set()
     ordered: list[str] = []
     for ticker in merged:
@@ -246,6 +262,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Comma-separated tickers to backfill",
     )
     parser.add_argument(
+        "--launch-list",
+        action="store_true",
+        help=(
+            "Backfill every name on the Curator's Tier-3 launch list. Equivalent to "
+            "pasting all 50 tickers, and it cannot drift out of step with the universe."
+        ),
+    )
+    parser.add_argument(
         "--tickers-file",
         default=None,
         metavar="PATH",
@@ -276,7 +300,7 @@ def main() -> None:
 
     parser = _build_parser()
     args = parser.parse_args()
-    tickers = resolve_tickers(args.tickers, args.tickers_file)
+    tickers = resolve_tickers(args.tickers, args.tickers_file, launch_list=args.launch_list)
     if not tickers:
         parser.error("at least one ticker is required via --tickers or --tickers-file")
     try:

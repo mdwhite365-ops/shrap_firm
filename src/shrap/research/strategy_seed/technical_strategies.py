@@ -52,12 +52,19 @@ import hashlib
 import json
 from typing import Any, NamedTuple
 
-from shrap.research.strategy_evaluator.pipeline import ARCHETYPE_TECHNICAL_CATALYST
+from shrap.research.strategy_evaluator.cross_sectional import (
+    MOMENTUM_PARAM_BOUNDS,
+)
+from shrap.research.strategy_evaluator.pipeline import (
+    ARCHETYPE_TECHNICAL_CATALYST,
+    RULE_CROSS_SECTIONAL_MOMENTUM,
+)
 from shrap.research.strategy_evaluator.reference_strategy import (
     DEFAULT_TARGET_WEIGHT,
     PARAM_BOUNDS,
 )
 from shrap.research.strategy_registry import STATUS_HYPOTHESIS, StrategyRecord
+from shrap.research.universe_curator.launch_list import LAUNCH_LIST
 
 CODE_REF = "src/shrap/research/strategy_seed/technical_strategies.py"
 SOURCE = "mike-seed"
@@ -81,7 +88,7 @@ _PARAM_BOUNDS: dict[str, list[float]] = {name: [lo, hi] for name, (lo, hi) in PA
 
 
 class TechnicalSeed(NamedTuple):
-    """One Framework #3 strategy definition."""
+    """One single-name Framework #3 strategy definition."""
 
     key: str
     strategy_id: str
@@ -89,6 +96,19 @@ class TechnicalSeed(NamedTuple):
     ticker: str
     fast: int
     slow: int
+    thesis: str
+
+
+class MomentumSeed(NamedTuple):
+    """One cross-sectional Framework #3 strategy over the whole universe."""
+
+    key: str
+    strategy_id: str
+    name: str
+    tickers: tuple[str, ...]
+    lookback: int
+    skip: int
+    top_n: int
     thesis: str
 
 
@@ -119,6 +139,118 @@ TECHNICAL_SEEDS: tuple[TechnicalSeed, ...] = (
         ),
     ),
 )
+
+# The universe this trades. Taken from the Curator's launch list rather than
+# hand-listed, so the strategy and the tradeable universe cannot drift apart —
+# a name dropped from Tier 3 would otherwise sit in this spec silently and be
+# refused at evaluation with nothing pointing at why.
+_MOMENTUM_TICKERS: tuple[str, ...] = tuple(sorted(e.ticker for e in LAUNCH_LIST))
+
+MOMENTUM_SEEDS: tuple[MomentumSeed, ...] = (
+    MomentumSeed(
+        key="xs-momentum-126-21-10",
+        strategy_id="01KYNH9VKXVQXJ48T4MF306PHE",
+        name="Cross-sectional momentum (126/21, top 10)",
+        tickers=_MOMENTUM_TICKERS,
+        # Six-month formation, one-month skip, top decile of a 50-name universe.
+        # These are the textbook construction rather than a search result: the
+        # numbers were not tuned against this data, and tuning them would make
+        # the out-of-sample claim meaningless.
+        lookback=126,
+        skip=21,
+        top_n=10,
+        thesis=(
+            "Cross-sectional momentum: names that outperformed their peers over the "
+            "preceding six months, excluding the most recent month, continue to "
+            "outperform over the following weeks. The skip is not a tuning knob — "
+            "short-horizon reversal runs opposite to momentum, so including the last "
+            "month mixes two opposing signals. This is the first strategy the firm has "
+            "seeded with a documented out-of-sample prior behind it rather than a rule "
+            "chosen to have something to run: it is one of the most replicated effects "
+            "in the equity literature, and also one of the most crowded, so prior "
+            "evidence raises the odds of surviving evaluation without guaranteeing it. "
+            "No world-changer anchor: the thesis is entirely about relative price "
+            "behaviour."
+        ),
+    ),
+)
+
+# Falsifiers specific to a cross-sectional momentum book. The generic protocol
+# gates are appended by `_momentum_kill_criteria`.
+_MOMENTUM_KILL_CRITERIA: tuple[str, ...] = (
+    "the momentum effect does not survive realistic costs at this turnover — a "
+    "monthly top-decile rotation over 50 names trades a great deal, and the effect "
+    "is small enough per name that friction is the likeliest way it dies",
+    "the strategy does not beat equal-weight buy-and-hold of the same universe — "
+    "an information ratio at or below zero means the rotation destroyed value "
+    "against simply owning the names",
+    "momentum crashes: the effect is known to invert sharply after drawdowns, so a "
+    "single fold with a large negative return is evidence about the strategy rather "
+    "than noise to be averaged away",
+)
+
+
+def momentum_kill_criteria() -> list[str]:
+    """Rule-specific falsifiers plus the protocol's own gates."""
+
+    return [*_MOMENTUM_KILL_CRITERIA, *_KILL_CRITERIA[1:]]
+
+
+def _momentum_spec(seed: MomentumSeed) -> dict[str, Any]:
+    return {
+        "rule": RULE_CROSS_SECTIONAL_MOMENTUM,
+        "params": {
+            "lookback": seed.lookback,
+            "skip": seed.skip,
+            "top_n": seed.top_n,
+            "gross_exposure": 1.0,
+        },
+        "param_bounds": {k: list(v) for k, v in MOMENTUM_PARAM_BOUNDS.items()},
+    }
+
+
+def compute_momentum_spec_hash(seed: MomentumSeed) -> str:
+    """Dedup key, same shape as every other seed family."""
+
+    material = json.dumps(
+        {
+            "name": seed.name,
+            "archetype": ARCHETYPE_TECHNICAL_CATALYST,
+            "anchor": ANCHOR,
+            "tickers": {"long": list(seed.tickers), "short": []},
+            "spec": _momentum_spec(seed),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def momentum_record(seed: MomentumSeed) -> StrategyRecord:
+    """Build one cross-sectional momentum seed at ``hypothesis``."""
+
+    return StrategyRecord(
+        strategy_id=seed.strategy_id,
+        name=seed.name,
+        version=1,
+        archetype=ARCHETYPE_TECHNICAL_CATALYST,
+        status=STATUS_HYPOTHESIS,
+        source=SOURCE,
+        thesis=seed.thesis,
+        anchor=dict(ANCHOR),
+        tickers={"long": list(seed.tickers), "short": []},
+        spec=_momentum_spec(seed),
+        spec_hash=compute_momentum_spec_hash(seed),
+        regime_sizing_modifier=dict(REGIME_SIZING_MODIFIER),
+        kill_criteria=momentum_kill_criteria(),
+        code_ref=CODE_REF,
+        created_at=None,
+        updated_at=None,
+    )
+
+
+MOMENTUM_SEEDS_BY_KEY: dict[str, MomentumSeed] = {s.key: s for s in MOMENTUM_SEEDS}
+
 
 # Falsifiers. Note what is absent: no world-changer criterion, because there is
 # no world-changer. The first is the one specific to this rule; the rest are the
@@ -206,9 +338,15 @@ TECHNICAL_SEEDS_BY_KEY: dict[str, TechnicalSeed] = {s.key: s for s in TECHNICAL_
 __all__ = [
     "ANCHOR",
     "CODE_REF",
+    "MOMENTUM_SEEDS",
+    "MOMENTUM_SEEDS_BY_KEY",
     "TECHNICAL_SEEDS",
     "TECHNICAL_SEEDS_BY_KEY",
+    "MomentumSeed",
     "TechnicalSeed",
+    "compute_momentum_spec_hash",
     "compute_spec_hash",
+    "momentum_kill_criteria",
+    "momentum_record",
     "technical_record",
 ]
