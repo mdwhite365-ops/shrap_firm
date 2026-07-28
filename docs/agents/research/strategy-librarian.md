@@ -14,13 +14,35 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 
 ## Purpose
 
-The Strategy Librarian owns the strategy registry — the single system of
-record for every strategy the firm has ever considered, and the lifecycle
-state of each. Without it, the middle loop has no memory: the Hypothesis
-Generator cannot check prior art, the Evaluator has nowhere to record
-verdicts, the Trading Floor has no authoritative answer to "which strategies
-are active right now," and retrospectives cannot answer "why did we promote
-this strategy then."
+The Strategy Librarian is the custodian of the strategy registry — the single
+system of record for every strategy the firm has ever considered, and the
+lifecycle state of each. Without it, the middle loop has no memory: the
+Hypothesis Generator cannot check prior art, the Trading Floor has no
+authoritative answer to "which strategies are active right now," and
+retrospectives cannot answer "why did we promote this strategy then."
+
+> **Ownership correction, 2026-07-27.** This spec previously said the Librarian
+> *owns* the registry and applies verdict transitions, while the Strategy
+> Evaluator spec independently lists `research.strategies` as a direct
+> **Update** output of its own. Both claimed the write. The implementation does
+> both: `EvaluationPipeline.commit()` transitions the registry, then publishes
+> the verdict, which the Librarian consumes and attempts to transition again —
+> silently absorbed by `expected_from` guarding.
+>
+> **The Evaluator owns the verdict transition.** The firm's first verdict
+> (2026-07-27) settled this on evidence rather than preference: the Librarian
+> was not deployed at all (KI-014), and had the Evaluator delegated, the
+> evaluation would have computed, published, and left the registry reading
+> `hypothesis` while reporting success. A verdict and its transition must land
+> atomically with the evaluation record, not depend on a second always-on
+> consumer being up.
+>
+> The Librarian's transition leg is therefore a **convergence path, not the
+> primary writer** — it applies transitions for verdicts whose producer did not
+> already apply them, and is a no-op otherwise. Its load-bearing roles are the
+> ones nothing else covers: Mike-initiated registration and retirement, the
+> false-alarm restore path, and being the authoritative query surface for
+> lifecycle state.
 
 The registry is two PostgreSQL tables (implemented in
 `src/shrap/research/strategy_registry.py`):
@@ -51,8 +73,11 @@ What this agent cannot do, stated clearly:
 ## Trigger
 
 - **Event:** Subscribes to `research.strategy.verdict` and
-  `research.strategy.killed` from the Strategy Evaluator, and applies the
-  corresponding registry transition (service card, not yet implemented).
+  `research.strategy.killed` from the Strategy Evaluator. Applies the
+  corresponding registry transition **only if the producer has not already
+  applied it** — `expected_from` makes an already-applied verdict an
+  ack-and-skip. Implemented in `src/shrap/research/librarian_service.py`;
+  deployed for the first time following KI-014.
 - **On-demand:** Mike-initiated registration or retirement through the
   repository interface.
 

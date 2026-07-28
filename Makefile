@@ -1,4 +1,4 @@
-.PHONY: install test lint fmt typecheck all
+.PHONY: install test lint fmt typecheck all deploy-drift
 
 install:
 	pip install -e '.[dev]'
@@ -18,3 +18,9 @@ typecheck:
 	mypy src/
 
 all: install lint typecheck test
+
+# Report compose services defined in infra/docker-compose.yml but not running.
+# Run this on the Dell after any deploy — the per-service deploy pattern
+# silently skips services that were never explicitly named (KI-014).
+deploy-drift:
+	./infra/check-deploy-drift.sh
