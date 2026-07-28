@@ -217,6 +217,96 @@ what exists.
   quarters. Motivating case: Valar Atomics Ward 250 criticality
   (DOE Reactor Pilot Program, 2026-06-18).
 
+## THE PROBE RESULTS — 2026-07-28 06:05 UTC
+
+Two protocol probes (PR #100) evaluated back to back. Together with the
+original seed the firm now has **three evaluations of the same rule family on
+the same instrument over the same window**, differing only in moving-average
+windows.
+
+| Seed | fast/slow | Trades | Base Sharpe | Stress Sharpe | Verdict |
+|---|---|---|---|---|---|
+| `first` | 20 / 100 | 20 | 0.415 | 0.310 | kill / insufficient-trades |
+| `trend-10-50` (control) | 10 / 50 | 43 | **-0.157** | **0.048** | kill / insufficient-trades |
+| `trend-3-10` (treatment) | 3 / 10 | **145** | 0.745 | 0.331 | kill / insufficient-trades |
+
+Evaluation ids `01KYKN8RABZ9M2MKZ91SFBJCZY` (control) and
+`01KYKN8VS67TXJCBCG0MTQMJ5F` (treatment). All three strategies are now
+`killed`; re-running either probe refuses with *"is 'killed'; this card
+evaluates only 'hypothesis'-stage strategies"*, which is the terminal-state
+guard behaving correctly.
+
+### 1. The experiment isolated its variable
+
+Trade count rose monotonically with window speed — 20, 43, 145 — so trade
+frequency responded to the only thing that changed. The control did its job:
+`insufficient-trades` reproduces across parameter pairs rather than being an
+artifact of 20/100.
+
+### 2. Sharpe did not
+
+**0.415 → -0.157 → 0.745.** Non-monotonic, and it changes sign.
+
+Same rule family, same ticker, same period, same costs. Three parameter choices
+produce out-of-sample Sharpes that swing from clearly negative to nearly the
+promote floor with no pattern. A parameter chosen on backtest Sharpe would pick
+3/10; a parameter chosen one step away would pick a losing strategy.
+
+This is the strongest evidence the firm has produced that these numbers are
+**parameter noise, not edge**. A real edge is somewhat robust to parameter
+choice; this one flips sign between neighbours. It is the same lesson fold 5 of
+the first verdict taught at the fold level (Sharpe 1.712 from one trade), now
+visible at the parameter level.
+
+It also sharpens why the 150-trade gate matters. The gate is not a hurdle in
+front of otherwise-usable numbers — it is the line below which the numbers are
+not measurements.
+
+### 3. The near-miss, and why it must not be tuned away
+
+The treatment landed at **145 trades against a 150 gate**. Five short.
+
+That invites lowering the gate or picking `fast=2/slow=8` to squeak over.
+Walking `map_verdict` with a gate of 140 shows what it would buy: trades pass,
+base 0.745 > 0 passes, stress 0.331 > 0 passes, and then
+`base_sharpe < sharpe_floor` yields **HOLD / below-sharpe-floor**. Not a
+promotion. Tuning the gate would purchase a different label on the same
+non-edge, which is the "promoting noise" failure the vision names. Recorded
+here so the temptation is on the record rather than rediscovered.
+
+### 4. Four verdict branches remain untested
+
+`no-edge`, `fails-friction-stress`, `below-sharpe-floor`, and `promote` have
+still never run against real data — all four evaluations died at the trade-count
+gate, which fires first. Note the control *would* have reached `no-edge` on its
+negative base Sharpe had the gate not fired: reaching the untested branches
+needs a probe fast enough to clear 150, not a lower gate.
+
+### 5. First proof of two fixes
+
+- **The #96 card-root fix works.** Two cards written to
+  `/cards/<strategy_id>/<timestamp>.md`. Until this run it had been inspected,
+  never executed successfully.
+- **The terminal-state guard works**, and it means every protocol probe is
+  single-use. The seed catalogue will accumulate one entry per experiment, which
+  is correct — the graveyard is the denominator.
+
+### Process notes from the run
+
+Three operational defects surfaced, none of them in the evaluator:
+
+1. **`docker compose run` does not rebuild.** The first probe attempt ran the
+   previous night's image and reported `invalid choice: 'load-probe'`. Tools
+   services need an explicit `build` after any code change — the run-to-
+   completion analogue of the `--force-recreate` lesson, and invisible to
+   `check-deploy-drift.sh`, which compares services rather than image ages.
+2. **`--user` broke a working configuration.** The evaluations directory is
+   owned by `10001:10001` exactly as the compose block documents, and the
+   container's default user is 10001. Overriding to the host uid (950) fell
+   through to `other` (`r-x`) and failed. The setup was already correct; the
+   override created the mismatch.
+3. Both are now covered by `docs/runbooks/tools-services.md`.
+
 ## THE FIRST VERDICT — 2026-07-27 23:49 UTC
 
 **The Research Department completed a loop for the first time.** Live on the

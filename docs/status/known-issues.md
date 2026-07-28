@@ -352,3 +352,45 @@ strategy the firm cannot yet produce.
 
 **Mitigation:** make both archetype-conditional. The min-trades band per
 archetype is a calibration decision and is Mike's.
+
+## KI-015 — The friction stress is a scenario, not a worst-case bound
+
+**Status:** Open, found 2026-07-28 by the control probe. Not a live hazard;
+recorded before a real strategy relies on it.
+
+The `trend-10-50` control evaluated to **base Sharpe -0.157 and stress Sharpe
++0.048** — the stressed run scored *better* than the unstressed one.
+
+The stress pass applies two changes together: `stress_cost_multiplier` (+50%
+costs) and `stress_execution_lag` (+1 day), the latter at
+`engine.py` via `execution_lag=config.stress_execution_lag`. For a whipsawing
+rule a one-day lag can skip false signals, and here that apparently outweighed
+the higher costs. So the result is plausibly legitimate rather than a
+calculation error — though what has been confirmed is that the lag exists and
+is applied, not that it is definitely the cause.
+
+**Why it matters.** `map_verdict` treats `stress_sharpe > 0` as evidence a
+strategy "survives realistic friction." If the stressed scenario can score
+*above* the base case, passing that check does not establish robustness — the
+stress simply may not have bitten. The evaluation card's phrasing
+("must stay positive to promote") reads as a floor on a strictly harsher
+scenario, which it is not.
+
+**No exploitable hole today.** `base_sharpe <= 0` is checked *before*
+`stress_sharpe <= 0`, so a negative base always kills regardless of what the
+stress run reports. The gap is interpretive, not a bypass.
+
+**Options, none taken yet — this is Mike's call:**
+
+- Report stress as a *delta* from base rather than a standalone Sharpe, so an
+  improvement is visibly an improvement rather than a pass.
+- Separate the two stress dimensions, so cost sensitivity and timing
+  sensitivity are measured independently instead of netting against each other.
+- Take the *minimum* of base and stress as the promotion input, making the
+  check a genuine floor.
+- Leave it, and reword the card so it does not imply a bound it does not
+  provide.
+
+The third is the smallest change that makes the claim true, but it discards the
+information that a lag *helped* — which is itself a signal about a rule that
+trades on noise.
