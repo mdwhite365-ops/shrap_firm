@@ -96,8 +96,12 @@ class FakeReader:
         self._wc_status = wc_status
         self._tier = tier
         self._bars = bars or []
+        # Recorded so a test can assert the anchor was never *consulted* for an
+        # anchor-less archetype, not merely that its result was ignored.
+        self.wc_queries: list[str] = []
 
     async def world_changer_status(self, candidate_id: str) -> str | None:
+        self.wc_queries.append(candidate_id)
         return self._wc_status
 
     async def ticker_tier(self, ticker: str) -> str | None:
@@ -496,6 +500,46 @@ async def test_a_held_promote_never_publishes_the_verdict_stream(tmp_path: Path)
         reader=FakeReader(bars=_square_wave_bars()),
         store=FakeStore(),
         redis=redis,
+# --- archetype-conditional gates (ADR-0013) ----------------------------------
+
+
+async def test_technical_catalyst_is_evaluated_without_an_anchor(tmp_path: Path) -> None:
+    """The gate this card exists to open.
+
+    Before ADR-0013's fix a `technical-catalyst` record never reached the anchor
+    check at all: spec hygiene refused any archetype but `infra-graph-play`.
+    """
+
+    registry = FakeRegistry(_record(archetype="technical-catalyst", anchor={}))
+    reader = FakeReader(bars=_uptrend_bars())
+    store, redis = FakeStore(), FakeRedis()
+    pipeline = _pipeline(
+        registry=registry, reader=reader, store=store, redis=redis, card_root=tmp_path
+    )
+    outcome = await pipeline.evaluate("01STRAT")
+
+    # The engine ran: the verdict is a measurement, not a gate artifact.
+    assert outcome.engine_ran is True
+    assert outcome.reason != REASON_ANCHOR_NOT_LIVE
+    assert outcome.anchor_required is False
+    # Not consulted at all — no query issued, not merely a result discarded.
+    assert reader.wc_queries == []
+
+
+async def test_technical_catalyst_can_reach_promote(tmp_path: Path) -> None:
+    """Anchor-lessness must not block the promote branch either.
+
+    A gate that only let anchor-less strategies through to a kill would be the
+    same categorical exclusion wearing a different reason code.
+    """
+
+    registry = FakeRegistry(_record(archetype="technical-catalyst", anchor={}))
+    reader = FakeReader(bars=_square_wave_bars())
+    pipeline = _pipeline(
+        registry=registry,
+        reader=reader,
+        store=FakeStore(),
+        redis=FakeRedis(),
         card_root=tmp_path,
         strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
     )
@@ -524,6 +568,46 @@ async def test_the_review_gate_does_not_touch_kills(tmp_path: Path) -> None:
         reader=FakeReader(bars=_uptrend_bars()),
         store=FakeStore(),
         redis=redis,
+    assert outcome.verdict == VERDICT_PROMOTE
+    assert outcome.reason == REASON_PROMOTE
+    assert outcome.to_stage == STATUS_PAPER
+
+
+async def test_declared_anchor_on_an_anchorless_archetype_is_not_a_gate(tmp_path: Path) -> None:
+    """A stale anchor on a technical strategy must not resurrect the gate.
+
+    Records may carry a leftover anchor. The policy, not the payload, decides
+    whether it gates — otherwise the archetype's exemption would depend on
+    whoever wrote the row remembering to clear a field.
+    """
+
+    registry = FakeRegistry(
+        _record(archetype="technical-catalyst", anchor={"world_changer_id": "01WC"})
+    )
+    reader = FakeReader(wc_status="rejected", bars=_uptrend_bars())
+    pipeline = _pipeline(
+        registry=registry,
+        reader=reader,
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+    )
+    outcome = await pipeline.evaluate("01STRAT")
+    assert outcome.engine_ran is True
+    assert outcome.reason != REASON_ANCHOR_NOT_LIVE
+    assert reader.wc_queries == []
+
+
+async def test_infra_graph_play_still_dies_on_a_dead_anchor(tmp_path: Path) -> None:
+    """The regression that matters: Framework #1 keeps the gate it needs."""
+
+    registry = FakeRegistry(_record(archetype="infra-graph-play"))
+    reader = FakeReader(wc_status="at-risk", bars=_uptrend_bars())
+    pipeline = _pipeline(
+        registry=registry,
+        reader=reader,
+        store=FakeStore(),
+        redis=FakeRedis(),
         card_root=tmp_path,
     )
     outcome = await pipeline.evaluate("01STRAT")
@@ -557,3 +641,73 @@ async def test_the_gate_is_off_by_default_so_the_manual_cli_still_promotes(
     assert result.promotion_held is False
     assert result.transitioned is True
     assert registry.transitions == [("01STRAT", STATUS_PAPER, STATUS_HYPOTHESIS)]
+    assert outcome.reason == REASON_ANCHOR_NOT_LIVE
+    assert outcome.engine_ran is False
+    assert outcome.anchor_required is True
+    assert reader.wc_queries == ["01WC"]
+
+
+async def test_unknown_archetype_is_refused_not_silently_ungated(tmp_path: Path) -> None:
+    """Fail closed. An archetype with no declared policy is not evaluable."""
+
+    registry = FakeRegistry(_record(archetype="fragility-cascade"))
+    pipeline = _pipeline(
+        registry=registry,
+        reader=FakeReader(),
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+    )
+    with pytest.raises(SpecHygieneError, match="no declared evaluation policy"):
+        await pipeline.evaluate("01STRAT")
+
+
+async def test_card_and_summary_distinguish_not_required_from_not_live(tmp_path: Path) -> None:
+    """`anchor_fresh=False` means two different things; the card must not blur them.
+
+    Rendering an anchor-less strategy as "not live" would report a falsified
+    thesis for a strategy that never claimed one.
+    """
+
+    registry = FakeRegistry(_record(archetype="technical-catalyst", anchor={}))
+    pipeline = _pipeline(
+        registry=registry,
+        reader=FakeReader(bars=_uptrend_bars()),
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+    )
+    outcome = await pipeline.evaluate("01STRAT")
+    assert "not required" in outcome.card_markdown
+    assert "not live" not in outcome.card_markdown
+    assert "anchor=not-required" in outcome.summary()
+
+    dead = FakeRegistry(_record(archetype="infra-graph-play"))
+    dead_pipeline = _pipeline(
+        registry=dead,
+        reader=FakeReader(wc_status="at-risk"),
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+    )
+    dead_outcome = await dead_pipeline.evaluate("01STRAT")
+    assert "anchor=not-live" in dead_outcome.summary()
+    assert "not required" not in dead_outcome.card_markdown
+
+
+async def test_anchor_required_is_persisted_with_the_evaluation(tmp_path: Path) -> None:
+    """The ledger must be able to tell the two False cases apart after the fact."""
+
+    registry = FakeRegistry(_record(archetype="technical-catalyst", anchor={}))
+    store = FakeStore()
+    pipeline = _pipeline(
+        registry=registry,
+        reader=FakeReader(bars=_uptrend_bars()),
+        store=store,
+        redis=FakeRedis(),
+        card_root=tmp_path,
+    )
+    outcome = await pipeline.evaluate("01STRAT")
+    await pipeline.commit(outcome)
+    assert store.inserted[0]["anchor_required"] is False
+    assert store.inserted[0]["anchor_fresh"] is False

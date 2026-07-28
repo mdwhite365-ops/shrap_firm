@@ -54,15 +54,27 @@ CREATE INDEX IF NOT EXISTS evaluations_strategy_idx
 ON research.evaluations (strategy_id, created_at DESC)
 """.strip()
 
+# Added with the archetype-conditional gates (ADR-0013). `anchor_fresh` alone is
+# ambiguous once an archetype can be anchor-less: False means "the anchor is
+# dead" for infra-graph-play and "there was never an anchor" for
+# technical-catalyst. DEFAULT TRUE is correct for every pre-existing row —
+# infra-graph-play was the only evaluable archetype when they were written — so
+# the dead-anchor set stays queryable as (anchor_required AND NOT anchor_fresh).
+ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL = """
+ALTER TABLE research.evaluations
+ADD COLUMN IF NOT EXISTS anchor_required BOOLEAN NOT NULL DEFAULT TRUE
+""".strip()
+
 INSERT_EVALUATION_SQL = """
 INSERT INTO research.evaluations (
     evaluation_id, strategy_id, spec_hash, protocol_version, verdict, reason,
-    anchor_fresh, total_trades, from_stage, to_stage, aggregate_metrics,
-    fold_metrics, stress_metrics, config, card_path, trigger, created_at
+    anchor_required, anchor_fresh, total_trades, from_stage, to_stage,
+    aggregate_metrics, fold_metrics, stress_metrics, config, card_path,
+    trigger, created_at
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-    $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15, $16, $17
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+    $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18
 )
 """.strip()
 
@@ -121,6 +133,7 @@ class PostgresEvaluationStore:
         async with self._pool.acquire() as conn:
             await conn.execute(CREATE_RESEARCH_SCHEMA_SQL)
             await conn.execute(CREATE_EVALUATIONS_TABLE_SQL)
+            await conn.execute(ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL)
             await conn.execute(CREATE_EVALUATIONS_STRATEGY_INDEX_SQL)
 
     async def insert_evaluation(
@@ -132,6 +145,7 @@ class PostgresEvaluationStore:
         protocol_version: str,
         verdict: str,
         reason: str,
+        anchor_required: bool,
         anchor_fresh: bool,
         total_trades: int,
         from_stage: str,
@@ -153,6 +167,7 @@ class PostgresEvaluationStore:
                 protocol_version,
                 verdict,
                 reason,
+                anchor_required,
                 anchor_fresh,
                 total_trades,
                 from_stage,
@@ -221,6 +236,7 @@ class PostgresEvaluatorReader:
 
 
 __all__ = [
+    "ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL",
     "CREATE_EVALUATIONS_TABLE_SQL",
     "CREATE_RESEARCH_SCHEMA_SQL",
     "INSERT_EVALUATION_SQL",
