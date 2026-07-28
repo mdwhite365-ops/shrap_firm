@@ -68,12 +68,57 @@ one would be the failure the protocol exists to prevent.
 This is the sprint's actual open question: **can the firm generate a strategy
 worth trading?** Everything before it was plumbing.
 
+**Mike's ruling, 2026-07-28: both tracks, protocol first.** An earlier draft of
+this file led with the intraday-data decision and described the structural lens
+as "closer to why you're building this." That was wrong and is corrected here —
+**Shrap is a trading firm, and the world-changer work is one lens inside it, not
+its purpose.** `00-vision.md` §7 always said so: *most* strategies trade on
+technical and short-term-catalyst signals, with Structural Analysis as the
+patient counterweight. Both tracks below are first-class; they are ordered by
+what unblocks fastest, not by importance.
+
+### Track A — evaluation protocol for slow strategies (start now, no purchase)
+
 | # | Item | Depends on | Note |
 |---|---|---|---|
-| 2.1 | **Intraday data decision** | — | Blocking and unresolved. The fast layer needs it; `market_data.daily_bars` cannot express "fast loops, many trades" at any parameterisation. Scope: which bar size, which feed, what it costs, whether the Evaluator's walk-forward still applies. **This is Mike's call and it gates 2.2.** |
-| 2.2 | **Sweep Detector** — ADR-0013 §4, the first genuine Framework #3 strategy | 1.1, 2.1 | Mike's existing liquidation-sweep logic, wrapped. The one strategy in the firm's future with a real prior behind it. |
-| 2.3 | **Hypothesis Generator** with `technical-catalyst` in its archetype set | 1.1 | ADR-0013 sequencing item 3. Its spec predates ADR-0013 and allows only the two ADR-0007 archetypes; the spec needs updating before the code. |
-| 2.4 | **Strategy Runner consumes `intelligence.signal`** | 2.2 | ADR-0013 §3. Closes KI-011 — two deployed agents have been writing to a stream with no consumer since Month 2. |
+| 2.1 | **A second evaluation protocol** for strategies making a handful of decisions over years | — | `walk_forward` is the only engine in the codebase, and Sharpe over 6 folds of a 5-year window gives ~2 decisions per fold for a 6-month holder — the arithmetic that produced an annualised Sharpe of 1.712 from a *single trade* in fold 5. Candidate instruments: event study around the thesis catalyst, realised-vs-thesis comparison, hit rate with payoff asymmetry, base rates. Costs design time only. |
+| 2.2 | **Re-evaluate the killed structural seeds** under the new protocol | 2.1 | The three killed strategies are the only real data the firm has about its own evaluation machinery. |
+
+### Track B — the fast layer (gated on a data decision)
+
+| # | Item | Depends on | Note |
+|---|---|---|---|
+| 2.3 | **Intraday data decision** | — | **Mike's call.** `market_data.daily_bars` cannot express "fast loops, many trades" at any parameterisation. Scope: bar size, feed, cost, whether the walk-forward still applies. **Decide it against the direction of travel below** — an equities-only feed answers today's question and none of the next one. |
+| 2.4 | **Sweep Detector** — ADR-0013 §4, the first genuine Framework #3 strategy | 1.1, 2.3 | Mike's existing liquidation-sweep logic, wrapped. The one strategy in the firm's future with a real prior behind it. |
+| 2.5 | **Hypothesis Generator** with `technical-catalyst` in its archetype set | 1.1 | ADR-0013 sequencing item 3. Its spec predates ADR-0013 and allows only the two ADR-0007 archetypes; the spec needs updating before the code. |
+| 2.6 | **Strategy Runner consumes `intelligence.signal`** | 2.4 | ADR-0013 §3. Closes KI-011 — two deployed agents have been writing to a stream with no consumer since Month 2. |
+
+---
+
+## Direction of travel — options and futures
+
+**Not this sprint, but it should shape decisions made now.** Mike's stated
+long-run intent (2026-07-28) is options and futures for genuinely fast trading.
+Three things already in the repo bear on it:
+
+1. **It is the ADR-0003 gate condition, verbatim.** NautilusTrader adoption
+   triggers on "live capital or execution needs beyond market/day orders."
+   Options and futures *are* execution needs beyond market/day orders. So this
+   is not a new decision to make later — it is a decision already recorded,
+   waiting on the trigger.
+2. **MES futures via IBKR was a Month-3 roadmap item** (`01-roadmap.md`:
+   "IBKR Gateway adapter live"). Month 3 is now, and it has not been built.
+   Recording that plainly rather than letting it lapse silently.
+3. **`post-launch.md` §Options strategies** already has the honest version of
+   the cost: Greeks are a state-management layer the Trading Floor does not
+   have, the Risk Officer's rules get substantially harder (margin, assignment,
+   expiry), and the Evaluator needs an options pricing model. Its recommended
+   path — defined-risk verticals on a few names, built as an options-aware
+   subsystem rather than retrofitted — still looks right.
+
+**The concrete consequence for 2.3:** a feed chosen only for equities answers
+this sprint's question and none of the following one. Futures data and options
+chains are worth weighing now even though neither is bought now.
 
 ---
 
@@ -107,7 +152,7 @@ Listing these is the point — an unwritten "maybe" costs more than a written
 
 | Gap | Size | Why it waits |
 |---|---|---|
-| **Structural Analysis Department** — 4 agents, no directory | Large | ADR-0010 §3. The department the fragility/2008-pattern work belongs to. Needs Framework #3 working first, or it is a second unvalidated lens. |
+| **Structural Analysis Department** — 4 agents, no directory | Large | ADR-0010 §3. The department the fragility/2008-pattern work belongs to. Needs Track A's protocol first — without it the department can produce theses but never a tradeable, measurable strategy. |
 | **Reporting Department** — Daily Briefing, Weekly Review, Alert Agent | Medium | The alert *channel* exists (`alerts.py`); the agents do not. 1.2 delivers the one alert that currently matters. |
 | **Platform Department** — Cost Monitor, LLM Migration Evaluator, Infrastructure Planner | Medium | Cost Monitor is specced to track "Langfuse spend," so it is blocked behind 3.1 regardless. |
 | **Bottleneck Scout** | Large | The Evaluator explicitly refuses `bottleneck-rotation` until `research.bottlenecks` has rows. Framework #1 work, and Framework #1 is paused. |

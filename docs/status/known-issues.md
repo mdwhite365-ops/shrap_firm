@@ -534,3 +534,38 @@ a model rejected an item is not reconstructible.
 rather than each agent — every LLM-using agent already routes through it, so one
 card covers all of them. Tracked as Phase 3.1 in
 `docs/roadmap/implementation-timeline.md`.
+
+## KI-019 — `02-architecture.md` describes a trading engine that was never built
+
+**Status:** Corrected in place 2026-07-28 (audit). The drift is closed; the
+lesson is not.
+
+The foundational architecture document described NautilusTrader as *"the trading
+engine for the inner loop,"* with *"two adapters wired"* (Alpaca equities, IBKR
+Gateway for MES futures), running *"as its own container on the Dell"* and owning
+*"the `trading/` path in the repo."*
+
+None of that is true, and none of it has been true since **ADR-0003 (Accepted,
+2026-07-06)** re-scoped NautilusTrader from a Month-1 dependency to a gate. The
+paper spine runs on a direct Alpaca client. There is no NautilusTrader container,
+no IBKR adapter, and no `trading/` path.
+
+The same paragraph block described **VectorBT PRO** running backtests submitted
+over `ryzen.tasks` / `ryzen.results` streams. PR #41 ruled for an in-house
+walk-forward engine instead. Neither stream exists.
+
+**Why it matters more than a stale sentence.** `02-architecture.md` is one of the
+ten foundational documents and is where a new session — human or agent — goes to
+learn how the firm executes trades. Both paragraphs read as present-tense
+description, not as plan. An agent reading them would look for a container that
+is not there and a job protocol that was never written.
+
+**Why it survived.** ADR-0003 and PR #41 each correctly recorded their own
+decision. Neither went back to amend the document those decisions invalidated.
+Accepted ADRs supersede the architecture doc silently, and nothing checks.
+
+**Fix applied:** both paragraphs now carry an explicit correction banner naming
+the superseding decision, with the original text retained as the design that
+adoption would restore. **Standing implication:** an ADR that changes how a
+component works should amend `02-architecture.md` in the same card, not leave
+the reconciliation to a later audit.
