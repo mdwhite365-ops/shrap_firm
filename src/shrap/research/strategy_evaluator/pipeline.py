@@ -82,8 +82,6 @@ STREAM_STRATEGY_VERDICT = "research.strategy.verdict"
 # Nothing consumes this to apply a transition — that is the whole point.
 STREAM_STRATEGY_PROMOTION_PENDING = "research.strategy.promotion-pending"
 
-# The only archetype this card can evaluate; bottleneck-rotation is deferred
-# until Bottleneck Scout populates research.bottlenecks (resequencing ruling).
 ARCHETYPE_INFRA_GRAPH_PLAY = "infra-graph-play"
 ARCHETYPE_BOTTLENECK_ROTATION = "bottleneck-rotation"
 ARCHETYPE_TECHNICAL_CATALYST = "technical-catalyst"
