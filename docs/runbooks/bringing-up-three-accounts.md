@@ -64,12 +64,18 @@ sudo docker compose up -d --force-recreate \
 ## 4. Verify all three accounts appear — **stop here if they do not**
 
 ```bash
-sudo docker compose exec postgres psql -U "$SHRAP_DB_USER" -d "$SHRAP_DB_NAME" -c \
+sudo docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
 "SELECT account_id, count(*) AS snapshots, max(at) AS latest
  FROM ops.account_snapshots
  WHERE account_id IS NOT NULL
- GROUP BY account_id ORDER BY account_id;"
+ GROUP BY account_id ORDER BY account_id;"'
 ```
+
+**The single quotes are load-bearing.** `SHRAP_DB_USER` lives in `infra/.env`,
+which Compose reads but your shell does not — so `psql -U "$SHRAP_DB_USER"`
+expands to an empty user and fails with `role "postgres" does not exist`.
+Wrapping in `sh -c '...'` defers expansion to inside the container, where
+`POSTGRES_USER` and `POSTGRES_DB` are set by the compose service.
 
 Expect **three distinct `account_id` values**, each with a recent `latest`.
 
