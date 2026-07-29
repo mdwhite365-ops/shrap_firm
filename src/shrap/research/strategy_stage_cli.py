@@ -120,6 +120,63 @@ class PublisherPort(Protocol):
     ) -> object: ...
 
 
+def render_lineage(records: Sequence[StrategyRecord], asked_for: str) -> str:
+    """Every attempt on one idea, oldest first, with the search count.
+
+    The point of showing the whole family rather than one row: a promote
+    decision on attempt 12 reads very differently from the same numbers on
+    attempt 1, and nothing else in the firm's output carries that context.
+    """
+
+    if not records:
+        return f"no strategy {asked_for!r}"
+    root = records[0].lineage_root_id or records[0].strategy_id
+    lines = [
+        f"Lineage {root}",
+        f"Attempts: {len(records)}",
+        "",
+    ]
+    if len(records) > 1:
+        lines += [
+            "> An information ratio clearing the floor on attempt N is the best of "
+            "N draws, not evidence of edge in the Nth. Read the reasons below and "
+            "judge whether these are distinct hypotheses or one hypothesis being "
+            "tuned.",
+            "",
+        ]
+    by_parent: dict[str | None, list[StrategyRecord]] = {}
+    for record in records:
+        by_parent.setdefault(record.parent_strategy_id, []).append(record)
+
+    def walk(parent: str | None, depth: int) -> None:
+        for record in by_parent.get(parent, []):
+            marker = "  " * depth + ("+- " if depth else "")
+            account = record.account_id or "unassigned"
+            lines.append(
+                f"{marker}{record.strategy_id} [{record.status}] "
+                f"<{record.archetype}> account={account}"
+            )
+            lines.append(f"{'  ' * depth}   {record.name}")
+            if record.revision_reason:
+                lines.append(f"{'  ' * depth}   revised because: {record.revision_reason}")
+            if record.derived_from_evaluation_id:
+                lines.append(
+                    f"{'  ' * depth}   evidence: evaluation {record.derived_from_evaluation_id}"
+                )
+            walk(record.strategy_id, depth + 1)
+
+    # Roots first. Anything whose parent is outside this result set would be
+    # unreachable from a pure parent==None walk, so orphans are surfaced rather
+    # than silently dropped — a lineage that hides a member miscounts the search.
+    known = {r.strategy_id for r in records}
+    walk(None, 0)
+    for parent, children in by_parent.items():
+        if parent is not None and parent not in known:
+            for record in children:
+                lines.append(f"{record.strategy_id} [{record.status}] (parent {parent} not found)")
+    return "\n".join(lines)
+
+
 def render_show(record: StrategyRecord, history: Sequence[StrategyTransition]) -> str:
     """Current stage plus the full transition history, oldest first."""
 
@@ -307,6 +364,9 @@ async def _run(args: argparse.Namespace) -> str:
                 raise SystemExit(f"refused: no strategy {args.strategy_id!r}")
             return render_show(record, await registry.transitions(args.strategy_id))
 
+        if args.action == "lineage":
+            return render_lineage(await registry.lineage(args.strategy_id), args.strategy_id)
+
         if args.action == "assign-account":
             return await assign_account(
                 registry,
@@ -349,6 +409,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     show = sub.add_parser("show", help="Current stage, transition history, legal next moves")
     show.add_argument("strategy_id")
+
+    lineage = sub.add_parser(
+        "lineage",
+        help="Every attempt on this strategy's idea, and how many there have been",
+    )
+    lineage.add_argument("strategy_id")
 
     assign = sub.add_parser(
         "assign-account",

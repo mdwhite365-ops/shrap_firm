@@ -107,6 +107,56 @@ CREATE TABLE IF NOT EXISTS research.strategies (
 )
 """.strip()
 
+# Lineage (Mike, 2026-07-29). A strategy revised in response to a verdict records
+# what it came from and why.
+#
+# The reason it exists is not bookkeeping. The firm is meant to read a verdict,
+# form a better hypothesis and try again — and an iterating proposer that is not
+# counted is a machine for manufacturing false positives. Test twenty variants
+# and keep the one clearing IR 0.5 and you have not found edge, you have found
+# the best of twenty draws. A human doing that leaves a trail of memory and
+# doubt; an agent doing it at 3am leaves a promoted strategy.
+#
+# So `lineage_root_id` makes "how many attempts has this idea burned" a single
+# indexed query rather than a recursive walk, and `revision_reason` forces the
+# proposer to state a rationale that a person can later read and call a
+# parameter sweep. Denormalising the root is safe because parents never change:
+# the registry is append-only and a strategy's ancestry is fixed at insert.
+ALTER_STRATEGIES_ADD_LINEAGE_SQL = """
+ALTER TABLE research.strategies
+ADD COLUMN IF NOT EXISTS parent_strategy_id TEXT,
+ADD COLUMN IF NOT EXISTS lineage_root_id TEXT,
+ADD COLUMN IF NOT EXISTS derived_from_evaluation_id TEXT,
+ADD COLUMN IF NOT EXISTS revision_reason TEXT
+""".strip()
+
+# Backfills pre-lineage rows as their own roots. Without this every strategy
+# registered before this column existed reads as lineage-less, and the first
+# revision of one would start a lineage that excluded its own parent —
+# undercounting the search from the very first use.
+BACKFILL_STRATEGIES_LINEAGE_ROOT_SQL = """
+UPDATE research.strategies
+SET lineage_root_id = strategy_id
+WHERE lineage_root_id IS NULL
+""".strip()
+
+CREATE_STRATEGIES_LINEAGE_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS strategies_lineage_root_idx
+ON research.strategies (lineage_root_id)
+""".strip()
+
+SELECT_LINEAGE_SQL = """
+SELECT
+    strategy_id, name, version, archetype, status, source, thesis,
+    anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
+    code_ref, account_id, created_at, updated_at,
+    parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
+    revision_reason
+FROM research.strategies
+WHERE lineage_root_id = $1
+ORDER BY created_at, strategy_id
+""".strip()
+
 CREATE_STRATEGIES_SPEC_HASH_INDEX_SQL = """
 CREATE UNIQUE INDEX IF NOT EXISTS strategies_spec_hash_idx
 ON research.strategies (spec_hash)
@@ -176,11 +226,16 @@ INSERT INTO research.strategies (
     kill_criteria,
     code_ref,
     created_at,
-    updated_at
+    updated_at,
+    parent_strategy_id,
+    lineage_root_id,
+    derived_from_evaluation_id,
+    revision_reason
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7,
-    $8::jsonb, $9::jsonb, $10::jsonb, $11, $12::jsonb, $13::jsonb, $14, $15, $15
+    $8::jsonb, $9::jsonb, $10::jsonb, $11, $12::jsonb, $13::jsonb, $14, $15, $15,
+    $16, $17, $18, $19
 )
 ON CONFLICT (strategy_id) DO NOTHING
 """.strip()
@@ -189,7 +244,9 @@ SELECT_STRATEGY_SQL = """
 SELECT
     strategy_id, name, version, archetype, status, source, thesis,
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
-    code_ref, account_id, created_at, updated_at
+    code_ref, account_id, created_at, updated_at,
+    parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
+    revision_reason
 FROM research.strategies
 WHERE strategy_id = $1
 """.strip()
@@ -198,7 +255,9 @@ SELECT_STRATEGIES_BY_STATUS_SQL = """
 SELECT
     strategy_id, name, version, archetype, status, source, thesis,
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
-    code_ref, account_id, created_at, updated_at
+    code_ref, account_id, created_at, updated_at,
+    parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
+    revision_reason
 FROM research.strategies
 WHERE status = $1
 ORDER BY updated_at DESC
@@ -208,7 +267,9 @@ SELECT_STRATEGY_BY_SPEC_HASH_SQL = """
 SELECT
     strategy_id, name, version, archetype, status, source, thesis,
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
-    code_ref, account_id, created_at, updated_at
+    code_ref, account_id, created_at, updated_at,
+    parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
+    revision_reason
 FROM research.strategies
 WHERE spec_hash = $1
 """.strip()
@@ -217,7 +278,9 @@ SELECT_ALL_STRATEGIES_SQL = """
 SELECT
     strategy_id, name, version, archetype, status, source, thesis,
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
-    code_ref, account_id, created_at, updated_at
+    code_ref, account_id, created_at, updated_at,
+    parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
+    revision_reason
 FROM research.strategies
 ORDER BY created_at DESC, strategy_id
 """.strip()
@@ -254,6 +317,45 @@ class StrategyRegistryError(Exception):
 
 class StrategyNotFoundError(StrategyRegistryError):
     """The strategy_id has no row in research.strategies."""
+
+
+class UnknownParentError(StrategyRegistryError):
+    """A revision named a parent that is not in the registry.
+
+    Fail closed rather than registering it as an original: a revision whose
+    parent silently vanishes becomes a fresh lineage with an attempt count of
+    one, which is the exact number the search discipline exists to get right.
+    """
+
+
+class LineageError(StrategyRegistryError):
+    """A revision is missing something a revision must have."""
+
+
+def _validate_lineage(record: StrategyRecord) -> None:
+    """A revision must say what it came from and why.
+
+    ``revision_reason`` is mandatory, not decorative. It is the only field that
+    lets a later reader distinguish "momentum crashed in 2022, so this one stands
+    down after a drawdown" from "lookback 126 -> 100" — and those are the same
+    row otherwise. If the proposer cannot articulate a reason, the revision has
+    not earned a place in the lineage.
+    """
+
+    if record.parent_strategy_id is None:
+        if record.revision_reason is not None or record.derived_from_evaluation_id is not None:
+            raise LineageError(
+                "revision_reason/derived_from_evaluation_id require a parent_strategy_id; "
+                "an original has nothing to be a revision of"
+            )
+        return
+    if record.parent_strategy_id == record.strategy_id:
+        raise LineageError(f"strategy {record.strategy_id!r} cannot be its own parent")
+    if not (record.revision_reason or "").strip():
+        raise LineageError(
+            f"revision {record.strategy_id!r} must state a revision_reason — "
+            "an unexplained revision is indistinguishable from a parameter sweep"
+        )
 
 
 class InvalidTransitionError(StrategyRegistryError):
@@ -323,6 +425,26 @@ class StrategyRecord:
     """Broker account this strategy trades in (ADR-0017). None = unassigned,
     which is a real state: nothing has been allocated to it yet."""
 
+    parent_strategy_id: str | None = None
+    """The strategy this was revised from. ``None`` means an original idea."""
+
+    lineage_root_id: str | None = None
+    """The originating ancestor. Set by :meth:`register` from the parent, never
+    by the caller — a proposer that could choose its own root could reset its
+    own attempt count, which is the one number it must not control."""
+
+    derived_from_evaluation_id: str | None = None
+    """The evaluation that motivated this revision, so the evidence behind a
+    proposal is auditable rather than asserted."""
+
+    revision_reason: str | None = None
+    """Why this revision exists, in words. Required for any revision: it is what
+    lets a person read the lineage later and recognise a parameter sweep."""
+
+    @property
+    def is_revision(self) -> bool:
+        return self.parent_strategy_id is not None
+
 
 @dataclass(frozen=True, slots=True)
 class StrategyTransition:
@@ -370,11 +492,46 @@ class PostgresStrategyRegistry:
             await conn.execute(CREATE_RESEARCH_SCHEMA_SQL)
             await conn.execute(CREATE_STRATEGIES_TABLE_SQL)
             await conn.execute(ALTER_STRATEGIES_ADD_ACCOUNT_ID_SQL)
+            await conn.execute(ALTER_STRATEGIES_ADD_LINEAGE_SQL)
+            # Order matters: add the columns, then adopt every pre-lineage row
+            # as its own root, then index. Backfilling after the index would
+            # still be correct but rewrites it needlessly.
+            await conn.execute(BACKFILL_STRATEGIES_LINEAGE_ROOT_SQL)
+            await conn.execute(CREATE_STRATEGIES_LINEAGE_INDEX_SQL)
             await conn.execute(CREATE_STRATEGIES_ACCOUNT_UNIQUE_INDEX_SQL)
             await conn.execute(CREATE_STRATEGIES_SPEC_HASH_INDEX_SQL)
             await conn.execute(CREATE_STRATEGIES_STATUS_INDEX_SQL)
             await conn.execute(CREATE_TRANSITIONS_TABLE_SQL)
             await conn.execute(CREATE_TRANSITIONS_STRATEGY_INDEX_SQL)
+
+    async def lineage(self, strategy_id: str) -> list[StrategyRecord]:
+        """Every strategy sharing this one's originating ancestor, oldest first.
+
+        Takes any member and returns the whole family, so a caller does not have
+        to already know the root — the useful question is almost always "what
+        else has been tried on this idea", asked from whichever attempt is in
+        hand.
+        """
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(SELECT_STRATEGY_SQL, strategy_id)
+            if row is None:
+                return []
+            root = str(row["lineage_root_id"] or row["strategy_id"])
+            rows = await conn.fetch(SELECT_LINEAGE_SQL, root)
+        return [_record_from_row(r) for r in rows]
+
+    async def attempts(self, strategy_id: str) -> int:
+        """How many strategies this idea has burned, including the original.
+
+        The multiple-testing denominator. A lineage on attempt 20 that finally
+        clears an information ratio of 0.5 has not found edge — it has found the
+        best of twenty draws, and the gate cannot know that without this number.
+        Reported rather than enforced: what the gate should DO about a long
+        lineage is a calibration, and calibrations are Mike's.
+        """
+
+        return len(await self.lineage(strategy_id))
 
     async def register(
         self,
@@ -397,9 +554,23 @@ class PostgresStrategyRegistry:
             raise InvalidTransitionError(
                 f"strategies register at status={STATUS_HYPOTHESIS!r}, got {record.status!r}"
             )
+        _validate_lineage(record)
         occurred_at = datetime.now(UTC)
         async with self._pool.acquire() as conn:
             async with conn.transaction():
+                # The root is resolved from the PARENT ROW, never from the
+                # record. A proposer that could nominate its own root could
+                # reset its own attempt count, and the attempt count is the one
+                # number a proposer must not be able to influence.
+                lineage_root = record.strategy_id
+                if record.parent_strategy_id is not None:
+                    parent = await conn.fetchrow(SELECT_STRATEGY_SQL, record.parent_strategy_id)
+                    if parent is None:
+                        raise UnknownParentError(
+                            f"parent strategy {record.parent_strategy_id!r} does not exist; "
+                            "a revision must descend from a registered strategy"
+                        )
+                    lineage_root = str(parent["lineage_root_id"] or parent["strategy_id"])
                 result = await conn.execute(
                     INSERT_STRATEGY_SQL,
                     record.strategy_id,
@@ -417,6 +588,10 @@ class PostgresStrategyRegistry:
                     json.dumps(record.kill_criteria, separators=(",", ":")),
                     record.code_ref,
                     occurred_at,
+                    record.parent_strategy_id,
+                    lineage_root,
+                    record.derived_from_evaluation_id,
+                    record.revision_reason,
                 )
                 if not str(result).endswith(" 1"):
                     return False
@@ -622,7 +797,23 @@ def _record_from_row(row: Mapping[str, Any]) -> StrategyRecord:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         account_id=None if row["account_id"] is None else str(row["account_id"]),
+        parent_strategy_id=_opt_str(row, "parent_strategy_id"),
+        lineage_root_id=_opt_str(row, "lineage_root_id"),
+        derived_from_evaluation_id=_opt_str(row, "derived_from_evaluation_id"),
+        revision_reason=_opt_str(row, "revision_reason"),
     )
+
+
+def _opt_str(row: Mapping[str, Any], key: str) -> str | None:
+    """Tolerates a row selected before the lineage columns existed.
+
+    `.get` rather than `[]` because a stale SELECT that omits these would
+    otherwise raise at read time on a running deploy rather than simply
+    reporting no lineage.
+    """
+
+    value = row.get(key)
+    return None if value is None else str(value)
 
 
 def _transition_from_row(row: Mapping[str, Any]) -> StrategyTransition:
