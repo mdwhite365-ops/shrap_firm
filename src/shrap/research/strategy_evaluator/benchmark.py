@@ -48,7 +48,21 @@ BENCHMARK_NAME = "equal-weight-buy-and-hold"
 
 @dataclass(frozen=True, slots=True)
 class EqualWeightBuyAndHold:
-    """Hold ``1/N`` of every ticker in the panel, forever. No decisions."""
+    """Hold ``1/N`` of every ticker that has listed. No decisions.
+
+    **N is the number of names trading today, not the number in the panel.**
+    The panel is ragged — it spans every date any member traded — so before a
+    name lists there is no price to buy it at. Weighting over the full roster
+    would hold a fraction of nothing and quietly run the benchmark at less than
+    fully invested, understating it early in the window and inflating every
+    information ratio measured against it.
+
+    So the benchmark's universe grows as names list, and it rebalances when one
+    does. That is a real behaviour and worth being explicit about: it is still
+    "own everything, decide nothing", which is the alternative a strategy has to
+    beat. It is not a timing rule — the entry dates are the listing dates, and
+    no other information is used.
+    """
 
     @property
     def name(self) -> str:
@@ -63,11 +77,15 @@ class EqualWeightBuyAndHold:
         return 1
 
     def target_weights(self, window: PanelWindow) -> Mapping[str, float]:
-        tickers = window.tickers
-        if not tickers:
-            return {}
-        per_name = 1.0 / len(tickers)
-        return dict.fromkeys(tickers, per_name)
+        live = window.live_tickers
+        if not live:
+            return dict.fromkeys(window.tickers, 0.0)
+        per_name = 1.0 / len(live)
+        chosen = set(live)
+        # Every panel ticker is named, including the not-yet-listed ones at 0.0:
+        # the engine diffs weights per ticker to recover trades, so an omitted
+        # name reads as "unchanged" rather than "not held".
+        return {t: (per_name if t in chosen else 0.0) for t in window.tickers}
 
 
 def active_returns(
