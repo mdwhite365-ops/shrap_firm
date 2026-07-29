@@ -110,6 +110,12 @@ class MomentumSeed(NamedTuple):
     skip: int
     top_n: int
     thesis: str
+    market_filter: bool = False
+    """Stand the book down while the average name in the universe is falling."""
+
+    parent_strategy_id: str | None = None
+    revision_reason: str | None = None
+    derived_from_evaluation_id: str | None = None
 
 
 TECHNICAL_SEEDS: tuple[TechnicalSeed, ...] = (
@@ -173,6 +179,51 @@ MOMENTUM_SEEDS: tuple[MomentumSeed, ...] = (
             "behaviour."
         ),
     ),
+    MomentumSeed(
+        key="xs-momentum-126-21-10-standdown",
+        strategy_id="01KYR151WA0K3SZ2ZHEK8TSHDN",
+        name="Cross-sectional momentum (126/21, top 10) — stands down in a falling market",
+        tickers=_MOMENTUM_TICKERS,
+        # IDENTICAL to the parent. The universe, the formation window, the skip
+        # and the decile are all unchanged, so the only difference between the
+        # two evaluations is the market-state condition. Changing anything else
+        # here would confound the comparison and make the revision unreadable.
+        lookback=126,
+        skip=21,
+        top_n=10,
+        market_filter=True,
+        parent_strategy_id="01KYNH9VKXVQXJ48T4MF306PHE",
+        # The real evaluation on the Dell, 2026-07-29. Informational — nothing
+        # validates that this row exists, and on a fresh database it will not.
+        # It is a reference to the evidence, not a foreign key.
+        derived_from_evaluation_id="01KYQYKPHDRVYADBZH1VNCK55R",
+        revision_reason=(
+            "Kill criterion 3 fired. Fold 1 (2021-12 to 2022-11) returned -33.76% at "
+            "sharpe -1.036 on 609 trades — the worst return AND the highest turnover "
+            "of any fold, so the rule did not stand down in the drawdown, it churned. "
+            "Diagnosis: the per-name filter (hold only positive momentum) is too weak "
+            "because a CROSS-SECTIONAL ranking is relative — in 2022 energy and "
+            "defense were genuinely positive, so it concentrated into them and was "
+            "whipsawed by bear-market rallies. This revision attacks the risk side "
+            "rather than the return side: hold nothing while the average name in the "
+            "universe is falling over the same formation window. No new numeric "
+            "parameter, so there is nothing here fitted to 2022."
+        ),
+        thesis=(
+            "Cross-sectional momentum, with the addition that the book stands flat "
+            "whenever the universe as a whole is falling over the formation window. "
+            "The parent strategy was measured at sharpe 0.782 against a benchmark's "
+            "0.772 — nearly all of its excess return was extra risk, not skill, and "
+            "it lost a third of the book in the sample's only bear market. The "
+            "falsifiable claim here is narrow and specific: momentum's crash risk is "
+            "concentrated in periods when the whole cross-section is declining, so "
+            "declining to trade those periods should raise the information ratio "
+            "rather than merely lowering both return and volatility in proportion. "
+            "If the information ratio does not improve, the crash was not avoidable "
+            "this way and the added condition is dead weight — which is a real "
+            "result, and the reason the two strategies are held side by side."
+        ),
+    ),
 )
 
 # Falsifiers specific to a cross-sectional momentum book. The generic protocol
@@ -204,6 +255,10 @@ def _momentum_spec(seed: MomentumSeed) -> dict[str, Any]:
             "skip": seed.skip,
             "top_n": seed.top_n,
             "gross_exposure": 1.0,
+            # Boolean, so `_validate_param_bounds` requires no [lo, hi] — and
+            # there is nothing to bound, which is the design property that keeps
+            # this a revision rather than a parameter sweep.
+            "market_filter": seed.market_filter,
         },
         "param_bounds": {k: list(v) for k, v in MOMENTUM_PARAM_BOUNDS.items()},
     }
@@ -246,6 +301,9 @@ def momentum_record(seed: MomentumSeed) -> StrategyRecord:
         code_ref=CODE_REF,
         created_at=None,
         updated_at=None,
+        parent_strategy_id=seed.parent_strategy_id,
+        revision_reason=seed.revision_reason,
+        derived_from_evaluation_id=seed.derived_from_evaluation_id,
     )
 
 
