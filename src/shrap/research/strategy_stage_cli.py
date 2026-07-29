@@ -23,6 +23,8 @@ Subcommands::
 
     shrap-strategy-stage show <strategy_id>
     shrap-strategy-stage move <strategy_id> --to paper --reason "..." [--dry-run]
+    shrap-strategy-stage assign-account <strategy_id> --account-id PA3ABCDEF
+    shrap-strategy-stage assign-account <strategy_id> --clear
 
 On the ``shrap-universe-promote`` / ``shrap-tech-watcher-promote`` precedent:
 plain argparse, env-var DSN default, no long-running loop.
@@ -241,6 +243,52 @@ def _default_redis_url() -> str:
     return os.environ.get("STRATEGY_EVALUATOR_REDIS_URL") or "redis://redis:6379/0"
 
 
+async def assign_account(
+    registry: PostgresStrategyRegistry,
+    strategy_id: str,
+    *,
+    account_id: str | None,
+    dry_run: bool = False,
+) -> str:
+    """Bind a strategy to a broker account, or free the account with ``None``.
+
+    ADR-0017: one strategy per account, so the account's equity curve is that
+    strategy's P&L. The database enforces uniqueness; this reports the outcome
+    in the terms a human is deciding in.
+    """
+
+    record = await registry.get(strategy_id)
+    if record is None:
+        raise SystemExit(f"refused: no strategy {strategy_id!r}")
+
+    current = record.account_id or "(unassigned)"
+    target = account_id or "(unassigned)"
+    if record.account_id == account_id:
+        return f"no change: {record.name} is already {target}"
+
+    if dry_run:
+        return (
+            f"DRY RUN — would move {record.name} ({strategy_id}) from account {current} to {target}"
+        )
+
+    updated = await registry.assign_account(strategy_id, account_id)
+    now = updated.account_id or "(unassigned)"
+    lines = [f"{record.name} ({strategy_id}): account {current} -> {now}"]
+    if updated.account_id is not None:
+        lines.append(
+            "Set STRATEGY_RUNNER_ACCOUNT_ID to this value for the runner that "
+            "trades it, or the pass will refuse rather than size against the "
+            "wrong book."
+        )
+    else:
+        lines.append(
+            "Account freed. Positions opened under the old assignment are still "
+            "held at the broker — clearing decides future orders, not current "
+            "holdings."
+        )
+    return "\n".join(lines)
+
+
 async def _run(args: argparse.Namespace) -> str:
     pool = await create_asyncpg_pool(args.dsn)
     redis: Redis | None = None
@@ -252,6 +300,14 @@ async def _run(args: argparse.Namespace) -> str:
             if record is None:
                 raise SystemExit(f"refused: no strategy {args.strategy_id!r}")
             return render_show(record, await registry.transitions(args.strategy_id))
+
+        if args.action == "assign-account":
+            return await assign_account(
+                registry,
+                args.strategy_id,
+                account_id=None if args.clear else args.account_id,
+                dry_run=args.dry_run,
+            )
 
         publisher: PublisherPort | None = None
         if not args.dry_run and not args.no_publish:
@@ -287,6 +343,25 @@ def _build_parser() -> argparse.ArgumentParser:
 
     show = sub.add_parser("show", help="Current stage, transition history, legal next moves")
     show.add_argument("strategy_id")
+
+    assign = sub.add_parser(
+        "assign-account",
+        help="Bind a strategy to a broker account, or free the account with --clear",
+    )
+    assign.add_argument("strategy_id")
+    assign.add_argument(
+        "--account-id",
+        default=None,
+        help="Broker account number (Alpaca account_number). One strategy per account.",
+    )
+    assign.add_argument(
+        "--clear",
+        action="store_true",
+        help="Unassign, freeing the account for another strategy",
+    )
+    assign.add_argument(
+        "--dry-run", action="store_true", help="Show what would happen; write nothing"
+    )
 
     move = sub.add_parser("move", help="Transition a strategy to another stage")
     move.add_argument("strategy_id")
@@ -327,6 +402,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         args.dry_run = False
         args.no_publish = True
         args.acknowledge_unevaluated = False
+    if args.action == "assign-account" and not args.clear and not args.account_id:
+        parser.error("assign-account needs --account-id or --clear")
     print(asyncio.run(_run(args)))
 
 
@@ -341,6 +418,7 @@ __all__ = [
     "TRADING_STAGES",
     "TRADING_WARNING",
     "UNEVALUATED_REFUSAL",
+    "assign_account",
     "main",
     "move_stage",
     "render_show",
