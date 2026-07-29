@@ -123,8 +123,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--window-years",
         type=int,
-        default=DEFAULT_WINDOW_YEARS,
-        help=f"Backtest lookback in years (default {DEFAULT_WINDOW_YEARS})",
+        default=None,
+        help=(
+            "Cap the backtest lookback to N years. Omitted, every bar in the "
+            "store is used — which is the point of backfilling deeper than "
+            f"{DEFAULT_WINDOW_YEARS} years. Pass a number only to deliberately "
+            "restrict a run to a recent window."
+        ),
     )
     parser.add_argument(
         "--card-root",

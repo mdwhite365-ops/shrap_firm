@@ -118,6 +118,10 @@ promotion for review (ADR-0015).
 bars of warmup before its first decision, and a longer window buys folds that
 the warmup would otherwise eat.
 
+This only became true on 2026-07-29. Until then `_build_panel` requested
+`window_years * 365` days and nothing older, so the extra 3.5 years were
+backfilled and never read. `window_years` is now a cap rather than a default.
+
 ## How to read the verdict
 
 | Verdict | What it means |

@@ -97,8 +97,23 @@ friction stress) applies unchanged to both archetypes.
 ## 2. Dataset (spec step 3)
 
 Daily bars are read from `market_data.daily_bars` (IEX feed, `adjustment=all` —
-splits and dividends, the correct basis for total-return backtesting) over the
-configured window (default 5 years). Multiple tickers are aligned on the
+splits and dividends, the correct basis for total-return backtesting) over
+**every bar the store holds**. `window_years` is a *cap*, not a default
+(revised 2026-07-29): unset, the panel is as long as the data allows; set, it
+restricts a run to a recent window deliberately.
+
+It was previously a default of 5 years, which silently discarded a deeper
+backfill — the momentum runbook instructs `--since 2018-01-01` and justifies it
+as buying folds the 127-bar warmup would otherwise eat, and the evaluator then
+asked for five years and never read the rest.
+
+> **Interaction with the ragged panel, worth checking on any new universe.** The
+> panel starts at the earliest bar *any* member has. One ticker backfilled
+> deeper than the rest therefore drags the start into a stretch where little
+> else had listed, and a two-name cross-section is a two-name benchmark. The
+> evaluation card reports the universe size at the first and last bar for
+> exactly this reason. There is no automatic floor; if one is wanted it is a
+> calibration for Mike. Multiple tickers are aligned on the
 **union** of their session dates, with each bar marked present or absent — no
 forward-fill, no fabricated bars. A dataset too short to form the configured
 folds yields `hold-for-data` (reason `insufficient-data`), never a kill: lack
