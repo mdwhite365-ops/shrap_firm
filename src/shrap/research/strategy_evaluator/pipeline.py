@@ -933,27 +933,27 @@ def _coverage_lines(outcome: EvaluationOutcome) -> list[str]:
     coverage = outcome.coverage
     if coverage is None:
         return []
-    span = "no overlapping dates"
+    span = "no dates"
     if coverage.first_date is not None and coverage.last_date is not None:
         span = f"{coverage.first_date.isoformat()} to {coverage.last_date.isoformat()}"
-    lost = coverage.candidate_bars - coverage.n_bars
     lines = [
         "## Panel coverage",
         "",
-        f"- Bars tested: **{coverage.n_bars}** of {coverage.candidate_bars} "
-        f"dates any ticker traded ({span})",
+        f"- Bars tested: **{coverage.n_bars}** ({span})",
         f"- Tickers: {len(coverage.per_ticker)}",
     ]
-    worst = coverage.worst
-    if worst is not None and lost > 0:
-        first = worst.first_date.isoformat() if worst.first_date else "never"
+    thinnest = coverage.thinnest
+    if thinnest is not None:
+        first = thinnest.first_date.isoformat() if thinnest.first_date else "never"
         lines += [
-            f"- **{lost} dates were dropped by the intersection.** The panel is "
-            f"aligned on dates *every* ticker has, so its length is set by the "
-            f"shortest history — worst here is `{worst.ticker}` "
-            f"({worst.n_bars} bars, first {first}, missing {worst.missing}).",
+            f"- **The universe was complete for {coverage.fully_covered} of "
+            f"{coverage.n_bars} bars.** The panel spans every date any member "
+            f"traded, so names that listed later are simply absent before they "
+            f"existed — the early folds ranked a smaller cross-section than the "
+            f"late ones. Thinnest here is `{thinnest.ticker}` "
+            f"({thinnest.n_bars} bars, first {first}, absent {thinnest.missing}).",
             "",
-            "| Ticker | Bars | Missing | First |",
+            "| Ticker | Bars | Absent | First |",
             "|---|---|---|---|",
         ]
         ranked = sorted(coverage.per_ticker, key=lambda c: (-c.missing, c.ticker))

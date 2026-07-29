@@ -1,15 +1,13 @@
-"""Coverage reporting for the intersected price panel.
+"""Coverage reporting for the price panel.
 
-The motivating case is real. The firm's first cross-sectional verdict ran the
-momentum rule over the 50-name launch list, which contains ETHA — listed
-2024-07, while the runbook instructs a backfill from 2018-01-01. Because
-``PricePanel`` aligns on dates *every* ticker has, the panel was as short as
-ETHA's history and every other name's extra years were discarded. The verdict,
-the summary line and the evaluation card all reported metrics without reporting
-the sample they were computed on.
+Every gate in the protocol is a claim about a sample, and the sample size was
+the one number the verdict never carried (#136).
 
-These tests pin the reporting, not the intersection: dropping the dates is
-correct point-in-time behaviour and stays. What changes is that it says so.
+**Rewritten for the ragged panel.** These tests originally pinned the
+intersection: one short ticker truncated everyone, and coverage existed to make
+that visible. The panel now spans the union, so the question changed — not *how
+much history did one young name cost everyone*, which is now none, but *how
+many names was this measured across, and from when*.
 """
 
 from __future__ import annotations
@@ -39,8 +37,9 @@ def _bars(n: int, *, offset: int = 0, skip: set[int] | None = None) -> list[BarS
     ]
 
 
-def test_one_short_ticker_truncates_the_whole_panel() -> None:
-    """The ETHA case, in miniature: 49 long histories and one short one."""
+def test_a_short_ticker_no_longer_costs_the_panel_anything() -> None:
+    """The ETHA case, inverted. 49 long histories and one short one used to
+    yield a 100-bar panel; it now yields the full 500."""
 
     bars_by_ticker = {f"OLD{i}": _bars(500) for i in range(49)}
     bars_by_ticker["ETHA"] = _bars(100, offset=400)
@@ -48,44 +47,44 @@ def test_one_short_ticker_truncates_the_whole_panel() -> None:
     panel = PricePanel.from_bars(bars_by_ticker)
     coverage = PanelCoverage.from_bars(bars_by_ticker)
 
-    # The intersection keeps only the window ETHA also covers.
-    assert panel.n_bars == 100
+    assert panel.n_bars == 500
     assert coverage.n_bars == panel.n_bars
-    assert coverage.candidate_bars == 500
 
-    # And it names the ticker responsible rather than leaving it to be inferred
-    # from fifty inception dates.
-    worst = coverage.worst
-    assert worst is not None
-    assert worst.ticker == "ETHA"
-    assert worst.missing == 400
+    # What is still true, and still worth reporting: the universe was only
+    # complete for the last 100 bars, so the early folds ranked 49 names.
+    assert coverage.fully_covered == 100
+    thinnest = coverage.thinnest
+    assert thinnest is not None
+    assert thinnest.ticker == "ETHA"
+    assert thinnest.missing == 400
 
 
-def test_the_summary_field_carries_both_numbers() -> None:
-    """``bars=100/500`` — the ratio is the point. A bare panel length reads as
-    'this is how much data there was', which is the misreading to prevent."""
+def test_the_summary_reports_span_and_completeness() -> None:
+    """A bare panel length would read as 'the universe looked like this
+    throughout', which is the misreading to prevent."""
 
     bars_by_ticker = {"OLD": _bars(500), "NEW": _bars(100, offset=400)}
-    assert PanelCoverage.from_bars(bars_by_ticker).summary() == "bars=100/500 binds=NEW"
+    assert PanelCoverage.from_bars(bars_by_ticker).summary() == "bars=500 complete=100 thinnest=NEW"
 
 
-def test_a_lossless_panel_names_no_binding_ticker() -> None:
-    """When every ticker covers every date there is nothing to blame, and the
-    summary must not invent a culprit by picking an arbitrary ticker."""
+def test_a_complete_universe_reports_only_its_length() -> None:
+    """When every ticker covers every date, `complete` equals `bars` and
+    repeating it is noise — and there is no thinnest name to name."""
 
     coverage = PanelCoverage.from_bars({"AAA": _bars(250), "BBB": _bars(250)})
 
-    assert coverage.worst is None
-    assert coverage.summary() == "bars=250/250"
+    assert coverage.thinnest is None
+    assert coverage.fully_covered == coverage.n_bars == 250
+    assert coverage.summary() == "bars=250"
 
 
-def test_interior_gaps_bind_as_hard_as_a_late_listing() -> None:
+def test_interior_gaps_count_as_readily_as_a_late_listing() -> None:
     """A ticker present across the full span but missing scattered sessions
-    punches holes in every other ticker's history too.
+    shrinks the cross-section on those dates.
 
-    Ranking by history *length* would rate this ticker as complete — it starts
-    on day one and ends on the last day. Ranking by dates missed catches it,
-    which is why ``worst`` is defined that way.
+    Ranking by history *length* would rate it complete — it starts on day one
+    and ends on the last day. Ranking by dates missed catches it, which is why
+    ``thinnest`` is defined that way.
     """
 
     bars_by_ticker = {
@@ -94,30 +93,36 @@ def test_interior_gaps_bind_as_hard_as_a_late_listing() -> None:
     }
     coverage = PanelCoverage.from_bars(bars_by_ticker)
 
-    worst = coverage.worst
-    assert worst is not None
-    assert worst.ticker == "SWISS"
-    assert coverage.n_bars == 195
-    assert worst.first_date == _START  # full span, still the binding constraint
+    thinnest = coverage.thinnest
+    assert thinnest is not None
+    assert thinnest.ticker == "SWISS"
+    # The panel keeps all 200 dates; only 195 have the whole universe.
+    assert coverage.n_bars == 200
+    assert coverage.fully_covered == 195
+    assert thinnest.first_date == _START  # full span, still incomplete
 
 
-def test_disjoint_histories_report_an_empty_panel_not_a_crash() -> None:
-    """Two tickers that never traded on the same day. The engine will refuse
-    this on insufficient data; coverage still has to describe it."""
+def test_disjoint_histories_span_both_rather_than_collapsing() -> None:
+    """Two tickers that never traded on the same day. Under the intersection
+    this was an empty panel; under the union it is a 100-bar panel that never
+    held both names at once."""
 
     coverage = PanelCoverage.from_bars({"EARLY": _bars(50), "LATE": _bars(50, offset=400)})
 
-    assert coverage.n_bars == 0
-    assert coverage.candidate_bars == 100
-    assert coverage.first_date is None
-    assert coverage.last_date is None
-    assert coverage.summary().startswith("bars=0/100")
+    assert coverage.n_bars == 100
+    assert coverage.fully_covered == 0
+    assert coverage.first_date == _START
+    assert coverage.summary().startswith("bars=100 complete=0")
 
 
 def test_coverage_matches_the_panel_it_describes() -> None:
     """Both are computed from the same mapping, so they cannot disagree about
-    the extent of the data — the failure being guarded is a coverage report
-    that describes a different fetch than the one that produced the verdict."""
+    the extent of the data.
+
+    This is the test that caught the ragged-panel change breaking coverage:
+    ``n_bars`` was still the intersection after the panel became the union,
+    which would have printed a sample size the run never used.
+    """
 
     bars_by_ticker = {
         "AAA": _bars(300),
