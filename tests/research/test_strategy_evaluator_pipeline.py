@@ -590,6 +590,9 @@ async def test_card_and_summary_distinguish_not_required_from_not_live(tmp_path:
     assert "not required" in outcome.card_markdown
     assert "not live" not in outcome.card_markdown
     assert "anchor=not-required" in outcome.summary()
+    # The number the promote gate turns on has to be legible in the one line an
+    # operator actually reads, not inferable from gate ordering.
+    assert "ir=" in outcome.summary()
 
     dead = FakeRegistry(_record(archetype="infra-graph-play"))
     dead_pipeline = _pipeline(
@@ -729,3 +732,61 @@ async def test_the_gate_is_off_by_default_so_the_manual_cli_still_promotes(
     assert result.promotion_held is False
     assert result.transitioned is True
     assert registry.transitions == [("01STRAT", STATUS_PAPER, STATUS_HYPOTHESIS)]
+
+
+def _outcome_with(active: dict[str, object], **over: object):
+    """A minimal EvaluationOutcome; only the summary fields matter here."""
+
+    from datetime import UTC, datetime
+
+    from shrap.research.strategy_evaluator.pipeline import EvaluationOutcome
+
+    fields: dict[str, object] = {
+        "evaluation_id": "01EVAL",
+        "strategy_id": "01TEST",
+        "strategy_name": "test",
+        "spec_hash": "hash",
+        "protocol_version": "0.1",
+        "verdict": "hold-for-data",
+        "reason": "below-sharpe-floor",
+        "anchor_required": False,
+        "anchor_fresh": False,
+        "anchor_status": None,
+        "total_trades": 641,
+        "base_sharpe": 0.797,
+        "stress_sharpe": 0.592,
+        "from_stage": "hypothesis",
+        "to_stage": None,
+        "engine_ran": True,
+        "aggregate_metrics": {},
+        "fold_metrics": [],
+        "stress_metrics": {},
+        "active_metrics": active,
+        "config": {},
+        "trigger": "manual",
+        "ts": datetime(2026, 7, 29, tzinfo=UTC),
+        "card_markdown": "",
+    }
+    fields.update(over)
+    return EvaluationOutcome(**fields)  # type: ignore[arg-type]
+
+
+def test_the_summary_reports_the_information_ratio() -> None:
+    """The first real verdict on the Dell read
+
+        hold-for-data (below-sharpe-floor): ... sharpe=0.797 stress_sharpe=0.592
+
+    and the question it left open — did it beat equal-weight buy-and-hold? — was
+    answerable only by reasoning backwards from gate ordering (`no-active-edge`
+    fires before `below-sharpe-floor`, so surviving to the latter proves IR > 0).
+    Correct, and a ridiculous way to read a number the run already computed.
+    """
+
+    assert "ir=0.420" in _outcome_with({"information_ratio": 0.42}).summary()
+
+
+def test_a_missing_benchmark_reports_na_not_zero() -> None:
+    """A benchmark that did not run and a benchmark the strategy exactly matched
+    are different facts. Printing 0.000 for both would conflate them."""
+
+    assert "ir=n/a" in _outcome_with({}, engine_ran=False).summary()
