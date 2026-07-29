@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-28 (archetype-conditional gates; #92-#101 backfilled)
+**Last updated:** 2026-07-28 (evening — #102–#115)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -216,6 +216,53 @@ what exists.
   licensing throughput regresses to pre-2025 rates for two consecutive
   quarters. Motivating case: Valar Atomics Ward 250 criticality
   (DOE Reactor Pilot Program, 2026-06-18).
+
+## THE 2026-07-28 SESSION — #102 to #115
+
+Fourteen cards. Three of them were findings that would have produced a strategy
+that looked fine and was not, each found by measuring rather than reasoning.
+
+| PR | What |
+|---|---|
+| #102 | Archetype-conditional Evaluator gates (ADR-0013 item 1) |
+| #103 | Evaluator trigger + **ADR-0015**: kills apply unattended, promotes wait |
+| #104 | Repair a test file the #102/#103 merge mangled — `main` did not run |
+| #105/#107 | `make all` could not run the suite on a clean machine (KI-016) |
+| #106 | **CI on every push and PR** — the repo had none |
+| #108 | Full-firm audit: KI-017, KI-018, KI-019 + the implementation timeline |
+| #109 | First honest Framework #3 seed — right archetype, no invented anchor |
+| #110 | Cross-sectional strategies, shipped **refused** pending a benchmark |
+| #111 | `shrap-strategy-stage` — a human path through the lifecycle |
+| #112 | **Benchmark-relative evaluation** — the information ratio gate |
+| #113 | `main` red again: decouple the stage tests from `DEFERRED_RULES` |
+| #114 | Cross-sectional momentum seed — first strategy with a real prior |
+| #115 | Notional position sizing arithmetic + the equity source |
+
+**The three findings.**
+
+1. **The promote gate could not tell skill from market exposure.** Naive
+   buy-and-hold with no timing rule scored Sharpe 1.03–1.16 through the engine on
+   drifting data — clearing the 1.0 floor purely by being invested. In one run a
+   timing rule scored 2.28 against buy-and-hold's 3.22: it destroyed value and
+   would have promoted. Fixed in #112; the gate is now an information ratio
+   against equal-weight buy-and-hold of the strategy's own universe.
+2. **Strategies could only ever trade one ticker.** The engine was always
+   cross-sectional — `PricePanel` is "one or more tickers" and `walk_forward`
+   counts a trade per ticker per weight change — but one line in the factory
+   discarded every ticker but the first. This invalidated a claim repeated four
+   times, that a daily-bar rule *cannot* clear the 150-trade gate: true per
+   instrument, false across a universe (89 trades on one, 28,139 on fifty).
+3. **The Runner never sized positions.** It emitted a fixed one share and never
+   read account equity, so a strategy evaluated as equal-weight would trade at
+   7.5% of a $10k book for a $750 name and 0.5% for a $50 one — fills
+   accumulating under a P&L record matching no tested strategy.
+
+**Two self-inflicted outages, both caught by the CI added mid-session.** #104 and
+#113 were the same shape: two correctly independent PRs whose combination broke
+`main`. The first (a file-tail merge) sat broken for an hour and was found by
+luck; the second (a semantic interaction no merge tool could see) was reported in
+under a minute. That is the CI card paying for itself, measured. KI-016 records
+the hazard and the habit.
 
 ## ARCHETYPE-CONDITIONAL EVALUATOR GATES — 2026-07-28
 

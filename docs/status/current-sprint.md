@@ -1,6 +1,10 @@
 # Current sprint status
 
-**Last updated:** 2026-07-28 (research loop closed; archetype-conditional gates in flight)
+**Last updated:** 2026-07-28 (evening)
+
+> **Start with `docs/status/session-handoff.md`.** It carries Mike's rulings on
+> capital, risk appetite and the growth target, plus what to pick up next. This
+> document is longer-form history and the sections below predate #102–#115.
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 
