@@ -50,6 +50,8 @@ REASON_BELOW_SHARPE_FLOOR = "below-sharpe-floor"
 REASON_NO_ACTIVE_EDGE = "no-active-edge"
 REASON_BELOW_INFORMATION_RATIO_FLOOR = "below-information-ratio-floor"
 REASON_PROMOTE = "promote-criteria-met"
+# A revision measured worse than the strategy it was revised from.
+REASON_WORSE_THAN_PARENT = "worse-than-parent"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +73,7 @@ def map_verdict(
     anchor_required: bool = True,
     information_ratio: float | None = None,
     information_ratio_floor: float = 0.0,
+    parent_information_ratio: float | None = None,
 ) -> Verdict:
     """Map measured metrics to a verdict. Pure; deterministic; no tuning.
 
@@ -94,6 +97,25 @@ def map_verdict(
     # actively harmful; more data will not redeem the decisions it already made.
     if information_ratio is not None and information_ratio <= 0.0:
         return Verdict(VERDICT_KILL, REASON_NO_ACTIVE_EDGE)
+    # A revision exists to improve on its parent. One that does not has been
+    # falsified by its own stated purpose, and keeping it alive is how a lineage
+    # accumulates twenty strictly-worse attempts that all read as `hypothesis`.
+    #
+    # A kill rather than a hold even when the revision would otherwise clear the
+    # floors: if it beat them, the parent beat them by MORE, so promoting the
+    # revision instead would be strictly worse. There is nothing more data can
+    # tell us about a variant already dominated by the thing it varied.
+    #
+    # `<=` deliberately. Matching the parent is not improving on it, and a
+    # revision that changes something and achieves nothing is noise in the
+    # lineage. Whether an improvement should have to clear a MARGIN rather than
+    # merely be positive is a calibration; Mike owns it.
+    if (
+        information_ratio is not None
+        and parent_information_ratio is not None
+        and information_ratio <= parent_information_ratio
+    ):
+        return Verdict(VERDICT_KILL, REASON_WORSE_THAN_PARENT)
     if stress_sharpe <= 0.0:
         return Verdict(VERDICT_KILL, REASON_FAILS_FRICTION_STRESS)
     if base_sharpe < sharpe_floor:
@@ -114,6 +136,7 @@ __all__ = [
     "REASON_NO_ACTIVE_EDGE",
     "REASON_NO_EDGE",
     "REASON_PROMOTE",
+    "REASON_WORSE_THAN_PARENT",
     "VERDICT_HOLD",
     "VERDICT_KILL",
     "VERDICT_PROMOTE",

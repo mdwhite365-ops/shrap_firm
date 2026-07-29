@@ -183,9 +183,35 @@ than the sample supports, and the purpose is to make dispersion visible rather
 than to manufacture significance.
 
 **Reported, not gated.** What a promote decision should *do* about three folds
-out of six is a calibration and belongs to Mike. The same applies to the two
-other gaps this exposed and does not close: nothing gates on max drawdown, and
-nothing compares a revision to the parent it revised.
+out of six is a calibration and belongs to Mike. Max drawdown is likewise
+ungated — the first evaluation cleared every automated check with a 53.88%
+aggregate drawdown, and note that no *fold* exceeded 37.09%, because fold equity
+resets at each boundary and a drawdown spanning one is never seen whole.
+
+### Worse than parent (added 2026-07-29)
+
+A revision exists to improve on the strategy it was revised from. One that does
+not is **killed**, not held (`worse-than-parent`), compared on the information
+ratio — the promote gate itself.
+
+The motivating case: the standdown revision came back at ir 0.158 against its
+parent's 0.392, worse on every metric, and earned the identical
+`hold-for-data (below-sharpe-floor)`. Nothing compared it to the thing it was
+meant to beat.
+
+Three properties worth stating:
+
+- **Only against the same protocol version.** A 0.1 result and a 0.2 result are
+  different measurements; comparing across them would kill a revision for losing
+  to a number that was never comparable to it. An unmeasured parent yields
+  "cannot compare", which is not "did not improve", and the gate does not fire.
+- **A kill even when the revision would clear the floors.** If it beat them, the
+  parent beat them by more, so promoting the revision instead would be strictly
+  worse.
+- **Matching is not improving.** A revision that changes something and achieves
+  nothing inflates the lineage attempt count without adding evidence. Whether an
+  improvement should clear a *margin* rather than merely be positive is a
+  calibration and belongs to Mike.
 
 ## 3. Walk-forward (spec step 5)
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ import pytest
 
 from shrap.events import EventPublisher
 from shrap.research.strategy_evaluator.costs import CostModel
-from shrap.research.strategy_evaluator.engine import EvalConfig
+from shrap.research.strategy_evaluator.engine import PROTOCOL_VERSION, EvalConfig
 from shrap.research.strategy_evaluator.pipeline import (
     REQUIRED_DISCLAIMER,
     STREAM_STRATEGY_PROMOTION_PENDING,
@@ -99,6 +100,8 @@ class FakeReader:
         # Recorded so a test can assert the anchor was never *consulted* for an
         # anchor-less archetype, not merely that its result was ignored.
         self.wc_queries: list[str] = []
+        self.parent_ir: float | None = None
+        self.ir_queries: list[tuple[str, str]] = []
 
     async def world_changer_status(self, candidate_id: str) -> str | None:
         self.wc_queries.append(candidate_id)
@@ -111,6 +114,12 @@ class FakeReader:
         self, ticker: str, start: date, end: date, adjustment: str
     ) -> list[BarSample]:
         return list(self._bars)
+
+    async def latest_information_ratio(
+        self, strategy_id: str, protocol_version: str
+    ) -> float | None:
+        self.ir_queries.append((strategy_id, protocol_version))
+        return self.parent_ir
 
 
 class FakeStore:
@@ -1047,3 +1056,97 @@ async def test_per_fold_information_ratio_is_computed_end_to_end(tmp_path: Path)
     # benchmark in most periods rather than on average only.
     assert outcome.consistency_metrics["folds_with_active_edge"] >= 1
     assert "folds=" in outcome.summary()
+
+
+async def test_an_original_never_asks_about_a_parent(tmp_path: Path) -> None:
+    """The lookup is skipped entirely for a strategy with no parent, so an
+    original cannot be affected by a stray row in the evaluations table."""
+
+    reader = FakeReader(bars=_square_wave_bars())
+    pipeline = _pipeline(
+        registry=FakeRegistry(_record()),
+        reader=reader,
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
+    )
+
+    await pipeline.evaluate("01STRAT")
+
+    assert reader.ir_queries == []
+
+
+async def test_a_revision_is_compared_against_its_parent_at_this_protocol(
+    tmp_path: Path,
+) -> None:
+    """Protocol version is part of the lookup, not an afterthought.
+
+    A 0.1 result and a 0.2 result are different measurements — union panel,
+    rebalancing benchmark, uncapped lookback. Comparing across them would kill a
+    revision for losing to a number that was never comparable to it.
+    """
+
+    from shrap.research.strategy_evaluator.engine import PROTOCOL_VERSION
+
+    record = _record()
+    revision = replace(record, parent_strategy_id="01PARENT", revision_reason="because")
+    reader = FakeReader(bars=_square_wave_bars())
+    reader.parent_ir = 99.0  # unbeatable, so the gate must fire
+    pipeline = _pipeline(
+        registry=FakeRegistry(revision),
+        reader=reader,
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
+    )
+
+    outcome = await pipeline.evaluate("01STRAT")
+
+    assert reader.ir_queries == [("01PARENT", PROTOCOL_VERSION)]
+    assert outcome.verdict == VERDICT_KILL
+    assert outcome.reason == "worse-than-parent"
+    assert outcome.to_stage == STATUS_KILLED
+
+
+async def test_a_revision_that_beats_its_parent_is_not_killed(tmp_path: Path) -> None:
+    record = _record()
+    revision = replace(record, parent_strategy_id="01PARENT", revision_reason="because")
+    reader = FakeReader(bars=_square_wave_bars())
+    reader.parent_ir = -99.0  # trivially beaten
+    pipeline = _pipeline(
+        registry=FakeRegistry(revision),
+        reader=reader,
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
+    )
+
+    outcome = await pipeline.evaluate("01STRAT")
+
+    assert outcome.reason != "worse-than-parent"
+
+
+async def test_an_unmeasured_parent_leaves_the_revision_alone(tmp_path: Path) -> None:
+    """A parent with no evaluation at this protocol yields None, and the gate
+    must not fire — "cannot compare" is not "did not improve"."""
+
+    record = _record()
+    revision = replace(record, parent_strategy_id="01PARENT", revision_reason="because")
+    reader = FakeReader(bars=_square_wave_bars())
+    reader.parent_ir = None
+    pipeline = _pipeline(
+        registry=FakeRegistry(revision),
+        reader=reader,
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
+    )
+
+    outcome = await pipeline.evaluate("01STRAT")
+
+    assert reader.ir_queries == [("01PARENT", PROTOCOL_VERSION)]
+    assert outcome.reason != "worse-than-parent"
