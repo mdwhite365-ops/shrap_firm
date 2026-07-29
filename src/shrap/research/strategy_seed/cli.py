@@ -322,6 +322,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     technical.add_argument("key", choices=sorted(TECHNICAL_SEEDS_BY_KEY), help="Technical seed key")
     sub.add_parser("list-technical", help="Show available Framework #3 seeds (no database access)")
+
+    momentum = sub.add_parser(
+        "load-momentum", help="Insert a cross-sectional momentum seed (idempotent)"
+    )
+    momentum.add_argument("key", choices=sorted(MOMENTUM_SEEDS_BY_KEY), help="Momentum seed key")
+    sub.add_parser("list-momentum", help="Show available momentum seeds (no database access)")
     sub.add_parser("list", help="Show research.strategies rows (id, name, archetype, status)")
     return parser
 
