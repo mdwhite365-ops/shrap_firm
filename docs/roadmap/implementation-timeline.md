@@ -1,6 +1,6 @@
 # Implementation timeline
 
-**Last updated:** 2026-07-28
+**Last updated:** 2026-07-28 (evening — #102–#115 merged)
 **Supersedes** `docs/roadmap/paper-spine-tree.md` as the answer to "what's next."
 That document is the Month-1/2 paper-spine plan; its last card (Card 18) shipped
 weeks ago and it has not tracked anything since.
@@ -12,6 +12,24 @@ implementing.
 This file exists because "what's next" was being reconstructed from four
 documents each session, and one of them was stale enough to produce a command
 block that could not run (2026-07-27). One ordered list, dependency-first.
+
+---
+
+## Status, 2026-07-28 evening
+
+**Phase 0 and Phase 1 are done. Phase 2 Track B is partly done.** See
+`docs/status/session-handoff.md` for Mike's rulings on capital, risk appetite and
+the growth target, and for what a fresh session should pick up.
+
+Landed this session (#102–#115): archetype-conditional gates · the Evaluator
+trigger with ADR-0015's kill-asymmetric autonomy · CI on every push · the
+full-firm audit · `shrap-strategy-stage` · **benchmark-relative evaluation** ·
+cross-sectional rules · the momentum seed · notional sizing arithmetic.
+
+**Next three, in order:** wire notional sizing into the signal path → apply the
+risk limits and load the launch list → forward-test scoring. The first blocks
+the second; without it the Runner still emits one share and the live book cannot
+match the evaluated one.
 
 ---
 
