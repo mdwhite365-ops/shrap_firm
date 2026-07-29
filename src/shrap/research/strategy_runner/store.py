@@ -19,7 +19,7 @@ overwrites the prior target rather than inserting a duplicate.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Protocol
 
 from shrap.research.strategy_runner.engine import PlannedStateWrite, TargetState
@@ -56,8 +56,23 @@ ON CONFLICT (strategy_id, ticker) DO UPDATE SET
 """.strip()
 
 
+# Read-only over a table the Reconciliation Agent owns and writes every pass.
+# The Runner needs its own account size to convert target weights into share
+# counts, and ADR-0003 keeps broker credentials inside broker-facing containers
+# only — so it reads the persisted snapshot rather than becoming one of them.
+SELECT_LATEST_EQUITY_SQL = """
+SELECT equity, at
+FROM ops.account_snapshots
+WHERE equity IS NOT NULL
+ORDER BY at DESC
+LIMIT 1
+""".strip()
+
+
 class AsyncConnection(Protocol):
     async def execute(self, sql: str, *args: object) -> object: ...
+
+    async def fetchrow(self, sql: str, *args: object) -> Mapping[str, Any] | None: ...
 
     async def fetch(self, sql: str, *args: object) -> Sequence[Mapping[str, Any]]: ...
 
@@ -103,6 +118,29 @@ class PostgresStrategyRunnerStateStore:
                 last_session_date=_as_date(row["last_session_date"]),
             )
         return state
+
+    async def latest_equity(self) -> tuple[float | None, datetime | None]:
+        """Most recent account equity and when it was observed.
+
+        Returns ``(None, None)`` when no snapshot exists — the caller refuses to
+        size rather than defaulting, because an unknown account size is worse
+        than not trading (see ``sizing.assert_equity_usable``).
+
+        A missing ``ops.account_snapshots`` table is an infrastructure fault
+        surfaced to the caller, not papered over here: the Reconciliation Agent
+        owns that table and this store never creates it.
+        """
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(SELECT_LATEST_EQUITY_SQL)
+        if row is None:
+            return None, None
+        equity = row["equity"]
+        at = row["at"]
+        return (
+            float(equity) if isinstance(equity, (int, float)) else None,
+            at if isinstance(at, datetime) else None,
+        )
 
     async def upsert(self, write: PlannedStateWrite) -> None:
         """Persist one ``(strategy_id, ticker)`` target; idempotent on the PK."""
