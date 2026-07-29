@@ -29,7 +29,7 @@ statement):
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -258,11 +258,18 @@ def _adv_dollar_series(panel: PricePanel, adv_window: int) -> dict[str, list[flo
     for ticker in panel.tickers:
         closes = panel.closes[ticker]
         volumes = panel.volumes[ticker]
-        dollar = [closes[i] * volumes[i] for i in range(panel.n_bars)]
+        # Absent bars contribute nothing and are not counted in the mean. Taking
+        # them as zero would halve a newly-listed name's ADV for its first
+        # `adv_window` bars and inflate the slippage charged against it — a cost
+        # penalty for being young, invented by the alignment grid.
+        dollar = [
+            closes[i] * volumes[i] if panel.is_live(ticker, i) else None
+            for i in range(panel.n_bars)
+        ]
         series: list[float] = []
         for i in range(panel.n_bars):
             lo = max(0, i - adv_window + 1)
-            window = dollar[lo : i + 1]
+            window = [d for d in dollar[lo : i + 1] if d is not None]
             series.append(sum(window) / len(window) if window else 0.0)
         adv[ticker] = series
     return adv
@@ -300,15 +307,33 @@ def run_backtest(
         weight_cache[decision_bar] = resolved
         return resolved
 
+    def held_over(weights: Mapping[str, float], period: int) -> dict[str, float]:
+        """The weights actually holdable across ``[close[p], close[p+1]]``.
+
+        A position needs a price at both ends: one to buy at and one to mark
+        against. A name that has not listed by ``period``, or that stops trading
+        before ``period + 1``, is forced flat no matter what the strategy asked
+        for — it is not a decision the strategy gets to make.
+
+        Applied to the previous period's weights too, so a name entering the
+        universe registers as a buy rather than as a position that was somehow
+        already open.
+        """
+
+        return {
+            t: (w if panel.is_live(t, period) and panel.is_live(t, period + 1) else 0.0)
+            for t, w in weights.items()
+        }
+
     daily_returns: list[float] = []
     trades_per_period: list[int] = []
     equity: list[float] = [1.0]
 
     for p in range(first_period, last_period + 1):
         decision_bar = p - execution_lag
-        w_curr = weights_at(decision_bar)
+        w_curr = held_over(weights_at(decision_bar), p)
         # Effective weight held in the prior period; flat when entering the run.
-        w_prev = weights_at(decision_bar - 1) if p > first_period else {}
+        w_prev = held_over(weights_at(decision_bar - 1), p - 1) if p > first_period else {}
 
         trade_cost = 0.0
         borrow_cost = 0.0
@@ -322,6 +347,9 @@ def run_backtest(
                 trades += 1
                 trade_cost += cost_model.trade_cost_fraction(delta, adv[ticker][decision_bar])
             borrow_cost += cost_model.borrow_cost_fraction(curr)
+            if curr == 0.0:
+                # Nothing held: no return to earn, and `closes` may be nan here.
+                continue
             close_p = panel.closes[ticker][p]
             close_next = panel.closes[ticker][p + 1]
             if close_p != 0.0:

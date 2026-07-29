@@ -99,10 +99,41 @@ friction stress) applies unchanged to both archetypes.
 Daily bars are read from `market_data.daily_bars` (IEX feed, `adjustment=all` —
 splits and dividends, the correct basis for total-return backtesting) over the
 configured window (default 5 years). Multiple tickers are aligned on the
-**intersection** of their session dates — no forward-fill, no fabricated bars.
-A dataset too short to form the configured folds yields `hold-for-data`
-(reason `insufficient-data`), never a kill: lack of data is not evidence of no
-edge.
+**union** of their session dates, with each bar marked present or absent — no
+forward-fill, no fabricated bars. A dataset too short to form the configured
+folds yields `hold-for-data` (reason `insufficient-data`), never a kill: lack
+of data is not evidence of no edge.
+
+**The universe is allowed to grow (revised 2026-07-29).** Alignment was
+originally the *intersection* — a date survived only if every ticker had a bar.
+That is defensible point-in-time behaviour and it had a consequence nobody
+priced: every name inherited the youngest one's age. On the 50-name launch
+list, ETHA (listed 2024-07) truncated a five-year panel to roughly two years,
+discarding history that SPY had sitting in the same table. Nothing was missing
+from the data — ETHA cannot have bars before it listed, and the intersection
+propagated that single fact to all fifty names.
+
+The alternative considered and rejected was declaring a narrower universe per
+strategy, i.e. excluding recently-listed names from the spec. That puts a fact
+about the *alignment code* into the *strategy definition*, where it does not
+belong and never expires: a name excluded in 2026 for having two years of
+history is still excluded in 2031 with seven.
+
+Under a ragged panel a strategy never asks how old a name is. It asks whether
+it can compute its signal — a 126-bar momentum rule requests 126 bars, and a
+name that has not traded that often does not supply them. The name answers for
+itself, and stops answering as soon as it has the history. Two consequences
+follow and both are deliberate:
+
+- **A position requires a price at both ends of its holding period.** A name
+  that has not listed by period `p`, or stops trading before `p+1`, is held
+  flat regardless of the strategy's target. It is not a decision the strategy
+  is allowed to make.
+- **The benchmark's `N` is the number of names trading that day**, not the
+  number in the panel, so equal-weight buy-and-hold rebalances as names list.
+  Weighting over the full roster would hold a fraction of nothing, leaving the
+  benchmark less than fully invested early in the window and inflating every
+  information ratio measured against it.
 
 > **Recorded project fact.** IEX volumes are a fraction of the SIP consolidated
 > tape, so volume — and any ADV-scaled slippage derived from it — reads

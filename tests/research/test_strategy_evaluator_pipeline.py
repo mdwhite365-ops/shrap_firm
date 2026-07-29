@@ -792,31 +792,39 @@ def test_a_missing_benchmark_reports_na_not_zero() -> None:
     assert "ir=n/a" in _outcome_with({}, engine_ran=False).summary()
 
 
+def _launch_list_coverage():
+    """The real 50-name shape under the ragged panel: full span, thin at the start."""
+
+    from shrap.research.strategy_evaluator.strategy import PanelCoverage, TickerCoverage
+
+    return PanelCoverage(
+        n_bars=1303,
+        fully_covered=525,
+        first_date=date(2021, 7, 29),
+        last_date=date(2026, 7, 27),
+        per_ticker=(
+            TickerCoverage("SPY", 1303, 0, date(2021, 7, 29), date(2026, 7, 27)),
+            TickerCoverage("IBIT", 663, 640, date(2024, 1, 11), date(2026, 7, 27)),
+            TickerCoverage("ETHA", 525, 778, date(2024, 7, 23), date(2026, 7, 27)),
+        ),
+    )
+
+
 def test_the_summary_reports_how_much_history_the_test_had() -> None:
     """Every gate in the protocol is a claim about a sample, and the sample size
     was the one number the verdict never carried.
 
     The first cross-sectional run held on the Sharpe floor at 0.797. Whether that
-    is a weak edge measured over eight years or a coin-flip measured over two
+    is a weak edge measured over five years or a coin-flip measured over two
     changes what to do about it, and nothing in the output distinguished them.
     """
 
-    from shrap.research.strategy_evaluator.strategy import PanelCoverage, TickerCoverage
+    summary = _outcome_with({"information_ratio": 0.42}, coverage=_launch_list_coverage()).summary()
 
-    coverage = PanelCoverage(
-        n_bars=506,
-        candidate_bars=1258,
-        first_date=date(2024, 7, 23),
-        last_date=date(2026, 7, 24),
-        per_ticker=(
-            TickerCoverage("SPY", 1258, 0, date(2021, 7, 29), date(2026, 7, 24)),
-            TickerCoverage("ETHA", 506, 752, date(2024, 7, 23), date(2026, 7, 24)),
-        ),
-    )
-    summary = _outcome_with({"information_ratio": 0.42}, coverage=coverage).summary()
-
-    assert "bars=506/1258" in summary
-    assert "binds=ETHA" in summary
+    assert "bars=1303" in summary
+    # The span alone would read as "the universe looked like this throughout".
+    assert "complete=525" in summary
+    assert "thinnest=ETHA" in summary
 
 
 def test_a_run_that_never_built_a_panel_reports_na_not_zero() -> None:
@@ -827,30 +835,20 @@ def test_a_run_that_never_built_a_panel_reports_na_not_zero() -> None:
     assert "bars=n/a" in _outcome_with({}, engine_ran=False).summary()
 
 
-def test_the_card_explains_what_truncated_the_panel() -> None:
-    """The summary line names the binding ticker; the card has room to show the
-    arithmetic, which is where an operator goes once the one-liner surprises them."""
+def test_the_card_explains_how_thin_the_early_universe_was() -> None:
+    """The summary names the thinnest ticker; the card shows the arithmetic,
+    which is where an operator goes once the one-liner surprises them."""
 
     from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
-    from shrap.research.strategy_evaluator.strategy import PanelCoverage, TickerCoverage
 
-    coverage = PanelCoverage(
-        n_bars=506,
-        candidate_bars=1258,
-        first_date=date(2024, 7, 23),
-        last_date=date(2026, 7, 24),
-        per_ticker=(
-            TickerCoverage("SPY", 1258, 0, date(2021, 7, 29), date(2026, 7, 24)),
-            TickerCoverage("IBIT", 640, 618, date(2024, 1, 11), date(2026, 7, 24)),
-            TickerCoverage("ETHA", 506, 752, date(2024, 7, 23), date(2026, 7, 24)),
-        ),
+    card = render_evaluation_card(
+        _outcome_with({"information_ratio": 0.42}, coverage=_launch_list_coverage())
     )
-    card = render_evaluation_card(_outcome_with({"information_ratio": 0.42}, coverage=coverage))
 
     assert "## Panel coverage" in card
-    assert "752 dates were dropped" in card
-    assert "2024-07-23 to 2026-07-24" in card
-    # Ranked worst-first, so the name to act on is the first row of the table.
+    assert "complete for 525 of 1303 bars" in card
+    assert "2021-07-29 to 2026-07-27" in card
+    # Ranked thinnest-first, so the name to look at is the first row.
     assert card.index("| ETHA |") < card.index("| IBIT |")
     # A fully-covered ticker is not noise worth printing.
     assert "| SPY |" not in card
@@ -904,8 +902,11 @@ async def test_evaluate_reports_coverage_end_to_end(tmp_path: Path) -> None:
     outcome = await pipeline.evaluate("01STRAT")
 
     assert outcome.coverage is not None
-    assert outcome.coverage.n_bars == len(late)
-    assert outcome.coverage.candidate_bars == len(full)
-    assert "binds=LATE" in outcome.summary()
+    # The ragged panel end-to-end: LATE has half the history and costs the panel
+    # NOTHING. Under the intersection this ran on `len(late)` bars.
+    assert outcome.coverage.n_bars == len(full)
+    assert outcome.coverage.fully_covered == len(late)
+    assert "bars=" in outcome.summary()
+    assert "thinnest=LATE" in outcome.summary()
     # And it survives the frozen-dataclass rebuild that attaches the card.
     assert "## Panel coverage" in render_evaluation_card(outcome)
