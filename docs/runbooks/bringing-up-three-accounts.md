@@ -3,9 +3,22 @@
 **What this deploys:** ADR-0017 — one strategy per broker account, three
 accounts, each with its own Execution and Reconciliation Agent. Cards #124–#128.
 
-**Why the order matters, in one line:** the Strategy Runner refuses to size an
-account that has no fresh equity snapshot, and only the Reconciliation Agent
-writes those. Reconcilers first, always.
+**Bring everything up at once.** An earlier version of this runbook said to
+start the reconcilers alone first; that is wrong and it fails. Each service
+applies its own migrations at startup, and services *read* tables they do not
+own — the Reconciliation Agent reads `trading.paper_order_events`, whose
+`account_id` column is added by **paper-order-store**'s `ensure_schema`. Start
+the reader alone and it crashes every 30s on
+
+```
+asyncpg.exceptions.UndefinedColumnError: column "account_id" does not exist
+```
+
+The sequencing is unnecessary anyway: the system already fails closed on its
+own. The Runner refuses to size an account with no fresh snapshot and defers
+those strategies, so bringing everything up in one command is both simpler and
+safe. What actually has a deadline is **step 5** — a strategy must be assigned
+an account before the next market open, or it will not trade.
 
 Read `deploying-after-a-code-change.md` first if you have not lately — the
 build-before-run and `--force-recreate` lessons both apply here.
@@ -51,15 +64,25 @@ cd /mnt/Archive/shrap/shrap_firm/infra
 sudo docker compose build
 ```
 
-## 3. Reconciliation agents first
-
-They write `ops.account_snapshots` stamped with the account their own keys open.
-Until each account has a snapshot, the Runner will not size it.
+## 3. Bring the stack up
 
 ```bash
-sudo docker compose up -d --force-recreate \
-  reconciliation-agent reconciliation-agent-1 reconciliation-agent-2
+sudo docker compose up -d --force-recreate
 ```
+
+Each service applies its own migrations on startup, so this is also what creates
+the four new columns (`ops.account_snapshots.account_id`,
+`research.strategies.account_id`, `trading.paper_order_events.account_id`,
+`research.strategy_runner_state.last_quantity`).
+
+**Do not start a subset.** Readers depend on their writers' migrations having
+run: the Reconciliation Agent reads `trading.paper_order_events`, which
+paper-order-store owns. Starting the reader alone produces
+`UndefinedColumnError: column "account_id" does not exist` on a 30s retry loop.
+Recorded as KI-020, with the other reader/owner pairs that share the hazard.
+
+Give the reconcilers ~30 seconds before step 4 — the first pass runs
+immediately, but a failed one retries on that interval.
 
 ## 4. Verify all three accounts appear — **stop here if they do not**
 
@@ -115,13 +138,7 @@ creating two strategies trading one book.
 A strategy with no account is logged at ERROR by the Runner each pass and never
 trades. That is deliberate: there is nowhere to send its orders.
 
-## 6. Bring up everything else
-
-```bash
-sudo docker compose up -d --force-recreate
-```
-
-## 7. Confirm each execution agent found its account
+## 6. Confirm each execution agent found its account
 
 ```bash
 sudo docker compose logs execution-agent execution-agent-1 execution-agent-2 \
@@ -132,7 +149,7 @@ Three lines, three different `account_id` values. If an agent instead logged
 `AccountMismatchError`, its keys and its configured account id belong to
 different books — fix before it trades.
 
-## 8. Watch the first session
+## 7. Watch the first session
 
 At the next market open:
 

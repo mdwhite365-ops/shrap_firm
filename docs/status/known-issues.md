@@ -571,3 +571,48 @@ the superseding decision, with the original text retained as the design that
 adoption would restore. **Standing implication:** an ADR that changes how a
 component works should amend `02-architecture.md` in the same card, not leave
 the reconciliation to a later audit.
+
+## KI-020 — A service can read a table whose migration another service has not run yet
+
+**Status:** Open. Hit on 2026-07-29 deploying the three-account work (#124–#128).
+
+Each service applies its own migrations in `ensure_schema()` at startup, and
+several services **read** tables they do not own. There is no ordering guarantee
+between them, so a reader started before its writer queries a column that does
+not exist yet.
+
+Concretely: the Reconciliation Agent reads `trading.paper_order_events`, whose
+`account_id` column is added by **paper-order-store**'s `ensure_schema`. The
+deploy runbook said to start the reconcilers alone first, so they crash-looped
+every 30 seconds on
+
+```
+asyncpg.exceptions.UndefinedColumnError: column "account_id" does not exist
+```
+
+The reader is not at fault. "Reader, never owner" is a deliberate invariant
+here — the Tier-3 gate states it explicitly, and a reader that migrated tables
+it does not own would be worse. The gap is that migration ordering is implicit
+in container start order, which nothing enforces and which an operator can
+reasonably get wrong.
+
+Known readers of tables they do not own:
+
+| Reader | Table | Owner |
+|---|---|---|
+| Reconciliation Agent | `trading.paper_order_events` | paper-order-store |
+| Strategy Runner | `ops.account_snapshots` | Reconciliation Agent |
+| Strategy Runner | `research.strategies` | Strategy Librarian / Evaluator |
+| Pre-Trade Checker | `research.universe_tiers` | Universe Curator |
+
+**Mitigation (in place):** the runbook now says to bring the whole stack up in
+one command rather than a subset. That works because every reader retries — the
+reconcilers recover on their own within 30s once the column exists.
+
+**Not fixed:** the underlying design. Options when it next bites: a dedicated
+migration step run once before any service starts (a `migrate` profile), or
+readers detecting `UndefinedColumnError` and logging "waiting on <owner>'s
+migration" instead of a traceback. The second is cheaper and makes the failure
+legible; the first is correct. Neither is worth a card until it recurs — but the
+Pre-Trade Checker row above is the one to watch, because its failure mode is a
+veto rather than a retry.
