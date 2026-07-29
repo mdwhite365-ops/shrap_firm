@@ -19,6 +19,11 @@ Invariants enforced in this module (the service enforces the delivery ones):
   real money. The Decision Maker -> Pre-Trade Checker -> Execution chain owns
   everything downstream. The emitted ``confidence`` merely has to clear the
   Decision Maker threshold; the Pre-Trade Checker still caps the quantity.
+- **Sized in dollars, not in shares.** Each entry converts the strategy's target
+  weight into a share count against actual account equity
+  (:mod:`shrap.research.strategy_runner.sizing`). Equity is a required input:
+  there is no default and no fallback, so a pass with unknown account size emits
+  nothing rather than emitting a size nobody evaluated.
 - **Idempotent per session.** A strategy whose stored ``last_session_date``
   already equals this session's date is skipped, so a re-delivered / startup /
   catch-up market-phase event (or a restart) never produces a second pass. At
@@ -42,8 +47,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
 
-from shrap.research.strategy_evaluator.strategy import BarSample, PricePanel
+from shrap.research.strategy_evaluator.strategy import BarSample, PanelWindow, PricePanel
 from shrap.research.strategy_registry import StrategyRecord
+from shrap.research.strategy_runner.sizing import size_position
 
 if TYPE_CHECKING:
     from shrap.research.strategy_evaluator.pipeline import StrategyFactory
@@ -65,17 +71,27 @@ UNKNOWN_REGIME = "unknown"
 # small margin. This is a pipeline-wiring constant, not a market view.
 DEFAULT_CONFIDENCE = 0.75
 
-# Default order size. Small on purpose: the runner owns only its intended
-# flat/invested *target*, not sizing. The Pre-Trade Checker caps the quantity
-# downstream regardless of what we put here, so 1 is a safe, honest placeholder.
-DEFAULT_QUANTITY = 1
+# Per-order share cap. This mirrors the Pre-Trade Checker's
+# ``max_quantity_per_order`` and MUST be kept equal to it.
+#
+# The checker *clamps* rather than vetoes (``pre_trade.py`` takes
+# ``min(requested, cap)``), so a runner that sized 20 shares against a cap of 1
+# would have 1 share fill while recording an intent of 20 — and its later exit
+# would try to sell 20 shares of a 1-share position. Sizing to the same cap keeps
+# recorded intent equal to approved quantity, and the clamp is *reported* rather
+# than silent. The two values are raised together or not at all.
+DEFAULT_MAX_QUANTITY = 1
+
+# Exit size for a row written before sizing existed. Not a guess: the pre-sizing
+# runner emitted a hardcoded 1 share, so 1 is exactly what any such position holds.
+LEGACY_EXIT_QUANTITY = 1
 
 
 @dataclass(frozen=True, slots=True)
 class RunnerSignalConfig:
     """Signal-shaping knobs. Conservative defaults on the trading path."""
 
-    quantity: int = DEFAULT_QUANTITY  # size_hint == quantity; Pre-Trade caps it anyway
+    max_quantity: int = DEFAULT_MAX_QUANTITY  # keep equal to the Pre-Trade cap
     confidence: float = DEFAULT_CONFIDENCE  # must clear the Decision Maker threshold
     urgency: str = DEFAULT_URGENCY
 
@@ -88,14 +104,24 @@ class TargetState:
     >0 = invested). ``last_session_date`` is the session the row was last
     stamped in — the per-strategy idempotency guard. A ``(strategy, ticker)``
     with no row is treated as :data:`FLAT_TARGET` (flat, never seen).
+
+    ``last_quantity`` is the share count of the entry signal, carried so the exit
+    can sell the position that was opened rather than re-sizing at a later price.
+    Re-sizing an exit would leave a residual (price up) or oversell into a short
+    (price down), so the quantity is remembered, not recomputed.
+
+    It records *intent*, not fills. Reconciling intent against what the broker
+    actually filled is KI-005's job, and this is why the runner's per-order cap
+    must track the Pre-Trade Checker's.
     """
 
     last_target: float
     last_side: str | None
     last_session_date: date | None
+    last_quantity: int = 0
 
 
-FLAT_TARGET = TargetState(last_target=0.0, last_side=None, last_session_date=None)
+FLAT_TARGET = TargetState(last_target=0.0, last_side=None, last_session_date=None, last_quantity=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +157,7 @@ class PlannedStateWrite:
     last_target: float
     last_side: str | None
     last_session_date: date
+    last_quantity: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +169,9 @@ class StrategyPlan:
     skip_reason: str | None
     signals: tuple[PlannedSignal, ...]
     state_writes: tuple[PlannedStateWrite, ...]
+    sizing_notes: tuple[str, ...] = ()
+    """Per-ticker sizing outcomes worth a log line: clamps, and entries that
+    could not be sized at all. Empty when every entry sized cleanly."""
 
 
 def _invested(weight: float) -> bool:
@@ -156,13 +186,27 @@ def _invested(weight: float) -> bool:
 
 
 def _justification(
-    *, strategy_name: str, strategy_id: str, ticker: str, prev_invested: bool, now_invested: bool
+    *,
+    strategy_name: str,
+    strategy_id: str,
+    ticker: str,
+    prev_invested: bool,
+    now_invested: bool,
+    quantity: int,
+    sizing: str,
 ) -> str:
+    """Explain the transition *and* the size.
+
+    The size belongs in the audit trail: a share count with no stated basis is
+    unreviewable after the fact, and this is the field a human reads when asking
+    why the book holds what it holds.
+    """
+
     prev = "invested" if prev_invested else "flat"
     now = "invested" if now_invested else "flat"
     return (
-        f"Strategy '{strategy_name}' ({strategy_id}) moving-average crossover target for "
-        f"{ticker} changed {prev} -> {now}. "
+        f"Strategy '{strategy_name}' ({strategy_id}) target for {ticker} changed "
+        f"{prev} -> {now}; {quantity} share(s) {sizing}. "
         "Paper-stage strategy runner; not investment advice."
     )
 
@@ -172,6 +216,7 @@ def _build_payload(
     strategy_id: str,
     ticker: str,
     side: str,
+    quantity: int,
     config: RunnerSignalConfig,
     regime_label: str | None,
     justification: str,
@@ -182,13 +227,29 @@ def _build_payload(
         "strategy_id": strategy_id,
         "ticker": ticker.upper(),
         "side": side,
-        "size_hint": config.quantity,
-        "quantity": config.quantity,
+        "size_hint": quantity,
+        "quantity": quantity,
         "confidence": config.confidence,
         "urgency": config.urgency,
         "regime_label": regime_label or UNKNOWN_REGIME,
         "justification_text": justification,
     }
+
+
+def _latest_close(window: PanelWindow, ticker: str) -> float:
+    """The most recent completed close — the price the entry is sized against.
+
+    The runner plans at market *open*, so the last completed session's close is
+    the newest price that exists without look-ahead, and it is the same series
+    the Evaluator measured the strategy on. An overnight gap therefore shifts the
+    realized weight slightly; flooring means a gap up under-fills the slot rather
+    than breaching it.
+    """
+
+    closes = window.closes(ticker)
+    if not closes:
+        raise ValueError(f"no closes available for {ticker} — cannot size an entry")
+    return float(closes[-1])
 
 
 def _already_ran(
@@ -232,6 +293,7 @@ def _plan_strategy(
     factory: StrategyFactory,
     config: RunnerSignalConfig,
     regime_label: str | None,
+    equity: float,
 ) -> StrategyPlan:
     strategy_id = item.record.strategy_id
     try:
@@ -264,6 +326,7 @@ def _plan_strategy(
 
         signals: list[PlannedSignal] = []
         writes: list[PlannedStateWrite] = []
+        notes: list[str] = []
         for ticker in item.tickers:
             weight = float(targets.get(ticker, 0.0))
             now_inv = _invested(weight)
@@ -271,16 +334,51 @@ def _plan_strategy(
             prev_inv = _invested(prev.last_target)
 
             side: str | None = None
+            emit_quantity = 0
+            sizing_basis = ""
+            # An untouched ticker keeps its stored position; only a transition
+            # changes what we believe we hold.
+            stored_quantity = prev.last_quantity
+            stored_target = weight
+
             if now_inv and not prev_inv:
-                side = SIDE_BUY
+                price = _latest_close(window, ticker)
+                sized = size_position(
+                    target_weight=weight,
+                    equity=equity,
+                    price=price,
+                    max_quantity=config.max_quantity,
+                )
+                if sized.reason:
+                    notes.append(f"{ticker}: {sized.reason}")
+                if sized.is_tradeable:
+                    side = SIDE_BUY
+                    emit_quantity = sized.quantity
+                    stored_quantity = sized.quantity
+                    sizing_basis = (
+                        f"= {weight:.4f} of ${equity:,.2f} equity "
+                        f"(${sized.notional_slot:,.2f}) at ${price:,.2f}"
+                    )
+                else:
+                    # An entry that could not be sized did not happen. Record it
+                    # as flat: storing the invested weight would make next
+                    # session read this as an exit and emit a sell for a
+                    # position the firm never opened.
+                    stored_target = 0.0
+                    stored_quantity = 0
             elif prev_inv and not now_inv:
                 side = SIDE_SELL
+                # Sell the position we opened, not a freshly sized one.
+                emit_quantity = prev.last_quantity or LEGACY_EXIT_QUANTITY
+                stored_quantity = 0
+                sizing_basis = "closing the recorded entry"
 
             if side is not None:
                 payload = _build_payload(
                     strategy_id=strategy_id,
                     ticker=ticker,
                     side=side,
+                    quantity=emit_quantity,
                     config=config,
                     regime_label=regime_label,
                     justification=_justification(
@@ -289,6 +387,8 @@ def _plan_strategy(
                         ticker=ticker,
                         prev_invested=prev_inv,
                         now_invested=now_inv,
+                        quantity=emit_quantity,
+                        sizing=sizing_basis,
                     ),
                 )
                 signals.append(
@@ -306,9 +406,10 @@ def _plan_strategy(
                 PlannedStateWrite(
                     strategy_id=strategy_id,
                     ticker=ticker,
-                    last_target=weight,
+                    last_target=stored_target,
                     last_side=side or prev.last_side,
                     last_session_date=session_date,
+                    last_quantity=stored_quantity,
                 )
             )
 
@@ -318,6 +419,7 @@ def _plan_strategy(
             skip_reason=None,
             signals=tuple(signals),
             state_writes=tuple(writes),
+            sizing_notes=tuple(notes),
         )
     except Exception as exc:  # fail-safe: one bad strategy never breaks the pass
         return _skip(strategy_id, f"error: {exc!r}")
@@ -331,12 +433,17 @@ def plan_session(
     factory: StrategyFactory,
     config: RunnerSignalConfig,
     regime_label: str | None,
+    equity: float,
 ) -> list[StrategyPlan]:
     """Plan one session: fabricated strategies + bars + state -> signals to emit.
 
     Pure and total: every input strategy yields exactly one :class:`StrategyPlan`
     (emitting, no-op, or skipped-with-reason); nothing here performs I/O or
     raises.
+
+    ``equity`` has no default on purpose. The caller must have established a
+    usable account size (``sizing.assert_equity_usable``) before planning, and a
+    default here would be a silent fiction the whole book was sized against.
     """
 
     return [
@@ -347,6 +454,7 @@ def plan_session(
             factory=factory,
             config=config,
             regime_label=regime_label,
+            equity=equity,
         )
         for item in strategies
     ]
@@ -354,9 +462,10 @@ def plan_session(
 
 __all__ = [
     "DEFAULT_CONFIDENCE",
-    "DEFAULT_QUANTITY",
+    "DEFAULT_MAX_QUANTITY",
     "DEFAULT_URGENCY",
     "FLAT_TARGET",
+    "LEGACY_EXIT_QUANTITY",
     "PRODUCED_BY",
     "SCHEMA_VERSION",
     "SIDE_BUY",

@@ -26,13 +26,19 @@ Delivery / idempotency (KI-006 consumer group + a per-session state guard):
 Fail-safe: a single bad strategy (missing bars, bad spec, factory error) is
 skipped by the planner with a logged reason; it never crashes the loop and
 never emits a partial signal.
+
+Sizing: each pass reads account equity from ``ops.account_snapshots`` (written by
+the Reconciliation Agent) and converts every entry's target weight into a share
+count. Unusable equity — missing or stale — refuses the *whole pass* rather than
+falling back to a fixed size, and the phase event is left un-acked so the pass
+retries once a fresh snapshot lands.
 """
 
 from __future__ import annotations
 
 import asyncio
 import signal
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol, cast
 
 import structlog
@@ -64,6 +70,7 @@ from shrap.research.strategy_runner.engine import (
     TargetState,
     plan_session,
 )
+from shrap.research.strategy_runner.sizing import SizingRefused, assert_equity_usable
 from shrap.research.strategy_runner.store import PostgresStrategyRunnerStateStore
 
 log = structlog.get_logger(__name__)
@@ -120,6 +127,8 @@ class BarReader(Protocol):
 
 class StateStore(Protocol):
     async def read_state(self) -> dict[tuple[str, str], TargetState]: ...
+
+    async def latest_equity(self) -> tuple[float | None, datetime | None]: ...
 
     async def upsert(self, write: PlannedStateWrite) -> None: ...
 
@@ -209,6 +218,13 @@ async def run_pass(
         log.info("strategy_runner.no_active_strategies", session_date=session_date.isoformat())
         return 0
 
+    # Account size first: every entry this pass is a fraction of it, so an
+    # unusable snapshot must stop the pass before any signal is planned.
+    # SizingRefused propagates — the caller leaves the phase event un-acked and
+    # the pass retries once the Reconciliation Agent writes a fresh snapshot.
+    raw_equity, observed_at = await state_store.latest_equity()
+    equity = assert_equity_usable(raw_equity, observed_at, datetime.now(UTC))
+
     stored_state = await state_store.read_state()
     regime_label = await latest_regime_label(cast(FixtureRedis, redis))  # informational only
 
@@ -231,6 +247,7 @@ async def run_pass(
         factory=_default_strategy_factory,
         config=config,
         regime_label=regime_label,
+        equity=equity,
     )
 
     publisher = EventPublisher(cast(RedisPublisher, redis))
@@ -244,6 +261,17 @@ async def run_pass(
                 session_date=session_date.isoformat(),
             )
             continue
+        # A clamped or unfundable entry means the live book is not the evaluated
+        # book for that name. Silence here is the failure mode this card exists
+        # to remove, so it is logged even though nothing went wrong.
+        for note in plan.sizing_notes:
+            log.warning(
+                "strategy_runner.sizing_note",
+                strategy_id=plan.strategy_id,
+                note=note,
+                equity=equity,
+                session_date=session_date.isoformat(),
+            )
         for planned in plan.signals:
             result = await publisher.publish(
                 stream=STREAM_STRATEGY_SIGNAL,
@@ -257,6 +285,7 @@ async def run_pass(
                 strategy_id=planned.strategy_id,
                 ticker=planned.ticker,
                 side=planned.side,
+                quantity=planned.payload["quantity"],
                 event_id=result.envelope.event_id,
                 session_date=session_date.isoformat(),
             )
@@ -331,6 +360,19 @@ async def poll_once(
                 emitted=emitted,
                 phase_event_id=event.envelope.event_id,
             )
+        except SizingRefused as exc:
+            # Unknown or stale account equity. Deliberately NOT acked: this is a
+            # transient dependency failure (the Reconciliation Agent writes the
+            # snapshot), so the phase event stays pending and the whole pass
+            # retries next cycle. Trading on an unknown account size is worse
+            # than trading late.
+            log.error(
+                "strategy_runner.sizing_refused",
+                reason=str(exc),
+                phase_event_id=event.envelope.event_id,
+            )
+            await asyncio.sleep(retry_delay_seconds)
+            break
         except ValueError:
             # Malformed phase payload: permanent for this event. Ack and skip,
             # or the consumer stalls forever on a poison message.
@@ -435,7 +477,7 @@ async def run(
         group=group,
         consumer=consumer or group,
         confidence=config.confidence,
-        quantity=config.quantity,
+        max_quantity=config.max_quantity,
         adjustment=adjustment,
     )
     stop = asyncio.Event()

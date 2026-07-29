@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shrap.research.strategy_runner.engine import (
     DEFAULT_CONFIDENCE,
-    DEFAULT_QUANTITY,
+    DEFAULT_MAX_QUANTITY,
     RunnerSignalConfig,
 )
 
@@ -32,8 +32,13 @@ class Settings(BaseSettings):
     postgres_dsn: str = ""
 
     # Signal shaping. confidence must clear the Decision Maker threshold
-    # (default 0.7, strict >); quantity is a placeholder — Pre-Trade caps it.
-    quantity: int = DEFAULT_QUANTITY
+    # (default 0.7, strict >).
+    #
+    # max_quantity must equal the Pre-Trade Checker's PRE_TRADE_MAX_QUANTITY_PER_ORDER.
+    # The checker clamps rather than vetoes, so a larger value here would fill a
+    # smaller position than the runner records — and the later exit would try to
+    # sell shares that were never bought. Raise both or neither.
+    max_quantity: int = DEFAULT_MAX_QUANTITY
     confidence: float = DEFAULT_CONFIDENCE
 
     # Bar read + price adjustment (matches the Evaluator's default mode).
@@ -49,7 +54,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     def signal_config(self) -> RunnerSignalConfig:
-        return RunnerSignalConfig(quantity=self.quantity, confidence=self.confidence)
+        return RunnerSignalConfig(max_quantity=self.max_quantity, confidence=self.confidence)
 
     def redacted(self) -> dict[str, object]:
         """Return a log-safe settings snapshot (never the DSN's credentials)."""
@@ -59,7 +64,7 @@ class Settings(BaseSettings):
             "instance_id": self.instance_id,
             "redis_url": self.redis_url,
             "postgres_dsn": "***",
-            "quantity": self.quantity,
+            "max_quantity": self.max_quantity,
             "confidence": self.confidence,
             "adjustment": self.adjustment,
             "lookback_buffer_days": self.lookback_buffer_days,

@@ -33,25 +33,37 @@ CREATE TABLE IF NOT EXISTS research.strategy_runner_state (
     last_target DOUBLE PRECISION NOT NULL,
     last_side TEXT,
     last_session_date DATE NOT NULL,
+    last_quantity INTEGER NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (strategy_id, ticker)
 )
 """.strip()
 
+# The table already exists in production, where CREATE TABLE IF NOT EXISTS is a
+# no-op — so the column needs its own migration. The default is 1, not 0: every
+# row written before sizing existed was opened by the fixed-1-share path, so 1 is
+# what those positions actually hold. A default of 0 would strand them, because
+# an exit sells the recorded quantity.
+ALTER_RUNNER_STATE_ADD_QUANTITY_SQL = """
+ALTER TABLE research.strategy_runner_state
+ADD COLUMN IF NOT EXISTS last_quantity INTEGER NOT NULL DEFAULT 1
+""".strip()
+
 SELECT_RUNNER_STATE_SQL = """
-SELECT strategy_id, ticker, last_target, last_side, last_session_date
+SELECT strategy_id, ticker, last_target, last_side, last_session_date, last_quantity
 FROM research.strategy_runner_state
 """.strip()
 
 UPSERT_RUNNER_STATE_SQL = """
 INSERT INTO research.strategy_runner_state (
-    strategy_id, ticker, last_target, last_side, last_session_date, updated_at
+    strategy_id, ticker, last_target, last_side, last_session_date, last_quantity, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, now())
+VALUES ($1, $2, $3, $4, $5, $6, now())
 ON CONFLICT (strategy_id, ticker) DO UPDATE SET
     last_target = EXCLUDED.last_target,
     last_side = EXCLUDED.last_side,
     last_session_date = EXCLUDED.last_session_date,
+    last_quantity = EXCLUDED.last_quantity,
     updated_at = now()
 """.strip()
 
@@ -97,6 +109,7 @@ class PostgresStrategyRunnerStateStore:
         async with self._pool.acquire() as conn:
             await conn.execute(CREATE_RESEARCH_SCHEMA_SQL)
             await conn.execute(CREATE_RUNNER_STATE_TABLE_SQL)
+            await conn.execute(ALTER_RUNNER_STATE_ADD_QUANTITY_SQL)
 
     async def read_state(self) -> dict[tuple[str, str], TargetState]:
         """Read every stored target, keyed by ``(strategy_id, ticker)``.
@@ -112,10 +125,12 @@ class PostgresStrategyRunnerStateStore:
             strategy_id = str(row["strategy_id"])
             ticker = str(row["ticker"])
             last_side = row["last_side"]
+            last_quantity = row["last_quantity"]
             state[(strategy_id, ticker)] = TargetState(
                 last_target=float(row["last_target"]),
                 last_side=None if last_side is None else str(last_side),
                 last_session_date=_as_date(row["last_session_date"]),
+                last_quantity=0 if last_quantity is None else int(last_quantity),
             )
         return state
 
@@ -153,6 +168,7 @@ class PostgresStrategyRunnerStateStore:
                 write.last_target,
                 write.last_side,
                 write.last_session_date,
+                write.last_quantity,
             )
 
 
@@ -165,7 +181,9 @@ def _as_date(value: object) -> date | None:
 
 
 __all__ = [
+    "ALTER_RUNNER_STATE_ADD_QUANTITY_SQL",
     "CREATE_RUNNER_STATE_TABLE_SQL",
+    "SELECT_LATEST_EQUITY_SQL",
     "SELECT_RUNNER_STATE_SQL",
     "UPSERT_RUNNER_STATE_SQL",
     "AsyncPool",
