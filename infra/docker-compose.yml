@@ -590,7 +590,10 @@ services:
       STRATEGY_RUNNER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
       STRATEGY_RUNNER_START_ID: "$$"
       STRATEGY_RUNNER_CONFIDENCE: "0.75"
-      STRATEGY_RUNNER_QUANTITY: "1"
+      # Must equal PRE_TRADE_MAX_QUANTITY_PER_ORDER — the checker clamps rather
+      # than vetoes, so a larger value here records an intent bigger than the
+      # fill and the later exit would oversell. Raise both together.
+      STRATEGY_RUNNER_MAX_QUANTITY: "1"
       STRATEGY_RUNNER_ADJUSTMENT: "all"
       STRATEGY_RUNNER_COUNT: "100"
       STRATEGY_RUNNER_BLOCK_MS: "5000"

@@ -13,6 +13,7 @@ from typing import Any
 
 from shrap.research.strategy_runner.engine import PlannedStateWrite, TargetState
 from shrap.research.strategy_runner.store import (
+    ALTER_RUNNER_STATE_ADD_QUANTITY_SQL,
     CREATE_RUNNER_STATE_TABLE_SQL,
     SELECT_LATEST_EQUITY_SQL,
     SELECT_RUNNER_STATE_SQL,
@@ -34,13 +35,14 @@ class FakeConn:
     async def execute(self, sql: str, *args: object) -> object:
         self.executed.append(sql)
         if sql == UPSERT_RUNNER_STATE_SQL:
-            strategy_id, ticker, last_target, last_side, last_session_date = args
+            strategy_id, ticker, last_target, last_side, last_session_date, last_quantity = args
             self.rows[(str(strategy_id), str(ticker))] = {
                 "strategy_id": strategy_id,
                 "ticker": ticker,
                 "last_target": last_target,
                 "last_side": last_side,
                 "last_session_date": last_session_date,
+                "last_quantity": last_quantity,
             }
         return "OK"
 
@@ -91,23 +93,24 @@ async def test_upsert_then_read_round_trips_target_state() -> None:
             last_target=1.0,
             last_side="buy",
             last_session_date=SESSION,
+            last_quantity=40,
         )
     )
     state = await store.read_state()
-    assert state == {("s1", "NVDA"): TargetState(1.0, "buy", SESSION)}
+    assert state == {("s1", "NVDA"): TargetState(1.0, "buy", SESSION, 40)}
 
 
 async def test_upsert_is_idempotent_on_primary_key() -> None:
     pool = FakePool()
     store = PostgresStrategyRunnerStateStore(pool)  # type: ignore[arg-type]
-    first = PlannedStateWrite("s1", "NVDA", 1.0, "buy", SESSION)
-    second = PlannedStateWrite("s1", "NVDA", 0.0, "sell", SESSION)
+    first = PlannedStateWrite("s1", "NVDA", 1.0, "buy", SESSION, 40)
+    second = PlannedStateWrite("s1", "NVDA", 0.0, "sell", SESSION, 0)
     await store.upsert(first)
     await store.upsert(second)
     state = await store.read_state()
     # One row (no duplicate), carrying the latest values.
     assert list(state) == [("s1", "NVDA")]
-    assert state[("s1", "NVDA")] == TargetState(0.0, "sell", SESSION)
+    assert state[("s1", "NVDA")] == TargetState(0.0, "sell", SESSION, 0)
 
 
 async def test_read_state_handles_null_side() -> None:
@@ -116,6 +119,28 @@ async def test_read_state_handles_null_side() -> None:
     await store.upsert(PlannedStateWrite("s1", "NVDA", 0.0, None, SESSION))
     state = await store.read_state()
     assert state[("s1", "NVDA")].last_side is None
+
+
+# --- the last_quantity migration ---------------------------------------------
+
+
+async def test_ensure_schema_migrates_the_existing_production_table() -> None:
+    """CREATE TABLE IF NOT EXISTS is a no-op where the table already exists, so
+    the new column needs its own ALTER or the Dell's rows never gain it."""
+
+    pool = FakePool()
+    store = PostgresStrategyRunnerStateStore(pool)  # type: ignore[arg-type]
+    await store.ensure_schema()
+    assert ALTER_RUNNER_STATE_ADD_QUANTITY_SQL in pool.conn.executed
+    assert "ADD COLUMN IF NOT EXISTS last_quantity" in ALTER_RUNNER_STATE_ADD_QUANTITY_SQL
+
+
+def test_the_migration_backfills_one_share_not_zero() -> None:
+    """Every pre-sizing row was opened by the fixed-1-share path, so 1 is what
+    those positions hold. Defaulting to 0 would strand them: an exit sells the
+    recorded quantity, and a recorded 0 never closes."""
+
+    assert "DEFAULT 1" in ALTER_RUNNER_STATE_ADD_QUANTITY_SQL
 
 
 # --- account equity, for notional sizing --------------------------------------

@@ -31,14 +31,47 @@ exactly as they do for the fixture. It emits at most one action per
 
 What this agent deliberately does **not** do:
 
-- **No sizing.** It emits a small placeholder `quantity`/`size_hint`; the
-  Pre-Trade Checker caps the real quantity. Position sizing and Risk-Officer
-  integration are deferred.
+- **No risk-officer integration.** It sizes each entry as a fraction of account
+  equity (below), but regime-scaled sizing bands, portfolio-level exposure limits
+  and correlation caps are still deferred.
 - **No position reconciliation.** The runner owns only its per-strategy
-  *intended target* (flat vs invested). Actual fills and held positions remain
-  the Reconciliation Agent's responsibility; the runner never reads broker
-  state and never corrects drift between intent and holdings.
+  *intended target* and the share count it ordered. Actual fills and held
+  positions remain the Reconciliation Agent's responsibility; the runner never
+  reads broker state and never corrects drift between intent and holdings.
 - **No intents, no broker calls, no real money. PAPER ONLY.**
+
+## Sizing
+
+An entry converts the strategy's target weight into shares against real account
+equity:
+
+    target_weight x equity = notional slot;  slot / price = shares, floored
+
+Equity comes from `ops.account_snapshots`, which the Reconciliation Agent writes
+every pass — ADR-0003 keeps broker credentials inside broker-facing containers,
+and the runner is not one of them. Missing or stale equity (>30 min) **refuses
+the whole pass**: nothing is published, no state is written, and the market-phase
+event is left un-acked so the pass retries once a fresh snapshot lands. There is
+no fixed-quantity fallback, because trading an unknown account size is worse than
+trading late.
+
+Four consequences worth knowing before reading a log:
+
+- **Exits sell the recorded entry**, not a freshly sized position. `last_quantity`
+  is stored per `(strategy, ticker)`; re-sizing at a later price would leave a
+  residual or oversell into a short.
+- **An entry that cannot be funded records *flat*.** A 10% slot on $10,000 is
+  $1,000, so a $1,500 name cannot be held at all. Recording the intended weight
+  anyway would make the next session read invested → flat and sell a position
+  that was never opened. It is logged as `strategy_runner.sizing_note`.
+- **`STRATEGY_RUNNER_MAX_QUANTITY` must equal `PRE_TRADE_MAX_QUANTITY_PER_ORDER`.**
+  The Pre-Trade Checker *clamps* rather than vetoes, so a larger runner cap
+  records an intent bigger than the fill — and the exit oversells. Raise both or
+  neither. A test asserts the two defaults match.
+- **Entries are sized at the previous close**, the newest price available without
+  look-ahead at market open, and the same series the Evaluator measured. An
+  overnight gap shifts the realized weight slightly; flooring means a gap up
+  under-fills rather than breaching the slot.
 
 ## The emit-on-transition model
 
@@ -136,10 +169,15 @@ decision logic is a pure `inputs → (signals, state writes)` function
 
 | What | Store | Notes |
 |---|---|---|
-| Last intended target | PostgreSQL `research.strategy_runner_state` | One row per `(strategy_id, ticker)`; `last_session_date` is the per-session dedupe guard |
+| Last intended target | PostgreSQL `research.strategy_runner_state` | One row per `(strategy_id, ticker)`; `last_session_date` is the per-session dedupe guard; `last_quantity` is the share count ordered, so the exit closes what was opened |
 | Consumer offset | Redis consumer group `strategy-runner` | Offsets persist across restarts (KI-006) |
+| Account equity | PostgreSQL `ops.account_snapshots` | **Read-only**, owned by the Reconciliation Agent. Never created or written here |
 
-The runner stores only its *intended* target, never positions or fills.
+The runner stores only its *intended* target and ordered quantity, never
+positions or fills. `last_quantity` is intent: if the Pre-Trade Checker clamps an
+order, the recorded quantity exceeds what filled, and the exit oversells.
+Reconciling the two is KI-005, and keeping the two caps equal is the interim
+guard.
 
 ## Failure behavior
 
@@ -161,6 +199,12 @@ The runner stores only its *intended* target, never positions or fills.
    promoted strategies simply do not trade while it is down, which fails closed.
    On restart with `start_id="$"` it resumes from the next `open` event; it does
    not retroactively trade a session whose `open` it missed.
+4. **Equity unavailable.** If the Reconciliation Agent has not written a snapshot
+   in 30 minutes, the pass refuses: nothing published, no state written, phase
+   event left un-acked so the session resumes on its own once a snapshot lands.
+   This makes the Reconciliation Agent a hard dependency of trading — deliberate,
+   since it is also the only source of the account size every position is a
+   fraction of.
 
 ## Sprint scope
 
@@ -174,9 +218,11 @@ The runner stores only its *intended* target, never positions or fills.
 - **Continuous weight reconciliation.** The runner emits discrete orders on the
   flat/invested boundary only; it does not trade toward a changed target
   *magnitude*, nor reconcile intended target against actual held position.
-- **Real sizing / Risk-Officer integration.** `quantity` is a placeholder; the
-  Pre-Trade Checker caps it. Position sizing bands and regime-scaled sizing are a
-  later card.
+- **Risk-Officer integration.** Notional sizing landed; regime-scaled sizing
+  bands, portfolio exposure limits and correlation caps are a later card.
+- **Fractional shares.** Slots below one share are skipped with a reason. Alpaca
+  supports fractional quantities, which would remove the "a $1,500 name cannot be
+  held on a $10,000 account" limit entirely. Its own card.
 - **Intraday cadence.** One pass per session, on `open`. No rebalancing at other
   phases or intraday bars.
 - **Strategy-authoring upgrade.** The record → signal binding is the Evaluator's

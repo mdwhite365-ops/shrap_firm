@@ -10,7 +10,10 @@ Fabricated strategies + bar panels + stored state exercise every branch of
 - a broken factory skips one strategy without touching the others (fail-safe);
 - regime is informational, never a gate;
 - the emitted payload schema matches the Strategy Fixture exactly and its
-  confidence clears the real Decision Maker threshold.
+  confidence clears the real Decision Maker threshold;
+- entries are sized in dollars against account equity, exits sell the recorded
+  entry, and an entry that cannot be funded records *flat* rather than a
+  position the firm does not hold.
 """
 
 from __future__ import annotations
@@ -38,6 +41,12 @@ from shrap.trading_floor.decision_maker_stub import DEFAULT_CONFIDENCE_THRESHOLD
 
 SESSION = date(2026, 7, 24)
 YESTERDAY = SESSION - timedelta(days=1)
+EQUITY = 10_000.0
+
+# The transition tests are about transitions, so they run with the per-order cap
+# effectively off. The cap has its own tests below; leaving the production
+# default (1) in place here would make every buy assert the clamp by accident.
+UNCAPPED = RunnerSignalConfig(max_quantity=1_000_000)
 
 
 # --- fabricated strategy seam -------------------------------------------------
@@ -112,14 +121,17 @@ def _plan_one(
     item: StrategyInput,
     stored: dict[tuple[str, str], TargetState],
     regime_label: str | None = "risk-on",
+    config: RunnerSignalConfig = UNCAPPED,
+    equity: float = EQUITY,
 ):
     plans = plan_session(
         session_date=SESSION,
         strategies=[item],
         stored_state=stored,
         factory=_factory_returning(strategy),
-        config=RunnerSignalConfig(),
+        config=config,
         regime_label=regime_label,
+        equity=equity,
     )
     assert len(plans) == 1
     return plans[0]
@@ -148,22 +160,27 @@ def test_flat_to_invested_emits_buy() -> None:
 
 def test_invested_to_flat_emits_sell() -> None:
     strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.0})
-    stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY)}
+    stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY, 40)}
     plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored=stored)
     assert [s.side for s in plan.signals] == [SIDE_SELL]
     (write,) = plan.state_writes
     assert write.last_target == 0.0
     assert write.last_side == SIDE_SELL
+    assert write.last_quantity == 0  # position closed
 
 
 def test_unchanged_invested_emits_nothing_but_stamps_state() -> None:
     strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 1.0})
-    stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY)}
+    stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY, 40)}
     plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored=stored)
     assert plan.signals == ()
     (write,) = plan.state_writes  # still stamped this session (idempotency guard)
     assert write.last_session_date == SESSION
     assert write.last_side == SIDE_BUY  # carried forward
+    # The held position is carried forward untouched. Re-sizing a hold would
+    # drift the recorded quantity away from the shares actually held, and the
+    # eventual exit sells the recorded quantity.
+    assert write.last_quantity == 40
 
 
 def test_unchanged_flat_emits_nothing() -> None:
@@ -223,8 +240,9 @@ def test_factory_error_skips_only_that_strategy() -> None:
         strategies=[_input("bad", "AAPL", 5), _input("good", "NVDA", 5)],
         stored_state={},
         factory=factory,
-        config=RunnerSignalConfig(),
+        config=UNCAPPED,
         regime_label=None,
+        equity=EQUITY,
     )
     by_id = {p.strategy_id: p for p in plans}
     assert by_id["bad"].skipped
@@ -250,13 +268,141 @@ def test_payload_carries_strategy_id_and_transition_justification() -> None:
     assert payload["strategy_id"] == "real-strat-id"
     assert payload["ticker"] == "NVDA"
     assert payload["side"] == SIDE_BUY
-    assert payload["quantity"] == payload["size_hint"] == 1
+    # $10,000 fully weighted into a $10 name is 1,000 shares — sized, not fixed.
+    assert payload["quantity"] == payload["size_hint"] == 1_000
     assert payload["urgency"] == "normal"
     text = payload["justification_text"]
     # The justification names the strategy *record* (its registry name), the
-    # crossover transition, and the paper-only disclaimer.
+    # transition, the size and its basis, and the paper-only disclaimer.
     assert "trend-v1" in text and "flat -> invested" in text
+    assert "1000 share(s)" in text and "$10,000.00 equity" in text
     assert "not investment advice" in text.lower()
+
+
+# --- sizing: the live book has to be the evaluated book -----------------------
+
+
+def _multi_input(strategy_id: str, closes: dict[str, float], n_bars: int = 5) -> StrategyInput:
+    record = _make_record(strategy_id, list(closes))
+    return StrategyInput(
+        record=record,
+        tickers=list(closes),
+        bars_by_ticker={t: _bars(n_bars, close) for t, close in closes.items()},
+    )
+
+
+def test_an_entry_is_a_dollar_slot_not_a_share_count() -> None:
+    """20% of $10,000 is $2,000; at $50 that is 40 shares, not 1."""
+
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.20})
+    item = _multi_input("s1", {"NVDA": 50.0})
+    plan = _plan_one(strategy=strategy, item=item, stored={})
+    assert plan.signals[0].payload["quantity"] == 40
+    assert plan.state_writes[0].last_quantity == 40
+
+
+def test_equal_weights_across_a_universe_become_equal_dollars() -> None:
+    """The property the fixed-quantity path could not express.
+
+    One share of a $500 name and one share of a $25 name are a 20x difference in
+    exposure. An equal-weight strategy has to trade equal *dollars*, or the live
+    book is not the book the Evaluator measured.
+    """
+
+    weights = dict.fromkeys(("AAA", "BBB", "CCC"), 1 / 3)
+    strategy = FakeStrategy(name="t", warmup=3, weights=weights)
+    item = _multi_input("s1", {"AAA": 500.0, "BBB": 25.0, "CCC": 100.0})
+    plan = _plan_one(strategy=strategy, item=item, stored={})
+
+    notionals = {s.ticker: s.payload["quantity"] for s in plan.signals}
+    prices = {"AAA": 500.0, "BBB": 25.0, "CCC": 100.0}
+    spent = {t: q * prices[t] for t, q in notionals.items()}
+    # Each slot is ~$3,333; flooring costs at most one share, so allow 1 share
+    # of the priciest name as tolerance.
+    assert max(spent.values()) - min(spent.values()) <= 500.0
+    assert notionals == {"AAA": 6, "BBB": 133, "CCC": 33}
+
+
+def test_an_exit_sells_the_recorded_entry_not_a_freshly_sized_one() -> None:
+    """The price moved since entry. Re-sizing the exit would leave a residual
+    (price up) or oversell into a short (price down)."""
+
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.0})
+    stored = {("s1", "NVDA"): TargetState(0.20, SIDE_BUY, YESTERDAY, 40)}
+    # Price has doubled since the entry; a re-sized exit would sell 20.
+    item = _multi_input("s1", {"NVDA": 100.0})
+    plan = _plan_one(strategy=strategy, item=item, stored=stored)
+    assert plan.signals[0].payload["quantity"] == 40
+
+
+def test_an_exit_of_a_pre_sizing_row_sells_one_share() -> None:
+    """Rows written before this card hold exactly 1 share — that is what the
+    fixed-quantity path emitted, so 1 is a fact about them, not a guess."""
+
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.0})
+    stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY, 0)}
+    plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored=stored)
+    assert plan.signals[0].payload["quantity"] == 1
+
+
+def test_an_unfundable_entry_emits_nothing_and_records_flat() -> None:
+    """THE trap in this card.
+
+    A 10% slot on $10,000 is $1,000, so a $1,500 name cannot be held at all.
+    Recording the *intended* weight anyway would make next session read
+    invested -> flat and emit a sell for a position that was never opened.
+    """
+
+    strategy = FakeStrategy(name="t", warmup=3, weights={"BRKA": 0.10})
+    item = _multi_input("s1", {"BRKA": 1_500.0})
+    plan = _plan_one(strategy=strategy, item=item, stored={})
+
+    assert plan.signals == ()
+    (write,) = plan.state_writes
+    assert write.last_target == 0.0  # flat, not 0.10
+    assert write.last_quantity == 0
+    assert any("smaller than one share" in note for note in plan.sizing_notes)
+
+
+def test_a_clamped_entry_is_reported_rather_than_silent() -> None:
+    """The runner's cap mirrors the Pre-Trade Checker's, which clamps rather
+    than vetoes. An unreported clamp is a strategy quietly under-weight."""
+
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 1.0})
+    plan = _plan_one(
+        strategy=strategy,
+        item=_input("s1", "NVDA", 5),
+        stored={},
+        config=RunnerSignalConfig(max_quantity=1),
+    )
+    assert plan.signals[0].payload["quantity"] == 1
+    assert any("clamped 1000 -> 1" in note for note in plan.sizing_notes)
+    # State records what was actually ordered, so the exit closes what exists.
+    assert plan.state_writes[0].last_quantity == 1
+
+
+def test_the_production_default_matches_the_pre_trade_cap() -> None:
+    """These two must move together.
+
+    The Pre-Trade Checker clamps to its own cap, so a runner sizing above it
+    records an intent larger than the fill — and the exit sells shares that were
+    never bought. This test fails the moment one is raised without the other.
+    """
+
+    from shrap.agents.risk_compliance.pre_trade_checker.config import (
+        Settings as PreTradeSettings,
+    )
+
+    assert RunnerSignalConfig().max_quantity == PreTradeSettings().max_quantity_per_order
+
+
+def test_a_zero_equity_pass_cannot_be_planned_at_all() -> None:
+    """plan_session takes equity with no default, so there is no code path that
+    sizes against a fabricated account. The service asserts usability first."""
+
+    import inspect
+
+    assert inspect.signature(plan_session).parameters["equity"].default is inspect.Parameter.empty
 
 
 def test_confidence_clears_the_decision_maker_threshold() -> None:

@@ -32,7 +32,7 @@ def test_settings_defaults_are_conservative_and_start_new() -> None:
     settings = Settings()
     assert settings.service_name == "strategy-runner"
     assert settings.start_id == "$"  # only new phase events
-    assert settings.quantity == 1
+    assert settings.max_quantity == 1  # must track the Pre-Trade cap; see engine.py
     assert settings.confidence > DEFAULT_CONFIDENCE_THRESHOLD
     assert settings.adjustment == "all"
     config = settings.signal_config()
@@ -56,6 +56,7 @@ def test_pyproject_and_infra_are_wired() -> None:
     assert "strategy-runner:" in compose
     assert "container_name: shrap_strategy_runner" in compose
     assert "STRATEGY_RUNNER_POSTGRES_DSN" in compose
+    assert "STRATEGY_RUNNER_MAX_QUANTITY" in compose
     assert "STRATEGY_RUNNER_ALPACA" not in compose  # PAPER ONLY: no broker creds
 
     dockerfile = Path("infra/strategy-runner.Dockerfile").read_text()
@@ -102,9 +103,13 @@ def test_reference_factory_seam_emits_a_buy_end_to_end() -> None:
         strategies=[item],
         stored_state={},
         factory=_default_strategy_factory,
-        config=RunnerSignalConfig(),
+        config=RunnerSignalConfig(max_quantity=1_000_000),
         regime_label="risk-on",
+        equity=10_000.0,
     )
     (plan,) = plans
     assert not plan.skipped
     assert [(s.side, s.ticker) for s in plan.signals] == [(SIDE_BUY, "NVDA")]
+    # Sized against equity through the real factory seam: fully weighted into a
+    # $5 close is 2,000 shares.
+    assert plan.signals[0].payload["quantity"] == 2_000
