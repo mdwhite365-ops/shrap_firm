@@ -97,6 +97,28 @@ FROM research.evaluations
 WHERE strategy_id = $1 AND spec_hash = $2 AND protocol_version = $3
 """.strip()
 
+# The parent's most recent measured information ratio, for the worse-than-parent
+# gate.
+#
+# `protocol_version` is in the WHERE clause and is not optional: a 0.1 result and
+# a 0.2 result are different measurements (union panel, rebalancing benchmark,
+# uncapped lookback), and comparing across them would kill a revision for losing
+# to a number that was never comparable to it.
+#
+# `n_periods > 0` excludes refusals. `_empty_active` writes an information ratio
+# of 0.0 when the engine never ran, so filtering on NULL would let a refusal
+# stand in as "the parent scored zero" — and every revision would then look like
+# an improvement.
+SELECT_LATEST_ACTIVE_IR_SQL = """
+SELECT (active_metrics->>'information_ratio')::float8 AS information_ratio
+FROM research.evaluations
+WHERE strategy_id = $1
+  AND protocol_version = $2
+  AND (active_metrics->>'n_periods')::int > 0
+ORDER BY created_at DESC
+LIMIT 1
+""".strip()
+
 # Read-only. The Evaluator consumes these tables; other agents own them.
 SELECT_WORLD_CHANGER_STATUS_SQL = """
 SELECT status FROM research.world_changers WHERE candidate_id = $1
@@ -229,6 +251,22 @@ class PostgresEvaluatorReader:
             row = await conn.fetchrow(SELECT_TICKER_TIER_SQL, ticker)
         return None if row is None else str(row["tier"])
 
+    async def latest_information_ratio(
+        self, strategy_id: str, protocol_version: str
+    ) -> float | None:
+        """The strategy's most recent measured IR at this protocol, or None.
+
+        None means "never measured comparably" — a strategy with no evaluation,
+        or none since the protocol changed. The caller must treat that as "cannot
+        compare" rather than as a score of zero.
+        """
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(SELECT_LATEST_ACTIVE_IR_SQL, strategy_id, protocol_version)
+        if row is None or row["information_ratio"] is None:
+            return None
+        return float(row["information_ratio"])
+
     async def read_bars(
         self, ticker: str, start: date, end: date, adjustment: str
     ) -> list[BarSample]:
@@ -254,6 +292,7 @@ __all__ = [
     "CREATE_RESEARCH_SCHEMA_SQL",
     "INSERT_EVALUATION_SQL",
     "SELECT_DAILY_BARS_SQL",
+    "SELECT_LATEST_ACTIVE_IR_SQL",
     "SELECT_LATEST_EVALUATION_AT_SQL",
     "SELECT_TICKER_TIER_SQL",
     "SELECT_WORLD_CHANGER_STATUS_SQL",

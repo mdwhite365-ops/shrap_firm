@@ -283,6 +283,10 @@ class ReaderPort(Protocol):
         self, ticker: str, start: date, end: date, adjustment: str
     ) -> list[BarSample]: ...
 
+    async def latest_information_ratio(
+        self, strategy_id: str, protocol_version: str
+    ) -> float | None: ...
+
 
 class EvaluationStorePort(Protocol):
     async def insert_evaluation(
@@ -622,6 +626,15 @@ class EvaluationPipeline:
                 ts=ts,
             )
 
+        # Only compared against the parent's most recent measurement AT THIS
+        # PROTOCOL. None means never measured comparably — no evaluation, or none
+        # since the protocol changed — and the gate then does not fire, because
+        # "cannot compare" is not "did not improve".
+        parent_ir: float | None = None
+        if record.parent_strategy_id is not None:
+            parent_ir = await self._reader.latest_information_ratio(
+                record.parent_strategy_id, PROTOCOL_VERSION
+            )
         verdict = map_verdict(
             anchor_required=policy.requires_anchor,
             anchor_fresh=anchor_fresh,
@@ -632,6 +645,7 @@ class EvaluationPipeline:
             sharpe_floor=self._config.sharpe_floor,
             information_ratio=result.active.information_ratio,
             information_ratio_floor=self._config.information_ratio_floor,
+            parent_information_ratio=parent_ir,
         )
         return self._build_outcome(
             record=record,
