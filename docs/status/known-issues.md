@@ -40,6 +40,8 @@ The Reconciliation Agent compares Alpaca paper orders against `trading.paper_ord
 
 **Mitigation:** Position-state derivation becomes its own card when the first Research strategy needs portfolio state, or before live capital — whichever comes first.
 
+**ADR-0017 dissolves most of this rather than solving it.** One strategy per broker account means the account's positions *are* that strategy's positions and its equity curve *is* that strategy's P&L — nothing to derive, produced by the broker rather than by us. What survives: any strategy sharing an account with another, and the fact that `research.strategy_runner_state.last_quantity` records *intent* (a clamped or partially filled order leaves recorded intent above the true position). Under one-strategy-per-account, broker position state answers that directly.
+
 ## KI-006 — Agents replay full stream history on every restart
 
 **Status:** Resolved 2026-07-15. PR #37 moved all stream consumers to Redis consumer groups.
