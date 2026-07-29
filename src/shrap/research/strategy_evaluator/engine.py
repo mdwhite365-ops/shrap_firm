@@ -51,6 +51,19 @@ from shrap.research.strategy_evaluator.strategy import PricePanel, StrategySigna
 PROTOCOL_VERSION = "0.1"
 
 DEFAULT_FOLDS = 6
+# A CAP, not a default (Mike's ruling 2026-07-29). `window_years=None` — the
+# default — requests every bar the store holds and lets the panel be as long as
+# the data allows.
+#
+# It used to be a default of 5, which silently discarded a deeper backfill: the
+# momentum runbook instructs `--since 2018-01-01` and justifies it as buying
+# folds the 127-bar warmup would otherwise eat, and `_build_panel` then asked
+# for five years and never read the rest. The doc promised something the code
+# did not do.
+#
+# Kept as a named constant because it is still the value to pass when a caller
+# deliberately wants a fixed recent window — e.g. re-testing a strategy on the
+# last five years only, to compare against a run that used them.
 DEFAULT_WINDOW_YEARS = 5
 DEFAULT_MIN_TRADES = 150
 # Sharpe promote floor — Mike-owned calibration, shipped as a documented v0.1
@@ -80,7 +93,8 @@ class EvalConfig:
     """Everything the deterministic pipeline needs to reproduce a verdict."""
 
     n_folds: int = DEFAULT_FOLDS
-    window_years: int = DEFAULT_WINDOW_YEARS
+    window_years: int | None = None
+    """Lookback cap in years. ``None`` requests all available history."""
     min_trades: int = DEFAULT_MIN_TRADES
     sharpe_floor: float = DEFAULT_SHARPE_FLOOR
     information_ratio_floor: float = DEFAULT_INFORMATION_RATIO_FLOOR

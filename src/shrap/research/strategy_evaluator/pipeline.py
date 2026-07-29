@@ -814,12 +814,12 @@ class EvaluationPipeline:
     async def _build_panel(
         self, tickers: Sequence[str], today: date
     ) -> tuple[PricePanel, PanelCoverage]:
-        start = today - timedelta(days=self._config.window_years * 365)
+        start = _panel_start(self._config.window_years, today)
         bars_by_ticker: dict[str, list[BarSample]] = {}
         for ticker in tickers:
             bars = await self._reader.read_bars(ticker, start, today, self._config.adjustment)
             bars_by_ticker[ticker] = bars
-        # Measured from the same dict the panel intersects, so coverage can never
+        # Measured from the same dict the panel aligns, so coverage can never
         # describe a different fetch than the one that produced the verdict.
         return PricePanel.from_bars(bars_by_ticker), PanelCoverage.from_bars(bars_by_ticker)
 
@@ -922,6 +922,27 @@ def _validate_param_bounds(spec: Mapping[str, Any]) -> None:
             )
 
 
+# The floor passed to the bar reader when no lookback cap is set. The reader's
+# SQL takes a mandatory start, so "all available history" needs a date rather
+# than a None — and one earlier than any daily equity bar the store will ever
+# hold is the honest way to say it. Deliberately not `date.min`: a year-1 date
+# in a query plan or a log line reads as a bug, and this reads as a floor.
+DATA_FLOOR = date(1970, 1, 1)
+
+
+def _panel_start(window_years: int | None, today: date) -> date:
+    """The earliest date to request bars from.
+
+    ``window_years=None`` means all available history — the default since Mike's
+    2026-07-29 ruling. A number caps the lookback, which is what to pass when a
+    run should deliberately see only a recent window.
+    """
+
+    if window_years is None:
+        return DATA_FLOOR
+    return today - timedelta(days=window_years * 365)
+
+
 def _coverage_lines(outcome: EvaluationOutcome) -> list[str]:
     """The 'how much data was this' section of the card.
 
@@ -942,6 +963,15 @@ def _coverage_lines(outcome: EvaluationOutcome) -> list[str]:
         f"- Bars tested: **{coverage.n_bars}** ({span})",
         f"- Tickers: {len(coverage.per_ticker)}",
     ]
+    # How wide the cross-section was at each end. This matters more since the
+    # lookback stopped being capped at five years: the panel now starts at the
+    # earliest bar ANY member has, so one ticker with a deeper backfill can drag
+    # the start back to a stretch where almost nothing else had listed. A
+    # two-name cross-section is a two-name benchmark, and the benchmark is the
+    # promote gate — so if it happens, the card has to say so.
+    at_start = sum(1 for c in coverage.per_ticker if c.first_date == coverage.first_date)
+    at_end = sum(1 for c in coverage.per_ticker if c.last_date == coverage.last_date)
+    lines.append(f"- Universe: **{at_start}** names at the first bar, **{at_end}** at the last")
     thinnest = coverage.thinnest
     if thinnest is not None:
         first = thinnest.first_date.isoformat() if thinnest.first_date else "never"

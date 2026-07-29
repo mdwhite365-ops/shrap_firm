@@ -910,3 +910,35 @@ async def test_evaluate_reports_coverage_end_to_end(tmp_path: Path) -> None:
     assert "thinnest=LATE" in outcome.summary()
     # And it survives the frozen-dataclass rebuild that attaches the card.
     assert "## Panel coverage" in render_evaluation_card(outcome)
+
+
+def test_the_card_reports_how_wide_the_cross_section_was_at_each_end() -> None:
+    """This matters more since the lookback stopped being capped at five years.
+
+    The panel starts at the earliest bar ANY member has, so one ticker with a
+    deeper backfill can drag the start into a stretch where almost nothing else
+    had listed. A two-name cross-section is a two-name benchmark, and the
+    benchmark is the promote gate — so the card has to say so rather than let it
+    hide inside a healthy-looking bar count.
+    """
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+    from shrap.research.strategy_evaluator.strategy import PanelCoverage, TickerCoverage
+
+    # SPY backfilled to 2010; everything else starts 2018. The panel is long and
+    # its first eight years rank exactly one name.
+    coverage = PanelCoverage(
+        n_bars=4100,
+        fully_covered=2100,
+        first_date=date(2010, 1, 4),
+        last_date=date(2026, 7, 27),
+        per_ticker=(
+            TickerCoverage("SPY", 4100, 0, date(2010, 1, 4), date(2026, 7, 27)),
+            TickerCoverage("QQQ", 2100, 2000, date(2018, 1, 2), date(2026, 7, 27)),
+            TickerCoverage("NVDA", 2100, 2000, date(2018, 1, 2), date(2026, 7, 27)),
+        ),
+    )
+    card = render_evaluation_card(_outcome_with({"information_ratio": 0.42}, coverage=coverage))
+
+    assert "**1** names at the first bar" in card
+    assert "**3** at the last" in card
