@@ -32,7 +32,7 @@ def test_settings_defaults_are_conservative_and_start_new() -> None:
     settings = Settings()
     assert settings.service_name == "strategy-runner"
     assert settings.start_id == "$"  # only new phase events
-    assert settings.max_quantity == 1  # must track the Pre-Trade cap; see engine.py
+    assert settings.max_quantity == 100  # must track the Pre-Trade cap; see engine.py
     assert settings.confidence > DEFAULT_CONFIDENCE_THRESHOLD
     assert settings.adjustment == "all"
     config = settings.signal_config()

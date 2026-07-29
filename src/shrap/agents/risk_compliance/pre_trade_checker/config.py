@@ -8,11 +8,21 @@ from typing import Any
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from shrap.research.universe_curator.launch_list import LAUNCH_LIST
 from shrap.risk_compliance.pre_trade import RiskPolicy
 from shrap.risk_compliance.rate_limit import RateLimitConfig
 
 _DEFAULT_REDIS_URL = "redis" + "://" + "redis" + ":6379/0"
-_DEFAULT_ALLOWED_UNIVERSE = "AAPL,NVDA,QQQ,SPY,TSLA,LMT"
+
+# The static allowlist is the *interim* universe gate. ADR-0012 makes Tier 3
+# (``research.universe_tiers``) authoritative, and flipping
+# ``tier3_enforcement`` disables this list entirely (see ``couple_universe_gate``).
+# Until that flip — which requires the Curator's ``load-launch-list`` to have
+# populated the table, since Tier 3 fails closed on an empty one — this list is
+# *imported* from the single launch-list definition rather than copied into an
+# env var. A copy would be free to drift from the universe the Evaluator scores
+# strategies against; an import cannot.
+_DEFAULT_ALLOWED_UNIVERSE = ",".join(name.ticker for name in LAUNCH_LIST)
 
 
 def _default_postgres_dsn() -> str:
@@ -33,9 +43,23 @@ class Settings(BaseSettings):
     instance_id: str = Field(default_factory=socket.gethostname)
     redis_url: str = _DEFAULT_REDIS_URL
     allowed_universe: str | list[str] = _DEFAULT_ALLOWED_UNIVERSE
-    max_quantity_per_order: int = 1
+
+    # Per-order share cap, sized for a $10,000 aggressive paper book. A 10% slot
+    # is $1,000, which buys 100 shares at $10 — so this binds only on names under
+    # roughly $10 and is not the effective position limit. Notional sizing (the
+    # Runner) is; this is the backstop against a sizing bug becoming a huge order.
+    #
+    # MUST equal STRATEGY_RUNNER_MAX_QUANTITY. This checker *clamps* rather than
+    # vetoes, so a Runner sized above this cap would record an intent larger than
+    # the fill and its later exit would oversell.
+    # ``test_the_production_default_matches_the_pre_trade_cap`` asserts the pair.
+    max_quantity_per_order: int = 100
     kill_switch_active: bool = False
-    max_orders_per_day: int = 10
+
+    # Firm-wide daily approvals. A 50-name universe entered from flat is 50
+    # orders; 80 leaves headroom for same-day rotation without leaving a runaway
+    # signal loop unbounded.
+    max_orders_per_day: int = 80
     symbol_cooldown_seconds: int = 300
     # Tier 3 membership enforcement (ADR-0012). Default off: nothing populates
     # research.universe_tiers until the Universe Curator's first card lands and

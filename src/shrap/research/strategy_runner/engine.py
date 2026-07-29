@@ -80,7 +80,10 @@ DEFAULT_CONFIDENCE = 0.75
 # would try to sell 20 shares of a 1-share position. Sizing to the same cap keeps
 # recorded intent equal to approved quantity, and the clamp is *reported* rather
 # than silent. The two values are raised together or not at all.
-DEFAULT_MAX_QUANTITY = 1
+#
+# 100 is sized for a $10,000 book: a 10% slot is $1,000, or 100 shares at $10, so
+# it binds only on cheap names. The real position limit is the target weight.
+DEFAULT_MAX_QUANTITY = 100
 
 # Exit size for a row written before sizing existed. Not a guess: the pre-sizing
 # runner emitted a hardcoded 1 share, so 1 is exactly what any such position holds.

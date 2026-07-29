@@ -64,7 +64,8 @@ Four consequences worth knowing before reading a log:
   $1,000, so a $1,500 name cannot be held at all. Recording the intended weight
   anyway would make the next session read invested → flat and sell a position
   that was never opened. It is logged as `strategy_runner.sizing_note`.
-- **`STRATEGY_RUNNER_MAX_QUANTITY` must equal `PRE_TRADE_MAX_QUANTITY_PER_ORDER`.**
+- **`STRATEGY_RUNNER_MAX_QUANTITY` must equal `PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER`.**
+  In compose both read that *same* variable, so they cannot diverge there.
   The Pre-Trade Checker *clamps* rather than vetoes, so a larger runner cap
   records an intent bigger than the fill — and the exit oversells. Raise both or
   neither. A test asserts the two defaults match.

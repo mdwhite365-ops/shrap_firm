@@ -77,32 +77,34 @@ relaxing its gates has not hit 35%; it has stopped measuring. Every gate in
 `docs/research/eval-protocol.md` exists because a specific failure was caught in
 the act, and three of them were caught in the session before this one.
 
-### 3. Risk limits — recorded, now unblocked
+### 3. Risk limits — **applied**
 
-The Pre-Trade Checker still runs smoke-test values: 6 hardcoded names, **1 share
-per order**, 10 orders/day.
+Raised in the risk-limits card, once sizing (#117) made it meaningful. Before
+that, raising `MAX_QUANTITY_PER_ORDER` would have sent *N shares of everything* —
+as disconnected from a strategy's weights as one share was, just larger. That
+ordering was the whole point of splitting #115.
 
-Sizing landed in #117, so the ordering constraint is satisfied and these can now
-be raised — they could not before, because raising `MAX_QUANTITY_PER_ORDER`
-without sizing would have sent *N shares of everything*, as disconnected from the
-strategy's weights as one share was, just larger. That ordering was the whole
-point of splitting #115.
-
-**The two per-order caps must be raised in the same change.** The Pre-Trade
-Checker clamps rather than vetoes, so a Runner cap above the checker's records an
-intent larger than the fill — and the exit sells shares that were never bought.
-`test_the_production_default_matches_the_pre_trade_cap` fails if they diverge.
-
-Proposed for an aggressive $10k book:
-
-| Setting | Now | Proposed |
+| Setting | Was | Now |
 |---|---|---|
 | `MAX_QUANTITY_PER_ORDER` | 1 | **100** — a $1,000 slot buys 100 shares at $10; binds only on cheap names |
-| `STRATEGY_RUNNER_MAX_QUANTITY` | 1 | **100** — must equal the row above |
-| `MAX_ORDERS_PER_DAY` | 10 | **80** — 10-name entry plus rebalancing headroom |
-| `ALLOWED_UNIVERSE` | 6 hardcoded | **the Tier-3 table** (requires `load-launch-list`, then flipping `TIER3_ENFORCEMENT`) |
+| `STRATEGY_RUNNER_MAX_QUANTITY` | 1 | **100** — reads the *same* compose variable, so the two cannot diverge |
+| `MAX_ORDERS_PER_DAY` | 10 | **80** — covers entering all 50 names from flat, with headroom |
+| `ALLOWED_UNIVERSE` | 6 smoke names | **the 50-name launch list**, imported from `launch_list.py` so it cannot drift |
 | `SYMBOL_COOLDOWN_SECONDS` | 300 | unchanged — the guard against a signal loop hammering one name |
 | `KILL_SWITCH_ACTIVE` | false | unchanged — it exists and works |
+| `TIER3_ENFORCEMENT` | false | unchanged — see below |
+
+**Tier 3 is still the intended end state**, and it stays off until
+`research.universe_tiers` is populated: enforcement fails closed, so flipping it
+against an empty table vetoes every order. The ordered procedure is
+`docs/runbooks/enabling-the-50-name-universe.md`. Trading 50 names does not
+depend on it — the static allowlist already covers them.
+
+**The share cap is a weak backstop, and should be read as one.** 100 shares of a
+$700 name is $70,000, seven times the account. What actually bounds position size
+is the Runner sizing to a target weight, plus the broker rejecting orders beyond
+buying power. A notional cap would be the real control; it needs a price on the
+intent, which market orders do not carry. Its own card.
 
 **A constraint at this account size:** a 10% slot on $10k is $1,000, so any name
 above $1,000/share cannot be held at a full weight. The sizer reports this rather
@@ -113,21 +115,25 @@ them — that is its own card.
 
 ## What is next, in order
 
-1. ~~**Wire notional sizing into the signal path.**~~ **Done — PR #117.** Entries
-   are now `target_weight × equity / price`, floored, with equity read from
-   `ops.account_snapshots`. Note what it does *not* change yet: both per-order
-   caps stay at 1, so sizing computes the truthful number and the cap clamps it —
-   the clamp is now logged rather than invisible. Raising the caps is item 2, and
-   they must be raised **together** (the Pre-Trade Checker clamps rather than
-   vetoes, so a larger Runner cap records an intent bigger than the fill and the
-   exit oversells).
-2. **Apply the risk limits** (table above) and load the launch list.
+1. ~~**Wire notional sizing into the signal path.**~~ **Done — #117.** Entries are
+   `target_weight × equity / price`, floored, with equity read from
+   `ops.account_snapshots`.
+2. ~~**Apply the risk limits.**~~ **Done — the risk-limits card** (table above).
+   Together with #117 this is the point where the book starts expressing real
+   weights across 50 names rather than one share of six.
 3. **Forward-test scoring.** Nothing evaluates a strategy *after* promotion — the
    Evaluator spec's Sunday re-evaluation was never built, so a promoted strategy
-   can decay silently. This is the missing half of "test them forward and back."
+   can decay silently. This is the missing half of "test them forward and back",
+   and with kills already autonomous under ADR-0015 a decayed strategy can be
+   retired without waiting on review.
 4. **Multi-account routing**, once Mike creates the accounts.
 5. Then Phase 2/3 of the timeline: intraday data decision, Sweep Detector,
    Hypothesis Generator, Langfuse instrumentation.
+
+**On the Dell, after these merge:** rebuild both `pre-trade-checker` and
+`strategy-runner` (`docker compose run` never rebuilds), then confirm the new
+caps in the checker's startup log. Nothing needs to be loaded or migrated by
+hand — the `last_quantity` column migrates itself at startup.
 
 ---
 
