@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -56,7 +56,12 @@ from shrap.research.strategy_evaluator.engine import (
     walk_forward,
 )
 from shrap.research.strategy_evaluator.reference_strategy import ReferenceTrendStrategy
-from shrap.research.strategy_evaluator.strategy import BarSample, PricePanel, StrategySignal
+from shrap.research.strategy_evaluator.strategy import (
+    BarSample,
+    PanelCoverage,
+    PricePanel,
+    StrategySignal,
+)
 from shrap.research.strategy_evaluator.verdict import (
     REASON_INSUFFICIENT_DATA,
     VERDICT_HOLD,
@@ -333,6 +338,11 @@ class EvaluationOutcome:
     trigger: str
     ts: datetime
     card_markdown: str
+    coverage: PanelCoverage | None = None
+    """Panel extent and what truncated it. ``None`` when no panel was built —
+    a spec refusal or a dead anchor stops before the dataset, and reporting
+    ``bars=0`` there would read as an empty backfill rather than a step that
+    never ran."""
 
     def summary(self) -> str:
         # `anchor=` is in the one-liner because on a --dry-run it is the field
@@ -346,7 +356,7 @@ class EvaluationOutcome:
             f"anchor={self.anchor_state} engine_ran={self.engine_ran} "
             f"trades={self.total_trades} sharpe={self.base_sharpe:.3f} "
             f"stress_sharpe={self.stress_sharpe:.3f} ir={self.reported_ir} "
-            f"protocol={self.protocol_version}"
+            f"{self.reported_coverage} protocol={self.protocol_version}"
         )
 
     @property
@@ -369,6 +379,21 @@ class EvaluationOutcome:
         if raw is None:
             return "n/a"
         return f"{float(raw):.3f}"
+
+    @property
+    def reported_coverage(self) -> str:
+        """``bars=506/1258 binds=ETHA`` — how much history the test actually had.
+
+        Every gate in the protocol is a statement about a sample, and the sample
+        size was the one number the verdict never carried. The momentum runbook
+        tells the operator to backfill from 2018 specifically to buy folds the
+        warmup would otherwise eat; whether that worked is not observable from
+        anything the run emits.
+        """
+
+        if self.coverage is None:
+            return "bars=n/a"
+        return self.coverage.summary()
 
     @property
     def anchor_state(self) -> str:
@@ -552,7 +577,7 @@ class EvaluationPipeline:
                 ts=ts,
             )
 
-        panel = await self._build_panel(tickers, ts.date())
+        panel, coverage = await self._build_panel(tickers, ts.date())
         strategy = self._strategy_factory(record, tickers)
         try:
             result = walk_forward(panel, strategy, self._config)
@@ -572,6 +597,7 @@ class EvaluationPipeline:
                 fold_metrics=[],
                 stress_metrics=_empty_metrics(),
                 active_metrics=_empty_active(),
+                coverage=coverage,
                 trigger=trigger,
                 ts=ts,
             )
@@ -601,6 +627,7 @@ class EvaluationPipeline:
             fold_metrics=[f.as_dict() for f in result.folds],
             stress_metrics=result.stress.as_dict(),
             active_metrics=result.active.as_dict(),
+            coverage=coverage,
             trigger=trigger,
             ts=ts,
         )
@@ -784,13 +811,17 @@ class EvaluationPipeline:
                     f"(research.universe_tiers tier={tier!r}, need {TIER_ACTIVE!r})"
                 )
 
-    async def _build_panel(self, tickers: Sequence[str], today: date) -> PricePanel:
+    async def _build_panel(
+        self, tickers: Sequence[str], today: date
+    ) -> tuple[PricePanel, PanelCoverage]:
         start = today - timedelta(days=self._config.window_years * 365)
         bars_by_ticker: dict[str, list[BarSample]] = {}
         for ticker in tickers:
             bars = await self._reader.read_bars(ticker, start, today, self._config.adjustment)
             bars_by_ticker[ticker] = bars
-        return PricePanel.from_bars(bars_by_ticker)
+        # Measured from the same dict the panel intersects, so coverage can never
+        # describe a different fetch than the one that produced the verdict.
+        return PricePanel.from_bars(bars_by_ticker), PanelCoverage.from_bars(bars_by_ticker)
 
     def _build_outcome(
         self,
@@ -810,6 +841,7 @@ class EvaluationPipeline:
         active_metrics: dict[str, Any],
         trigger: str,
         ts: datetime,
+        coverage: PanelCoverage | None = None,
     ) -> EvaluationOutcome:
         to_stage = _verdict_to_stage(verdict.verdict)
         evaluation_id = str(ULID())
@@ -839,6 +871,7 @@ class EvaluationPipeline:
             trigger=trigger,
             ts=ts,
             card_markdown="",
+            coverage=coverage,
         )
         return _with_card(outcome, render_evaluation_card(outcome))
 
@@ -853,32 +886,11 @@ def _verdict_to_stage(verdict: str) -> str | None:
 
 def _with_card(outcome: EvaluationOutcome, card: str) -> EvaluationOutcome:
     # EvaluationOutcome is frozen; rebuild with the rendered card attached.
-    return EvaluationOutcome(
-        evaluation_id=outcome.evaluation_id,
-        strategy_id=outcome.strategy_id,
-        strategy_name=outcome.strategy_name,
-        spec_hash=outcome.spec_hash,
-        protocol_version=outcome.protocol_version,
-        verdict=outcome.verdict,
-        reason=outcome.reason,
-        anchor_required=outcome.anchor_required,
-        anchor_fresh=outcome.anchor_fresh,
-        anchor_status=outcome.anchor_status,
-        total_trades=outcome.total_trades,
-        base_sharpe=outcome.base_sharpe,
-        stress_sharpe=outcome.stress_sharpe,
-        from_stage=outcome.from_stage,
-        to_stage=outcome.to_stage,
-        engine_ran=outcome.engine_ran,
-        aggregate_metrics=outcome.aggregate_metrics,
-        fold_metrics=outcome.fold_metrics,
-        stress_metrics=outcome.stress_metrics,
-        active_metrics=outcome.active_metrics,
-        config=outcome.config,
-        trigger=outcome.trigger,
-        ts=outcome.ts,
-        card_markdown=card,
-    )
+    # `replace` rather than re-listing all 26 fields: the hand-written version
+    # silently dropped any field added after it was written, and the value that
+    # would have gone missing here is the one describing how much data the
+    # verdict rests on.
+    return replace(outcome, card_markdown=card)
 
 
 def _params(spec: object) -> Mapping[str, Any]:
@@ -910,6 +922,50 @@ def _validate_param_bounds(spec: Mapping[str, Any]) -> None:
             )
 
 
+def _coverage_lines(outcome: EvaluationOutcome) -> list[str]:
+    """The 'how much data was this' section of the card.
+
+    Placed directly under the header, above the metrics, because it qualifies
+    every number below it: a Sharpe over two years and a Sharpe over eight are
+    not the same measurement, and the card gave no way to tell them apart.
+    """
+
+    coverage = outcome.coverage
+    if coverage is None:
+        return []
+    span = "no overlapping dates"
+    if coverage.first_date is not None and coverage.last_date is not None:
+        span = f"{coverage.first_date.isoformat()} to {coverage.last_date.isoformat()}"
+    lost = coverage.candidate_bars - coverage.n_bars
+    lines = [
+        "## Panel coverage",
+        "",
+        f"- Bars tested: **{coverage.n_bars}** of {coverage.candidate_bars} "
+        f"dates any ticker traded ({span})",
+        f"- Tickers: {len(coverage.per_ticker)}",
+    ]
+    worst = coverage.worst
+    if worst is not None and lost > 0:
+        first = worst.first_date.isoformat() if worst.first_date else "never"
+        lines += [
+            f"- **{lost} dates were dropped by the intersection.** The panel is "
+            f"aligned on dates *every* ticker has, so its length is set by the "
+            f"shortest history — worst here is `{worst.ticker}` "
+            f"({worst.n_bars} bars, first {first}, missing {worst.missing}).",
+            "",
+            "| Ticker | Bars | Missing | First |",
+            "|---|---|---|---|",
+        ]
+        ranked = sorted(coverage.per_ticker, key=lambda c: (-c.missing, c.ticker))
+        for entry in ranked[:5]:
+            if entry.missing == 0:
+                continue
+            first_seen = entry.first_date.isoformat() if entry.first_date else "never"
+            lines.append(f"| {entry.ticker} | {entry.n_bars} | {entry.missing} | {first_seen} |")
+    lines.append("")
+    return lines
+
+
 def render_evaluation_card(outcome: EvaluationOutcome) -> str:
     """Render the Markdown evaluation card, including the required disclaimer."""
 
@@ -929,6 +985,7 @@ def render_evaluation_card(outcome: EvaluationOutcome) -> str:
         f"> {REQUIRED_DISCLAIMER}",
         "",
     ]
+    lines += _coverage_lines(outcome)
     if not outcome.engine_ran:
         lines += [
             "The engine did not run: the evaluation stopped before backtest "
