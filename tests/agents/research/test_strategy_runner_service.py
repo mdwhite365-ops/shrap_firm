@@ -40,6 +40,7 @@ SESSION = date(2026, 7, 28)
 PRICE = 50.0
 EQUITY = 10_000.0
 UNCAPPED = RunnerSignalConfig(max_quantity=1_000_000)
+ACCOUNT_ID = "PA3TESTACCT"
 
 
 def _record() -> StrategyRecord:
@@ -98,11 +99,13 @@ class FakeStateStore:
         self._equity = equity
         self._observed_at = observed_at if observed_at is not None else datetime.now(UTC)
         self.writes: list[PlannedStateWrite] = []
+        self.equity_lookups: list[str] = []
 
     async def read_state(self) -> dict[tuple[str, str], TargetState]:
         return {}
 
-    async def latest_equity(self) -> tuple[float | None, datetime | None]:
+    async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]:
+        self.equity_lookups.append(account_id)
         return self._equity, self._observed_at
 
     async def upsert(self, write: PlannedStateWrite) -> None:
@@ -168,6 +171,7 @@ async def _run(store: FakeStateStore) -> int:
         adjustment="all",
         lookback_buffer_days=10,
         lookback_max_days=1200,
+        account_id=ACCOUNT_ID,
     )
 
 
@@ -190,6 +194,7 @@ async def test_a_pass_sizes_its_signals_against_the_account_snapshot() -> None:
         adjustment="all",
         lookback_buffer_days=10,
         lookback_max_days=1200,
+        account_id=ACCOUNT_ID,
     )
 
     assert emitted == 1
@@ -202,6 +207,37 @@ async def test_a_pass_sizes_its_signals_against_the_account_snapshot() -> None:
 
 
 # --- the equity gate ----------------------------------------------------------
+
+
+async def test_the_pass_reads_equity_for_its_own_account() -> None:
+    """Not "whichever account reported most recently" — this strategy's book."""
+
+    store = FakeStateStore()
+    await _run(store)
+    assert store.equity_lookups == [ACCOUNT_ID]
+
+
+async def test_an_unconfigured_account_refuses_rather_than_guessing() -> None:
+    """A runner with no account has no book to size against.
+
+    Before ADR-0017 an unset account silently meant "the newest snapshot from
+    any account". With three accounts that is a plausible number from the wrong
+    one, and nothing about the resulting orders would look wrong.
+    """
+
+    with pytest.raises(SizingRefused, match="no account configured"):
+        await run_pass(
+            session_date=SESSION,
+            redis=FakeRedis(),  # type: ignore[arg-type]
+            registry=FakeRegistry(),  # type: ignore[arg-type]
+            reader=FakeReader(),  # type: ignore[arg-type]
+            state_store=FakeStateStore(),  # type: ignore[arg-type]
+            config=UNCAPPED,
+            adjustment="all",
+            lookback_buffer_days=10,
+            lookback_max_days=1200,
+            account_id="",
+        )
 
 
 async def test_a_missing_snapshot_refuses_the_whole_pass() -> None:
@@ -231,6 +267,7 @@ async def test_refusal_publishes_nothing_and_writes_no_state() -> None:
             adjustment="all",
             lookback_buffer_days=10,
             lookback_max_days=1200,
+            account_id=ACCOUNT_ID,
         )
     assert redis.published == []
     assert store.writes == []
@@ -258,6 +295,7 @@ async def test_a_refused_pass_is_not_acked_so_the_session_retries() -> None:
         adjustment="all",
         lookback_buffer_days=10,
         lookback_max_days=1200,
+        account_id=ACCOUNT_ID,
         count=10,
         block_ms=0,
     )
@@ -284,6 +322,7 @@ async def test_a_healthy_pass_does_ack() -> None:
         adjustment="all",
         lookback_buffer_days=10,
         lookback_max_days=1200,
+        account_id=ACCOUNT_ID,
         count=10,
         block_ms=0,
     )

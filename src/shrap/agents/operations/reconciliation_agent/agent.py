@@ -17,6 +17,7 @@ import structlog
 from ulid import ULID
 
 from shrap.agents.operations.reconciliation_agent.broker import BrokerSnapshotReader
+from shrap.agents.operations.reconciliation_agent.db import UnidentifiedAccountError
 from shrap.agents.operations.reconciliation_agent.records import (
     ReconciliationReport,
     StoredOrderState,
@@ -115,7 +116,19 @@ async def reconcile_once(
         "portfolio_value": _optional_str(account.get("portfolio_value")),
     }
     if snapshot_sink is not None:
-        await snapshot_sink.record(run_id, broker, account)
+        try:
+            await snapshot_sink.record(run_id, broker, account)
+        except UnidentifiedAccountError as exc:
+            # Order reconciliation does not depend on this write, so it continues.
+            # The consequence is deliberate and safe: no fresh snapshot means the
+            # Strategy Runner refuses to size and stops trading, rather than
+            # sizing against a book it cannot name.
+            log.error(
+                "reconciliation.account_snapshot_unattributed",
+                reason=str(exc),
+                broker=broker,
+                run_id=run_id,
+            )
     await publisher.publish(
         stream=STREAM_RECONCILIATION_COMPLETED,
         produced_by=produced_by,

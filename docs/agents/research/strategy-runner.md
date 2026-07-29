@@ -85,6 +85,14 @@ event is left un-acked so the pass retries once a fresh snapshot lands. There is
 no fixed-quantity fallback, because trading an unknown account size is worse than
 trading late.
 
+**The read is scoped to one account.** `STRATEGY_RUNNER_ACCOUNT_ID` is required
+and names the broker account this runner trades — Alpaca's `account_number`,
+matched against `ops.account_snapshots.account_id`. Under ADR-0017 each strategy
+has its own account, so an unscoped "newest snapshot" would return whichever
+account reported most recently: a plausible number from the wrong book, and
+nothing about the resulting orders would look wrong. An unset value refuses the
+pass rather than guessing.
+
 Four consequences worth knowing before reading a log:
 
 - **Exits sell the recorded entry**, not a freshly sized position. `last_quantity`
@@ -202,7 +210,7 @@ decision logic is a pure `inputs → (signals, state writes)` function
 |---|---|---|
 | Last intended target | PostgreSQL `research.strategy_runner_state` | One row per `(strategy_id, ticker)`; `last_session_date` is the per-session dedupe guard; `last_quantity` is the share count ordered, so the exit closes what was opened |
 | Consumer offset | Redis consumer group `strategy-runner` | Offsets persist across restarts (KI-006) |
-| Account equity | PostgreSQL `ops.account_snapshots` | **Read-only**, owned by the Reconciliation Agent. Never created or written here |
+| Account equity | PostgreSQL `ops.account_snapshots` | **Read-only**, owned by the Reconciliation Agent. Never created or written here. Filtered on `account_id = STRATEGY_RUNNER_ACCOUNT_ID`, so rows from other accounts — and legacy rows with a NULL account — can never be read |
 
 The runner stores only its *intended* target and ordered quantity, never
 positions or fills. `last_quantity` is intent: if the Pre-Trade Checker clamps an

@@ -241,6 +241,7 @@ async def test_account_snapshot_store_parses_numbers_and_inserts() -> None:
         "run-1",
         "alpaca-paper",
         {
+            "account_number": "PA3ABCDEF",
             "status": "ACTIVE",
             "currency": "USD",
             "cash": "99883.42",
@@ -253,9 +254,45 @@ async def test_account_snapshot_store_parses_numbers_and_inserts() -> None:
     args = executed[0][1]
     assert args[0] == "run-1"
     assert args[1] == "alpaca-paper"
-    assert args[4] == 99883.42  # cash parsed
-    assert args[5] is None  # unparseable equity stays NULL
-    assert args[6] is None  # missing buying_power stays NULL
+    assert args[2] == "PA3ABCDEF"  # attributed to the broker's own account id
+    assert args[5] == 99883.42  # cash parsed
+    assert args[6] is None  # unparseable equity stays NULL
+    assert args[7] is None  # missing buying_power stays NULL
+
+
+@pytest.mark.asyncio
+async def test_a_snapshot_with_no_broker_account_id_is_refused() -> None:
+    """THE refusal in this card.
+
+    The Strategy Runner sizes positions from the newest snapshot, so an
+    unattributed equity row is a position sized against an unknown book. With
+    three accounts writing to one table, "whichever reported last" is a
+    plausible-looking number from the wrong account.
+    """
+
+    from shrap.agents.operations.reconciliation_agent.db import (
+        PostgresAccountSnapshotStore,
+        UnidentifiedAccountError,
+    )
+
+    class FakeConn:
+        async def execute(self, sql: str, *args: object) -> None:
+            raise AssertionError("must not write an unattributed snapshot")
+
+    class FakeAcquire:
+        async def __aenter__(self) -> FakeConn:
+            return FakeConn()
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    class FakePool:
+        def acquire(self) -> FakeAcquire:
+            return FakeAcquire()
+
+    store = PostgresAccountSnapshotStore(FakePool())
+    with pytest.raises(UnidentifiedAccountError, match="account_number"):
+        await store.record("run-1", "alpaca-paper", {"status": "ACTIVE", "equity": "10000"})
 
 
 @pytest.mark.asyncio

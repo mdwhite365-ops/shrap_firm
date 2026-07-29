@@ -31,6 +31,7 @@ class FakeConn:
         self.executed: list[str] = []
         self.rows: dict[tuple[str, str], dict[str, Any]] = {}
         self.fetchrow_result: dict[str, Any] | None = None
+        self.fetchrow_args: list[tuple[object, ...]] = []
 
     async def execute(self, sql: str, *args: object) -> object:
         self.executed.append(sql)
@@ -53,6 +54,7 @@ class FakeConn:
 
     async def fetchrow(self, sql: str, *args: object) -> dict[str, Any] | None:
         self.executed.append(sql)
+        self.fetchrow_args.append(args)
         return self.fetchrow_result
 
 
@@ -159,7 +161,7 @@ async def test_latest_equity_reads_the_reconciliation_agent_s_snapshot() -> None
     pool.conn.fetchrow_result = {"equity": 10_000.0, "at": stamp}
     store = PostgresStrategyRunnerStateStore(pool)  # type: ignore[arg-type]
 
-    assert await store.latest_equity() == (10_000.0, stamp)
+    assert await store.latest_equity("PA123ABC") == (10_000.0, stamp)
     assert "ops.account_snapshots" in SELECT_LATEST_EQUITY_SQL
     assert "ORDER BY at DESC" in SELECT_LATEST_EQUITY_SQL
 
@@ -170,7 +172,33 @@ async def test_latest_equity_is_none_when_no_snapshot_exists() -> None:
     pool = FakePool()
     pool.conn.fetchrow_result = None
     store = PostgresStrategyRunnerStateStore(pool)  # type: ignore[arg-type]
-    assert await store.latest_equity() == (None, None)
+    assert await store.latest_equity("PA123ABC") == (None, None)
+
+
+async def test_equity_is_scoped_to_one_account() -> None:
+    """ADR-0017 gives each strategy its own broker account.
+
+    An unscoped "newest snapshot" returns whichever account reported most
+    recently — a plausible number from the wrong book, which is the worst kind
+    of wrong because nothing about it looks broken.
+    """
+
+    pool = FakePool()
+    pool.conn.fetchrow_result = {"equity": 10_000.0, "at": datetime(2026, 7, 29, tzinfo=UTC)}
+    store = PostgresStrategyRunnerStateStore(pool)  # type: ignore[arg-type]
+
+    await store.latest_equity("PA3ABCDEF")
+    assert "account_id = $1" in SELECT_LATEST_EQUITY_SQL
+    assert pool.conn.fetchrow_args[-1] == ("PA3ABCDEF",)
+
+
+def test_legacy_rows_without_an_account_can_never_be_selected() -> None:
+    """Snapshots written before the column existed carry NULL, and no account
+    can be invented for them. `account_id = $1` never matches NULL, so they are
+    excluded by construction rather than by a backfill that would fabricate
+    identity."""
+
+    assert "account_id = $1" in SELECT_LATEST_EQUITY_SQL
 
 
 async def test_the_equity_query_skips_null_rows() -> None:
