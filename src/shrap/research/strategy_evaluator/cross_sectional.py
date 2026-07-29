@@ -148,6 +148,32 @@ class CrossSectionalMomentumStrategy:
     skip: int = DEFAULT_SKIP
     top_n: int = DEFAULT_TOP_N
     gross_exposure: float = DEFAULT_GROSS_EXPOSURE
+    market_filter: bool = False
+    """Hold nothing while the average name in the universe is falling.
+
+    The rule already declines to hold a name with negative momentum, and in a
+    broad drawdown that is not enough: a *relative* ranking always finds
+    something to buy. Measured on the first real evaluation, the 2022 fold was
+    -33.76% with 609 trades — the worst return and the HIGHEST turnover of any
+    fold. It did not stand down, it churned into whatever was least-bad and got
+    whipsawed by bear-market rallies. That is the strategy's own declared kill
+    criterion #3 ("momentum crashes... a single fold with a large negative
+    return is evidence about the strategy rather than noise").
+
+    **This is not a regime gate.** `spec.regime_gate` is refused by the
+    Evaluator, and rightly — gating on a classifier makes a strategy inherit
+    that classifier's errors and turns "it works except when it doesn't" into
+    something unfalsifiable. This condition is computed from the same price
+    panel the rule already sees, using the same formation window, with no
+    external signal and no new parameter to tune. It is part of the signal, not
+    a switch on top of it.
+
+    **Zero new numeric parameters, deliberately.** The market's formation return
+    is the mean of the per-name formation returns already computed for the
+    ranking, over the same `lookback` and `skip`. Adding a threshold or a
+    separate window would make this a tuning knob and the revision a parameter
+    sweep wearing a thesis.
+    """
 
     def __post_init__(self) -> None:
         if self.lookback < 2:
@@ -184,6 +210,19 @@ class CrossSectionalMomentumStrategy:
             return None
         return last / first - 1.0
 
+    @staticmethod
+    def _market_is_rising(scored: list[tuple[float, str]]) -> bool:
+        """Is the average name in the universe up over the formation window?
+
+        Computed from the same per-name formation returns already used for the
+        ranking, so it costs nothing and cannot disagree with them about the
+        window it measures. Names without enough history are absent from
+        `scored` and so are excluded here too — a name that cannot be ranked
+        does not get a vote on the market's state.
+        """
+
+        return sum(r for r, _ in scored) / len(scored) > 0.0
+
     def target_weights(self, window: PanelWindow) -> Mapping[str, float]:
         scored: list[tuple[float, str]] = []
         for ticker in window.tickers:
@@ -191,6 +230,10 @@ class CrossSectionalMomentumStrategy:
             if r is not None:
                 scored.append((r, ticker))
         if not scored:
+            return dict.fromkeys(window.tickers, 0.0)
+        if self.market_filter and not self._market_is_rising(scored):
+            # Flat, and every ticker named at 0.0 so the engine reads an EXIT
+            # rather than "unchanged" — standing down has to actually sell.
             return dict.fromkeys(window.tickers, 0.0)
         # Sort by ticker first so ties resolve deterministically rather than by
         # panel order — a reproducible backtest cannot depend on dict ordering.
@@ -207,6 +250,7 @@ class CrossSectionalMomentumStrategy:
             skip=int(params.get("skip", DEFAULT_SKIP)),
             top_n=int(params.get("top_n", DEFAULT_TOP_N)),
             gross_exposure=float(params.get("gross_exposure", DEFAULT_GROSS_EXPOSURE)),
+            market_filter=bool(params.get("market_filter", False)),
         )
 
 

@@ -79,6 +79,51 @@ world-changer.
 5. Out-of-sample Sharpe at or below zero, or below the promote floor.
 6. Edge does not survive the realistic-friction stress test.
 
+## Revision 1: standing down in a falling market
+
+**`01KYR151WA0K3SZ2ZHEK8TSHDN` — `xs-momentum-126-21-10-standdown`.** The first
+recorded revision in the firm (lineage: parent `01KYNH9VKXVQXJ48T4MF306PHE`,
+evidence: evaluation `01KYQYKPHDRVYADBZH1VNCK55R`).
+
+**What the parent's verdict showed.** `hold-for-data`, sharpe 0.782 against a
+benchmark's 0.772 — nearly all of its 276% return was extra risk rather than
+skill, and the fold table named the failure precisely:
+
+| Fold | Period | Return | Sharpe | Trades |
+|---|---|---|---|---|
+| 1 | 2021-12 → 2022-11 | **-33.76%** | **-1.036** | **609** |
+
+The worst return *and* the highest turnover of any fold. That is declared kill
+criterion #3 — *"momentum crashes... a single fold with a large negative return
+is evidence about the strategy rather than noise to be averaged away."*
+
+**The diagnosis, which is not the obvious one.** The rule already refuses to hold
+a name with negative momentum, so "it had no cash condition" is wrong — it has
+one, per name. The problem is that a *cross-sectional* ranking is relative: in
+2022 energy and defense were genuinely positive, so the rule concentrated into
+them and was whipsawed by bear-market rallies. It did not fail to stand down for
+lack of a rule; it stood in because something was always least-bad.
+
+**The change.** Hold nothing while the average name in the universe is falling
+over the same formation window.
+
+**Why this is not a regime gate.** `spec.regime_gate` is refused by the
+Evaluator, and correctly: gating on a classifier makes a strategy inherit that
+classifier''s errors, and "it works except when it doesn''t" is unfalsifiable.
+This condition is computed from the same price panel the rule already sees,
+using the same window, with no external signal.
+
+**Zero new numeric parameters, deliberately.** The market''s formation return is
+the mean of the per-name formation returns *already computed for the ranking*. A
+threshold ("stand down below -2%") or a separate window would be a knob, and a
+knob turned after seeing 2022 is fitted to 2022. There is nothing here to tune,
+which is what makes this a revision rather than a parameter sweep.
+
+**What would falsify it.** If the information ratio does not improve, momentum''s
+crash was not avoidable this way and the condition is dead weight — lowering
+return and volatility in proportion while adding nothing. That is a real result,
+and it is why both strategies stay at `hypothesis` side by side.
+
 ## Running it
 
 **All 50 tickers need daily bars and Tier-3 `active` status.** A missing one
@@ -101,9 +146,16 @@ sudo docker compose --profile tools run --rm market-data \
 sudo docker compose --profile tools run --rm market-data \
   shrap-market-data-backfill --launch-list --since 2018-01-01
 
-# 3. Seed it.
+# 3. Seed it. ORDER MATTERS: the revision names the original as its parent, and
+#    `register` refuses a revision whose parent is not yet in the registry.
 sudo docker compose --profile tools run --rm strategy-evaluator \
   shrap-strategy-seed load-momentum xs-momentum-126-21-10
+sudo docker compose --profile tools run --rm strategy-evaluator \
+  shrap-strategy-seed load-momentum xs-momentum-126-21-10-standdown
+
+# See the family and how many attempts the idea has burned.
+sudo docker compose --profile tools run --rm strategy-evaluator \
+  shrap-strategy-stage lineage 01KYR151WA0K3SZ2ZHEK8TSHDN
 
 # 4. Evaluate. Dry run first, always.
 sudo docker compose --profile tools run --rm strategy-evaluator \

@@ -508,6 +508,13 @@ async def test_load_momentum_is_idempotent_and_coexists_with_every_seed() -> Non
     second = await load_momentum(registry, "xs-momentum-126-21-10")
     assert second.startswith("already present:")
 
+    # Every other momentum seed loads ALONGSIDE it, not instead of it. Declared
+    # order matters against a real registry: a revision's parent must already be
+    # registered or `register` refuses it.
+    for seed in MOMENTUM_SEEDS:
+        if seed.key != "xs-momentum-126-21-10":
+            assert (await load_momentum(registry, seed.key)).startswith("loaded:")
+
     expected = 1 + len(PROBE_SEEDS) + len(TECHNICAL_SEEDS) + len(MOMENTUM_SEEDS)
     assert len(registry.by_id) == expected
     assert len(registry.by_hash) == expected
