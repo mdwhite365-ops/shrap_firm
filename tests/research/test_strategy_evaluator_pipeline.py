@@ -790,3 +790,122 @@ def test_a_missing_benchmark_reports_na_not_zero() -> None:
     are different facts. Printing 0.000 for both would conflate them."""
 
     assert "ir=n/a" in _outcome_with({}, engine_ran=False).summary()
+
+
+def test_the_summary_reports_how_much_history_the_test_had() -> None:
+    """Every gate in the protocol is a claim about a sample, and the sample size
+    was the one number the verdict never carried.
+
+    The first cross-sectional run held on the Sharpe floor at 0.797. Whether that
+    is a weak edge measured over eight years or a coin-flip measured over two
+    changes what to do about it, and nothing in the output distinguished them.
+    """
+
+    from shrap.research.strategy_evaluator.strategy import PanelCoverage, TickerCoverage
+
+    coverage = PanelCoverage(
+        n_bars=506,
+        candidate_bars=1258,
+        first_date=date(2024, 7, 23),
+        last_date=date(2026, 7, 24),
+        per_ticker=(
+            TickerCoverage("SPY", 1258, 0, date(2021, 7, 29), date(2026, 7, 24)),
+            TickerCoverage("ETHA", 506, 752, date(2024, 7, 23), date(2026, 7, 24)),
+        ),
+    )
+    summary = _outcome_with({"information_ratio": 0.42}, coverage=coverage).summary()
+
+    assert "bars=506/1258" in summary
+    assert "binds=ETHA" in summary
+
+
+def test_a_run_that_never_built_a_panel_reports_na_not_zero() -> None:
+    """A spec refusal and a dead anchor stop before the dataset is fetched.
+    Reporting `bars=0` there would read as an empty backfill — an operator would
+    go check the market-data service for a fault that does not exist."""
+
+    assert "bars=n/a" in _outcome_with({}, engine_ran=False).summary()
+
+
+def test_the_card_explains_what_truncated_the_panel() -> None:
+    """The summary line names the binding ticker; the card has room to show the
+    arithmetic, which is where an operator goes once the one-liner surprises them."""
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+    from shrap.research.strategy_evaluator.strategy import PanelCoverage, TickerCoverage
+
+    coverage = PanelCoverage(
+        n_bars=506,
+        candidate_bars=1258,
+        first_date=date(2024, 7, 23),
+        last_date=date(2026, 7, 24),
+        per_ticker=(
+            TickerCoverage("SPY", 1258, 0, date(2021, 7, 29), date(2026, 7, 24)),
+            TickerCoverage("IBIT", 640, 618, date(2024, 1, 11), date(2026, 7, 24)),
+            TickerCoverage("ETHA", 506, 752, date(2024, 7, 23), date(2026, 7, 24)),
+        ),
+    )
+    card = render_evaluation_card(_outcome_with({"information_ratio": 0.42}, coverage=coverage))
+
+    assert "## Panel coverage" in card
+    assert "752 dates were dropped" in card
+    assert "2024-07-23 to 2026-07-24" in card
+    # Ranked worst-first, so the name to act on is the first row of the table.
+    assert card.index("| ETHA |") < card.index("| IBIT |")
+    # A fully-covered ticker is not noise worth printing.
+    assert "| SPY |" not in card
+
+
+def test_the_card_omits_the_coverage_section_when_no_panel_was_built() -> None:
+    """A refusal card should not carry an empty table implying a data problem."""
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+
+    card = render_evaluation_card(_outcome_with({}, engine_ran=False))
+    assert "## Panel coverage" not in card
+
+
+class RaggedReader(FakeReader):
+    """A reader whose tickers have different histories, as the real one does."""
+
+    def __init__(self, bars_by_ticker: dict[str, list[BarSample]]) -> None:
+        super().__init__()
+        self._bars_by_ticker = bars_by_ticker
+
+    async def read_bars(
+        self, ticker: str, start: date, end: date, adjustment: str
+    ) -> list[BarSample]:
+        return list(self._bars_by_ticker.get(ticker, []))
+
+
+async def test_evaluate_reports_coverage_end_to_end(tmp_path: Path) -> None:
+    """The wiring test that matters.
+
+    `coverage` defaults to None so refusal paths stay honest, which means a
+    missed hand-off in `_build_panel` would not fail a type check or a unit
+    test — it would just print `bars=n/a` on every real run forever, exactly
+    the silence this card exists to remove.
+    """
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+
+    full = _square_wave_bars()
+    late = full[len(full) // 2 :]
+    registry = FakeRegistry(_record(tickers={"long": [_TICKER, "LATE"], "short": []}))
+    pipeline = _pipeline(
+        registry=registry,
+        reader=RaggedReader({_TICKER: full, "LATE": late}),
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
+    )
+
+    outcome = await pipeline.evaluate("01STRAT")
+
+    assert outcome.coverage is not None
+    assert outcome.coverage.n_bars == len(late)
+    assert outcome.coverage.candidate_bars == len(full)
+    assert "binds=LATE" in outcome.summary()
+    # And it survives the frozen-dataclass rebuild that attaches the card.
+    assert "## Panel coverage" in render_evaluation_card(outcome)

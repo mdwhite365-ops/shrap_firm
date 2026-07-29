@@ -73,6 +73,102 @@ class PanelWindow:
 
 
 @dataclass(frozen=True, slots=True)
+class TickerCoverage:
+    """How many of the panel's candidate dates one ticker actually supplied."""
+
+    ticker: str
+    n_bars: int
+    missing: int
+    first_date: date | None
+    last_date: date | None
+
+
+@dataclass(frozen=True, slots=True)
+class PanelCoverage:
+    """What the intersection cost, and which ticker cost the most of it.
+
+    ``PricePanel`` intersects session dates, so the panel every strategy is
+    measured on is only as long as its *shortest* ticker's history. That is the
+    correct point-in-time rule — the alternative is forward-filling bars that
+    did not exist — but it is silent, and silence is the problem this type
+    exists to fix.
+
+    The first cross-sectional verdict the firm produced ran on the 50-name
+    launch list, which contains ETHA (listed 2024-07). Every other name had
+    years more history and none of it was usable, because a date survives only
+    if all fifty tickers have it. Nothing in the verdict, the summary line or
+    the evaluation card said so: the panel length was computed, used to size
+    every fold, and never reported. An operator who backfilled to 2018 — which
+    the momentum runbook explicitly instructs — had no way to discover that the
+    test ran on two years.
+
+    ``worst`` is ranked by dates *missed*, not by history length, so it catches
+    a ticker with interior holes as readily as a late listing. Both truncate the
+    panel; only one is obvious from an inception date.
+    """
+
+    n_bars: int
+    candidate_bars: int
+    first_date: date | None
+    last_date: date | None
+    per_ticker: tuple[TickerCoverage, ...]
+
+    @property
+    def worst(self) -> TickerCoverage | None:
+        """The ticker costing the panel the most dates, or ``None`` if lossless."""
+
+        ranked = [c for c in self.per_ticker if c.missing > 0]
+        if not ranked:
+            return None
+        return max(ranked, key=lambda c: (c.missing, c.ticker))
+
+    def summary(self) -> str:
+        """One field for the verdict line: ``bars=506/1258 binds=ETHA``."""
+
+        line = f"bars={self.n_bars}/{self.candidate_bars}"
+        worst = self.worst
+        if worst is not None:
+            line += f" binds={worst.ticker}"
+        return line
+
+    @classmethod
+    def from_bars(cls, bars_by_ticker: Mapping[str, Sequence[BarSample]]) -> PanelCoverage:
+        """Measure the same inputs :meth:`PricePanel.from_bars` intersects."""
+
+        dates_by_ticker = {
+            ticker: {bar.session_date for bar in bars} for ticker, bars in bars_by_ticker.items()
+        }
+        # The candidate calendar is the UNION: every date any ticker traded, which
+        # is the panel the operator thinks they backfilled. Measuring loss against
+        # the longest single ticker would understate it whenever two tickers are
+        # short in different places.
+        candidates: set[date] = set()
+        for seen in dates_by_ticker.values():
+            candidates |= seen
+        kept: set[date] | None = None
+        for seen in dates_by_ticker.values():
+            kept = seen if kept is None else (kept & seen)
+        kept = kept or set()
+        per_ticker = tuple(
+            TickerCoverage(
+                ticker=ticker,
+                n_bars=len(seen),
+                missing=len(candidates - seen),
+                first_date=min(seen) if seen else None,
+                last_date=max(seen) if seen else None,
+            )
+            for ticker, seen in dates_by_ticker.items()
+        )
+        return cls(
+            n_bars=len(kept),
+            candidate_bars=len(candidates),
+            first_date=min(kept) if kept else None,
+            last_date=max(kept) if kept else None,
+            per_ticker=per_ticker,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class PricePanel:
     """Point-in-time aligned daily OHLCV across one or more tickers.
 
@@ -159,7 +255,9 @@ class StrategySignal(Protocol):
 
 __all__ = [
     "BarSample",
+    "PanelCoverage",
     "PanelWindow",
     "PricePanel",
     "StrategySignal",
+    "TickerCoverage",
 ]
