@@ -15,21 +15,27 @@ block that could not run (2026-07-27). One ordered list, dependency-first.
 
 ---
 
-## Status, 2026-07-28 evening
+## Status, 2026-07-29
 
 **Phase 0 and Phase 1 are done. Phase 2 Track B is partly done.** See
-`docs/status/session-handoff.md` for Mike's rulings on capital, risk appetite and
-the growth target, and for what a fresh session should pick up.
+`docs/status/session-handoff.md` for Mike's rulings on capital and risk appetite,
+and for what a fresh session should pick up.
 
-Landed this session (#102–#115): archetype-conditional gates · the Evaluator
-trigger with ADR-0015's kill-asymmetric autonomy · CI on every push · the
-full-firm audit · `shrap-strategy-stage` · **benchmark-relative evaluation** ·
-cross-sectional rules · the momentum seed · notional sizing arithmetic.
+Landed #102–#118: archetype-conditional gates · the Evaluator trigger with
+ADR-0015's kill-asymmetric autonomy · CI on every push · the full-firm audit ·
+`shrap-strategy-stage` · **benchmark-relative evaluation** · cross-sectional
+rules · the momentum seed · **notional sizing, arithmetic and wiring**.
 
-**Next three, in order:** wire notional sizing into the signal path → apply the
-risk limits and load the launch list → forward-test scoring. The first blocks
-the second; without it the Runner still emits one share and the live book cannot
-match the evaluated one.
+**The scope changed on 2026-07-29.** ADR-0016 commits the firm to three asset
+classes operating continuously, because FINRA's pattern-day-trader rule makes an
+intraday $10k US-equity account impossible — the target and the instrument set
+turned out to be one decision. Read ADR-0016 before planning anything in Phase 2
+Track B; several items below were scoped for an equities-only firm.
+
+**Next, in order:** forward-test scoring (nothing evaluates a strategy *after*
+promotion — more urgent under ADR-0016, not less) → per-venue calendars (2.7) →
+non-session-keyed Runner idempotency (2.8) → spot crypto (2.9). Risk Officer
+limits (2.10) must land before MES, not alongside it.
 
 ---
 
@@ -113,10 +119,27 @@ what unblocks fastest, not by importance.
 
 ---
 
-## Direction of travel — options and futures
+## Direction of travel — multi-asset, continuous (ADR-0016)
 
-**Not this sprint, but it should shape decisions made now.** Mike's stated
-long-run intent (2026-07-28) is options and futures for genuinely fast trading.
+**Superseded in scope on 2026-07-29.** What follows was written when options and
+futures were a long-run intent. They are now a decision: **ADR-0016 commits the
+firm to US equities + MES futures + spot crypto, operating continuously.**
+
+The forcing constraint is regulatory, not strategic. FINRA's pattern-day-trader
+rule caps a margin account under $25,000 at three day trades per five rolling
+business days, so **a $10k US-equity account cannot trade intraday at all** in
+any meaningful sense. Futures and spot crypto are not PDT-bound. That is why the
+target and the instrument set are now the same decision.
+
+**Sequence, per ADR-0016:** spot crypto first (only true 24/7, existing broker,
+no PDT, stays under the ADR-0003 gate, and forces every architectural change the
+others need) → MES behind the NautilusTrader validation card *and* a Risk Officer
+leverage bound → extended/overnight equities once broker capability is verified.
+
+**Item 2.3 below is now decided in principle:** the intraday data question is no
+longer "which equities feed" but "three ingest paths — crypto, futures,
+intraday equities." Scope it against ADR-0016, not against equities alone.
+
 Three things already in the repo bear on it:
 
 1. **It is the ADR-0003 gate condition, verbatim.** NautilusTrader adoption
@@ -137,6 +160,18 @@ Three things already in the repo bear on it:
 **The concrete consequence for 2.3:** a feed chosen only for equities answers
 this sprint's question and none of the following one. Futures data and options
 chains are worth weighing now even though neither is bought now.
+
+### New cards created by ADR-0016
+
+| # | Item | Depends on | Note |
+|---|---|---|---|
+| 2.7 | **Per-venue market calendars** | — | `operations/market_phase.py` computes XNYS phases from one calendar. Crypto has no `open`; MES runs Sun 18:00 → Fri 17:00 ET with a daily halt. Blocks everything else here. |
+| 2.8 | **Non-session-keyed Runner idempotency** | 2.7 | The guard is `(strategy_id, session_date)` and the pass fires once, on `open`. Neither survives a continuous market. |
+| 2.9 | **Spot crypto ingest + trading path** | 2.7, 2.8 | First asset under ADR-0016. Bar polling, not streaming, keeps it under the ADR-0003 gate. **Verify broker crypto availability in paper before scoping.** |
+| 2.10 | **Risk Officer: leverage, drawdown and per-strategy loss limits** | — | Today the firm has none of the three. MES supplies leverage by construction, so this must land *before* futures, not alongside. |
+| 2.11 | **NautilusTrader bridge-coverage validation** | 2.10 | The ADR-0003 gate card. Prerequisite for MES; verify Alpaca **and** IBKR adapter event coverage against the by-then consumer inventory. |
+| 2.12 | **Contract-based sizing** | 2.11 | `shares = notional / price` does not describe a futures contract. One MES ≈ $5 × index ≈ $32k notional on a $10k account. |
+| 2.13 | **MES futures path** | 2.11, 2.12 | The step that can end the account in a day. It should not also be the step debuting new plumbing. |
 
 ---
 
