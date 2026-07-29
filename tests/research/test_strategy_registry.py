@@ -302,6 +302,7 @@ async def test_get_parses_jsonb_columns() -> None:
             "regime_sizing_modifier": '{"late-cycle-melt-up":1.0}',
             "kill_criteria": '["bottleneck no longer binding"]',
             "code_ref": None,
+            "account_id": None,
             "created_at": datetime(2026, 7, 15, tzinfo=UTC),
             "updated_at": datetime(2026, 7, 15, tzinfo=UTC),
         }
@@ -359,3 +360,104 @@ def test_transition_event_payload_carries_decision_context() -> None:
     assert payload["reason"] == "walk-forward passed"
     assert payload["trigger_ref"] == "eval-42"
     assert "occurred_at" in payload
+
+
+# --- account assignment (ADR-0017) --------------------------------------------
+
+
+def _row(**overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "strategy_id": "01TESTSTRATEGY",
+        "name": "nvda-hbm-bottleneck",
+        "version": 1,
+        "archetype": "bottleneck-rotation",
+        "status": STATUS_PAPER,
+        "source": "hypothesis-generator",
+        "thesis": "HBM binds.",
+        "anchor": None,
+        "tickers": '{"long":["MU"],"short":[]}',
+        "spec": "{}",
+        "spec_hash": "abc123",
+        "regime_sizing_modifier": None,
+        "kill_criteria": "[]",
+        "code_ref": None,
+        "account_id": None,
+        "created_at": datetime(2026, 7, 15, tzinfo=UTC),
+        "updated_at": datetime(2026, 7, 15, tzinfo=UTC),
+    }
+    row.update(overrides)
+    return row
+
+
+async def test_assign_account_records_the_account() -> None:
+    from shrap.research.strategy_registry import UPDATE_STRATEGY_ACCOUNT_SQL
+
+    pool = FakePool()
+    pool.conn.rows = [_row(account_id="PA3ABCDEF")]
+    registry = PostgresStrategyRegistry(pool)  # type: ignore[arg-type]
+
+    record = await registry.assign_account("01TESTSTRATEGY", "PA3ABCDEF")
+
+    assert record.account_id == "PA3ABCDEF"
+    assert (UPDATE_STRATEGY_ACCOUNT_SQL, ("01TESTSTRATEGY", "PA3ABCDEF")) in pool.conn.executed
+
+
+async def test_an_unassigned_strategy_reads_as_none_not_empty_string() -> None:
+    """None is a real state — nothing has been allocated to it yet — and the
+    Runner must be able to tell it apart from a configured account."""
+
+    pool = FakePool()
+    pool.conn.rows = [_row()]
+    registry = PostgresStrategyRegistry(pool)  # type: ignore[arg-type]
+    assert (await registry.get("01TESTSTRATEGY")).account_id is None
+
+
+async def test_clearing_an_assignment_frees_the_account() -> None:
+    """How an account is handed to the next promotion. Blank and whitespace
+    normalise to NULL so they cannot occupy the unique index."""
+
+    from shrap.research.strategy_registry import UPDATE_STRATEGY_ACCOUNT_SQL
+
+    for cleared in (None, "", "   "):
+        pool = FakePool()
+        pool.conn.rows = [_row()]
+        registry = PostgresStrategyRegistry(pool)  # type: ignore[arg-type]
+        await registry.assign_account("01TESTSTRATEGY", cleared)
+        assert (UPDATE_STRATEGY_ACCOUNT_SQL, ("01TESTSTRATEGY", None)) in pool.conn.executed
+
+
+async def test_assigning_a_missing_strategy_raises() -> None:
+    pool = FakePool()
+    pool.conn.rows = []
+    registry = PostgresStrategyRegistry(pool)  # type: ignore[arg-type]
+    with pytest.raises(StrategyNotFoundError):
+        await registry.assign_account("01NOSUCH", "PA3ABCDEF")
+
+
+def test_one_account_holds_one_strategy_is_enforced_by_the_database() -> None:
+    """THE invariant of ADR-0017, and the reason it is an index rather than a
+    check in code.
+
+    Two strategies sharing an account destroys the property the whole design
+    rests on: that an account's equity curve is one strategy's P&L. A check in
+    whichever code path runs next loses that race; a partial unique index does
+    not. NULLs are excluded, so any number of strategies may be unassigned.
+    """
+
+    from shrap.research.strategy_registry import CREATE_STRATEGIES_ACCOUNT_UNIQUE_INDEX_SQL
+
+    sql = CREATE_STRATEGIES_ACCOUNT_UNIQUE_INDEX_SQL
+    assert "UNIQUE INDEX" in sql
+    assert "WHERE account_id IS NOT NULL" in sql
+
+
+async def test_ensure_schema_migrates_the_existing_strategies_table() -> None:
+    """CREATE TABLE IF NOT EXISTS is a no-op in production, so the column needs
+    its own ALTER or the Dell's rows never gain it."""
+
+    from shrap.research.strategy_registry import ALTER_STRATEGIES_ADD_ACCOUNT_ID_SQL
+
+    pool = FakePool()
+    registry = PostgresStrategyRegistry(pool)  # type: ignore[arg-type]
+    await registry.ensure_schema()
+    assert any(sql == ALTER_STRATEGIES_ADD_ACCOUNT_ID_SQL for sql, _ in pool.conn.executed)

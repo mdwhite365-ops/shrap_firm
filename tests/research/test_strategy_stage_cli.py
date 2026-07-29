@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -346,3 +347,73 @@ def test_move_requires_a_reason() -> None:
 
     with pytest.raises(SystemExit):
         _build_parser().parse_args(["move", "01STRAT", "--to", "paper"])
+
+
+# --- assign-account (ADR-0017) ------------------------------------------------
+
+
+class _AssignRegistry:
+    def __init__(self, record: StrategyRecord | None, assigned: str | None = None) -> None:
+        self._record = record
+        self._assigned = assigned
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def get(self, strategy_id: str) -> StrategyRecord | None:
+        return self._record
+
+    async def assign_account(self, strategy_id: str, account_id: str | None) -> StrategyRecord:
+        self.calls.append((strategy_id, account_id))
+        assert self._record is not None
+        return replace(self._record, account_id=account_id)
+
+
+async def test_assign_account_reports_the_move_and_the_operator_step() -> None:
+    from shrap.research.strategy_stage_cli import assign_account
+
+    registry = _AssignRegistry(_record(status=STATUS_PAPER))
+    out = await assign_account(registry, "01S", account_id="PA3ABCDEF")  # type: ignore[arg-type]
+
+    assert registry.calls == [("01S", "PA3ABCDEF")]
+    assert "(unassigned) -> PA3ABCDEF" in out
+    # The assignment alone does not make the runner trade it.
+    assert "STRATEGY_RUNNER_ACCOUNT_ID" in out
+
+
+async def test_clearing_says_positions_outlive_the_assignment() -> None:
+    """The dangerous misreading: that freeing an account also flattens it."""
+
+    from shrap.research.strategy_stage_cli import assign_account
+
+    registry = _AssignRegistry(replace(_record(status=STATUS_PAPER), account_id="PA3ABCDEF"))
+    out = await assign_account(registry, "01S", account_id=None)
+
+    assert registry.calls == [("01S", None)]
+    assert "still" in out and "held at the broker" in out
+
+
+async def test_assign_account_dry_run_writes_nothing() -> None:
+    from shrap.research.strategy_stage_cli import assign_account
+
+    registry = _AssignRegistry(_record(status=STATUS_PAPER))
+    out = await assign_account(registry, "01S", account_id="PA3ABCDEF", dry_run=True)
+
+    assert registry.calls == []
+    assert "DRY RUN" in out
+
+
+async def test_reassigning_to_the_same_account_is_a_no_op() -> None:
+    from shrap.research.strategy_stage_cli import assign_account
+
+    registry = _AssignRegistry(replace(_record(status=STATUS_PAPER), account_id="PA3ABCDEF"))
+    out = await assign_account(registry, "01S", account_id="PA3ABCDEF")
+
+    assert registry.calls == []
+    assert "no change" in out
+
+
+async def test_assigning_a_missing_strategy_refuses() -> None:
+    from shrap.research.strategy_stage_cli import assign_account
+
+    registry = _AssignRegistry(None)
+    with pytest.raises(SystemExit, match="no strategy"):
+        await assign_account(registry, "01NOPE", account_id="PA3ABCDEF")  # type: ignore[arg-type]

@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS research.strategies (
     regime_sizing_modifier JSONB,
     kill_criteria JSONB NOT NULL,
     code_ref TEXT,
+    account_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (name, version)
@@ -114,6 +115,29 @@ ON research.strategies (spec_hash)
 CREATE_STRATEGIES_STATUS_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS strategies_status_idx
 ON research.strategies (status, updated_at DESC)
+""".strip()
+
+# ADR-0017: one strategy per broker account, so a strategy has to record which
+# account it trades. Nullable — an unassigned strategy is a real state (nothing
+# has been allocated to it yet), and inventing an account for one would route
+# its orders to a book nobody chose.
+ALTER_STRATEGIES_ADD_ACCOUNT_ID_SQL = """
+ALTER TABLE research.strategies
+ADD COLUMN IF NOT EXISTS account_id TEXT
+""".strip()
+
+# One strategy per account is the whole point of ADR-0017 — it is what makes the
+# account's equity curve that strategy's P&L. A partial unique index enforces it
+# in the database rather than in whichever code path happens to run next; NULLs
+# are excluded so any number of strategies may be unassigned.
+CREATE_STRATEGIES_ACCOUNT_UNIQUE_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS strategies_account_id_idx
+ON research.strategies (account_id)
+WHERE account_id IS NOT NULL
+""".strip()
+
+UPDATE_STRATEGY_ACCOUNT_SQL = """
+UPDATE research.strategies SET account_id = $2, updated_at = now() WHERE strategy_id = $1
 """.strip()
 
 CREATE_TRANSITIONS_TABLE_SQL = """
@@ -165,7 +189,7 @@ SELECT_STRATEGY_SQL = """
 SELECT
     strategy_id, name, version, archetype, status, source, thesis,
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
-    code_ref, created_at, updated_at
+    code_ref, account_id, created_at, updated_at
 FROM research.strategies
 WHERE strategy_id = $1
 """.strip()
@@ -174,7 +198,7 @@ SELECT_STRATEGIES_BY_STATUS_SQL = """
 SELECT
     strategy_id, name, version, archetype, status, source, thesis,
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
-    code_ref, created_at, updated_at
+    code_ref, account_id, created_at, updated_at
 FROM research.strategies
 WHERE status = $1
 ORDER BY updated_at DESC
@@ -184,7 +208,7 @@ SELECT_STRATEGY_BY_SPEC_HASH_SQL = """
 SELECT
     strategy_id, name, version, archetype, status, source, thesis,
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
-    code_ref, created_at, updated_at
+    code_ref, account_id, created_at, updated_at
 FROM research.strategies
 WHERE spec_hash = $1
 """.strip()
@@ -193,7 +217,7 @@ SELECT_ALL_STRATEGIES_SQL = """
 SELECT
     strategy_id, name, version, archetype, status, source, thesis,
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
-    code_ref, created_at, updated_at
+    code_ref, account_id, created_at, updated_at
 FROM research.strategies
 ORDER BY created_at DESC, strategy_id
 """.strip()
@@ -295,6 +319,9 @@ class StrategyRecord:
     code_ref: str | None
     created_at: object
     updated_at: object
+    account_id: str | None = None
+    """Broker account this strategy trades in (ADR-0017). None = unassigned,
+    which is a real state: nothing has been allocated to it yet."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +369,8 @@ class PostgresStrategyRegistry:
         async with self._pool.acquire() as conn:
             await conn.execute(CREATE_RESEARCH_SCHEMA_SQL)
             await conn.execute(CREATE_STRATEGIES_TABLE_SQL)
+            await conn.execute(ALTER_STRATEGIES_ADD_ACCOUNT_ID_SQL)
+            await conn.execute(CREATE_STRATEGIES_ACCOUNT_UNIQUE_INDEX_SQL)
             await conn.execute(CREATE_STRATEGIES_SPEC_HASH_INDEX_SQL)
             await conn.execute(CREATE_STRATEGIES_STATUS_INDEX_SQL)
             await conn.execute(CREATE_TRANSITIONS_TABLE_SQL)
@@ -421,6 +450,30 @@ class PostgresStrategyRegistry:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(SELECT_ALL_STRATEGIES_SQL)
         return [_record_from_row(row) for row in rows]
+
+    async def assign_account(self, strategy_id: str, account_id: str | None) -> StrategyRecord:
+        """Assign this strategy to a broker account, or clear it with ``None``.
+
+        One strategy per account (ADR-0017) is enforced by a partial unique index
+        rather than by a check here, so a race between two assignments loses at
+        the database instead of producing two strategies trading one book —
+        which would silently destroy the property that makes the account's
+        equity curve a single strategy's P&L.
+
+        Clearing is allowed and is how an account is freed for the next
+        promotion: a strategy's positions outlive its assignment, so clearing is
+        a decision about *future* orders, not a claim that the account is flat.
+        """
+
+        normalized = account_id.strip() if account_id is not None else None
+        if normalized == "":
+            normalized = None
+        async with self._pool.acquire() as conn:
+            await conn.execute(UPDATE_STRATEGY_ACCOUNT_SQL, strategy_id, normalized)
+            row = await conn.fetchrow(SELECT_STRATEGY_SQL, strategy_id)
+        if row is None:
+            raise StrategyNotFoundError(f"strategy {strategy_id} does not exist")
+        return _record_from_row(row)
 
     async def get_by_spec_hash(self, spec_hash: str) -> StrategyRecord | None:
         """Look up a strategy by its unique ``spec_hash`` (the dedup key)."""
@@ -568,6 +621,7 @@ def _record_from_row(row: Mapping[str, Any]) -> StrategyRecord:
         code_ref=None if row["code_ref"] is None else str(row["code_ref"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        account_id=None if row["account_id"] is None else str(row["account_id"]),
     )
 
 
