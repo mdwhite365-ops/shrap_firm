@@ -31,9 +31,14 @@ sudo docker compose exec universe-curator shrap-universe-promote load-launch-lis
 The flag is only safe once this returns 50 active rows.
 
 ```bash
-sudo docker compose exec postgres psql -U "$SHRAP_DB_USER" -d "$SHRAP_DB_NAME" \
-  -c "SELECT tier, count(*) FROM research.universe_tiers GROUP BY tier;"
+sudo docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  -c "SELECT tier, count(*) FROM research.universe_tiers GROUP BY tier;"' 
 ```
+
+(The `sh -c '...'` wrapper defers variable expansion to inside the container.
+`SHRAP_DB_USER` is in `infra/.env`, which Compose reads and your shell does not,
+so expanding it locally yields an empty user and `role "postgres" does not
+exist`.)
 
 Expected: `active | 50`. The gate matches on the literal `active`
 (`TIER3_ACTIVE_TIER`) — a different literal reads as "not in Tier 3" and vetoes
