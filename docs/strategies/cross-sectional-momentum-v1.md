@@ -5,6 +5,12 @@
 **Rule:** `cross-sectional-momentum` · **Universe:** all 50 Tier-3 launch names
 **Code:** `src/shrap/research/strategy_seed/technical_strategies.py`
 
+> **A second seed exists over a longer-history universe.** `01KYQTQVYPH6QG3Q6HP1JEM2A0`
+> (`xs-momentum-126-21-10-longhist`) runs the identical rule over the same list
+> minus ETHA and IBIT. See "The universe is a research choice" below — the
+> 50-name panel is capped at about two years of history and the 48-name one is
+> not. Both are seeded at `hypothesis`; neither supersedes the other.
+
 ## What it is
 
 Rank the 50 launch names on their trailing six-month return, excluding the most
@@ -79,6 +85,48 @@ world-changer.
 5. Out-of-sample Sharpe at or below zero, or below the promote floor.
 6. Edge does not survive the realistic-friction stress test.
 
+## The universe is a research choice (Mike's ruling, 2026-07-29)
+
+`PricePanel` aligns on the **intersection** of its members' session dates — a
+date survives only if every ticker has a bar for it. That is the correct
+point-in-time rule: the alternative is forward-filling bars that never existed.
+It also means **the panel is only as long as the shortest history in the
+universe.**
+
+The launch list contains the two spot-crypto ETFs, and both listed in 2024:
+
+| Ticker | Listed | Bars in a 5-year window | Dates it costs the panel |
+|---|---|---|---|
+| ETHA | 2024-07-23 | ~506 | ~752 |
+| IBIT | 2024-01-11 | ~640 | ~618 |
+| everything else | 2018 or earlier | ~1,258 | 0 |
+
+So the first evaluation of this strategy measured a six-month momentum rule
+against **roughly two years of history**, discarding about 60% of the data every
+other name carried — and nothing in the verdict said so. (#136 now reports panel
+coverage on every run; this table is what it would have printed.)
+
+**The ruling:** the universe a strategy is *tested* on is a per-strategy
+research choice declared in its spec, not automatically whatever the tradeable
+list contains. The tradeable universe answers "what may the firm buy"; the
+research universe answers "what can this rule be honestly measured over".
+
+The long-history seed therefore drops two names to roughly quadruple the sample.
+Both seeds stay at `hypothesis` so the trade is checkable rather than assumed —
+if the longer panel does not move the verdict, that is worth knowing too.
+
+**What it does not fix.** RIVN (2021-11) then binds, so even the 48-name panel
+is about 4.7 years rather than the full backfill. Going further would mean
+dropping the 2020–21 IPO cohort — RIVN, HOOD, COIN, AFRM, U, PLTR, SNOW — which
+trades breadth against history much more aggressively. Not done here; the
+coverage line on each card now makes that call visible when it is worth making.
+
+**Exclusions are stated as subtractions from the launch list, not a hand-written
+ticker tuple.** A name added to Tier 3 still flows into the research universe
+automatically; only removals are a judgement call, and each is recorded with its
+reason in `_MOMENTUM_EXCLUSIONS`. MARA and RIOT stay — they are miners, ordinary
+equities with long histories, not ETFs.
+
 ## Running it
 
 **All 50 tickers need daily bars and Tier-3 `active` status.** A missing one
@@ -101,9 +149,11 @@ sudo docker compose --profile tools run --rm market-data \
 sudo docker compose --profile tools run --rm market-data \
   shrap-market-data-backfill --launch-list --since 2018-01-01
 
-# 3. Seed it.
+# 3. Seed it. Both variants; they coexist (distinct spec_hash and id).
 sudo docker compose --profile tools run --rm strategy-evaluator \
   shrap-strategy-seed load-momentum xs-momentum-126-21-10
+sudo docker compose --profile tools run --rm strategy-evaluator \
+  shrap-strategy-seed load-momentum xs-momentum-126-21-10-longhist
 
 # 4. Evaluate. Dry run first, always.
 sudo docker compose --profile tools run --rm strategy-evaluator \

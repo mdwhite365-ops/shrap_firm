@@ -53,8 +53,10 @@ from shrap.research.strategy_seed.probe_strategies import (
 )
 from shrap.research.strategy_seed.technical_strategies import (
     MOMENTUM_SEEDS,
+    MOMENTUM_SEEDS_BY_KEY,
     TECHNICAL_SEEDS,
     compute_momentum_spec_hash,
+    momentum_exclusions,
     momentum_kill_criteria,
     momentum_record,
     technical_record,
@@ -416,26 +418,90 @@ def test_render_technical_catalogue_lists_every_seed() -> None:
 # --- cross-sectional momentum seed -------------------------------------------
 
 
-def test_momentum_seed_trades_the_whole_launch_universe() -> None:
-    """Breadth is what lets a daily rule clear the trade-count gate honestly.
+def test_momentum_seed_universe_stays_inside_tier_3() -> None:
+    """A research universe may narrow the launch list; it may never exceed it.
 
-    The engine counts a trade per ticker per weight change, so 50 names supply
-    the sample size a single-name daily rule cannot — 89 trades on one ticker
-    against 28,139 on fifty, measured in PR #110.
+    A ticker outside Tier 3 is refused at evaluation, so an extra name here
+    would turn every run of this strategy into a refusal — and the refusal names
+    the ticker but not the reason it was ever in the spec.
     """
 
     launch = {entry.ticker for entry in LAUNCH_LIST}
     for seed in MOMENTUM_SEEDS:
         record = momentum_record(seed)
-        assert set(record.tickers["long"]) == launch
+        assert set(seed.tickers) <= launch
+        assert set(record.tickers["long"]) == set(seed.tickers)
         assert record.tickers["short"] == []
 
 
-def test_momentum_seed_tickers_track_the_launch_list_rather_than_a_copy() -> None:
-    """A hand-listed universe would drift out of step with Tier 3 silently."""
+def test_every_omitted_name_is_declared_with_a_reason() -> None:
+    """The anti-drift property, restated for per-strategy universes.
 
+    Deriving from LAUNCH_LIST was chosen so a name dropped from Tier 3 could not
+    sit in the spec silently. Allowing strategies to pick their own universe
+    (Mike, 2026-07-29) would give that back — a hand-listed tuple drifts exactly
+    the same way. Subtracting a *declared* exclusion set keeps it: any name added
+    to Tier 3 still flows in automatically, and anything missing must be written
+    down next to the reason it is missing.
+    """
+
+    launch = {entry.ticker for entry in LAUNCH_LIST}
+    exclusions = momentum_exclusions()
     for seed in MOMENTUM_SEEDS:
-        assert set(seed.tickers) == {entry.ticker for entry in LAUNCH_LIST}
+        omitted = launch - set(seed.tickers)
+        assert omitted <= set(exclusions), f"{seed.key} drops undeclared names: {omitted}"
+    for ticker, reason in exclusions.items():
+        assert ticker in launch, f"{ticker} is excluded from a list it is not on"
+        assert len(reason) > 20, f"{ticker} excluded without a usable reason"
+
+
+def test_the_long_history_seed_drops_only_the_two_short_ETFs() -> None:
+    """Breadth is what lets a daily rule clear the trade-count gate honestly —
+    89 trades on one ticker against 28,139 on fifty (#110) — so narrowing the
+    universe trades directly against the gate the strategy has to clear.
+
+    48 of 50 keeps essentially all of that. The miners (MARA, RIOT) are ordinary
+    equities with long histories and stay; excluding the whole crypto category
+    would cost breadth for no gain in panel length.
+    """
+
+    seed = MOMENTUM_SEEDS_BY_KEY["xs-momentum-126-21-10-longhist"]
+
+    assert set(momentum_exclusions()) == {"ETHA", "IBIT"}
+    assert len(seed.tickers) == len(LAUNCH_LIST) - 2
+    assert {"MARA", "RIOT"} <= set(seed.tickers)
+
+
+def test_the_two_momentum_seeds_differ_only_in_universe() -> None:
+    """The pair is a controlled comparison of panel length against breadth.
+    Changing the rule as well would confound it."""
+
+    base = MOMENTUM_SEEDS_BY_KEY["xs-momentum-126-21-10"]
+    longhist = MOMENTUM_SEEDS_BY_KEY["xs-momentum-126-21-10-longhist"]
+
+    assert (base.lookback, base.skip, base.top_n) == (
+        longhist.lookback,
+        longhist.skip,
+        longhist.top_n,
+    )
+    assert base.strategy_id != longhist.strategy_id
+    assert set(longhist.tickers) < set(base.tickers)
+
+
+def test_momentum_seed_ids_are_distinct_so_reseeding_cannot_silently_noop() -> None:
+    """`load_momentum` dedupes on spec_hash, then on strategy_id.
+
+    Editing the ticker tuple of an already-loaded seed in place produces a new
+    spec_hash, falls through to `register`, collides on the pinned ULID, and
+    reports "already present — skipped". The universe would never change on the
+    Dell and the run would look successful. A revised universe therefore has to
+    ship as a new id, which this pins.
+    """
+
+    ids = [seed.strategy_id for seed in MOMENTUM_SEEDS]
+    assert len(ids) == len(set(ids))
+    hashes = [momentum_record(seed).spec_hash for seed in MOMENTUM_SEEDS]
+    assert len(hashes) == len(set(hashes))
 
 
 def test_momentum_seed_names_the_cross_sectional_rule() -> None:
@@ -507,6 +573,12 @@ async def test_load_momentum_is_idempotent_and_coexists_with_every_seed() -> Non
     assert first.startswith("loaded:")
     second = await load_momentum(registry, "xs-momentum-126-21-10")
     assert second.startswith("already present:")
+
+    # The long-history variant must load ALONGSIDE it, not collide with it —
+    # same rule, different universe, so neither spec_hash nor id may clash.
+    for seed in MOMENTUM_SEEDS:
+        if seed.key != "xs-momentum-126-21-10":
+            assert (await load_momentum(registry, seed.key)).startswith("loaded:")
 
     expected = 1 + len(PROBE_SEEDS) + len(TECHNICAL_SEEDS) + len(MOMENTUM_SEEDS)
     assert len(registry.by_id) == expected

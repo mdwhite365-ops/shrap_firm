@@ -146,6 +146,42 @@ TECHNICAL_SEEDS: tuple[TechnicalSeed, ...] = (
 # refused at evaluation with nothing pointing at why.
 _MOMENTUM_TICKERS: tuple[str, ...] = tuple(sorted(e.ticker for e in LAUNCH_LIST))
 
+# Names a research universe excludes, and why (Mike's ruling 2026-07-29: the
+# universe a strategy is TESTED on is a per-strategy research choice declared in
+# its spec, not whatever the tradeable list happens to contain).
+#
+# The problem this fixes: `PricePanel` aligns on the intersection of session
+# dates, so the panel is only as long as the shortest history in the universe.
+# Both spot-crypto ETFs listed in 2024, which capped the first cross-sectional
+# evaluation at ~506 bars — about two years — while every other name had four
+# to eight. The rule was measured on a quarter of the available history and
+# nothing in the verdict said so (see #136, which now reports it).
+#
+# Stated as exclusions from the launch list rather than a hand-written ticker
+# list, deliberately: a name ADDED to Tier 3 still flows into the research
+# universe automatically, so the anti-drift property the launch-list derivation
+# was chosen for survives. Only the removals are a judgement call, and they are
+# written down with their reason next to them.
+#
+# MARA and RIOT are NOT excluded. They are miners — ordinary equities with long
+# histories — not ETFs; excluding the whole `crypto` category would cost breadth
+# for nothing.
+_MOMENTUM_EXCLUSIONS: dict[str, str] = {
+    "ETHA": "iShares Ethereum Trust, listed 2024-07 — shortest history on the list",
+    "IBIT": "iShares Bitcoin Trust, listed 2024-01 — second shortest",
+}
+
+_MOMENTUM_RESEARCH_TICKERS: tuple[str, ...] = tuple(
+    t for t in _MOMENTUM_TICKERS if t not in _MOMENTUM_EXCLUSIONS
+)
+
+
+def momentum_exclusions() -> dict[str, str]:
+    """Excluded names and the reason each was excluded, for the seed's audit line."""
+
+    return dict(_MOMENTUM_EXCLUSIONS)
+
+
 MOMENTUM_SEEDS: tuple[MomentumSeed, ...] = (
     MomentumSeed(
         key="xs-momentum-126-21-10",
@@ -171,6 +207,42 @@ MOMENTUM_SEEDS: tuple[MomentumSeed, ...] = (
             "evidence raises the odds of surviving evaluation without guaranteeing it. "
             "No world-changer anchor: the thesis is entirely about relative price "
             "behaviour."
+        ),
+    ),
+    MomentumSeed(
+        key="xs-momentum-126-21-10-longhist",
+        # A NEW strategy_id, not an edit to the one above. `load_momentum`
+        # dedupes on spec_hash and then on strategy_id, so changing the ticker
+        # tuple in place would produce a fresh spec_hash, fall through to
+        # `register`, collide on the pinned ULID and report "already present —
+        # skipped". The universe would silently never change on the Dell.
+        #
+        # It is also the honest model. The strategy above has an evaluation on
+        # record over a specific 50-name panel; a different universe is a
+        # different test, and its verdict does not transfer. Both stay at
+        # `hypothesis`, so the trigger evaluates each and the pair is a direct
+        # read on breadth-versus-history with the rule held fixed.
+        strategy_id="01KYQTQVYPH6QG3Q6HP1JEM2A0",
+        name="Cross-sectional momentum (126/21, top 10) — long-history universe",
+        tickers=_MOMENTUM_RESEARCH_TICKERS,
+        # Identical to the seed above. The universe is the only difference, which
+        # is the entire point: changing the rule at the same time would confound
+        # the comparison.
+        lookback=126,
+        skip=21,
+        top_n=10,
+        thesis=(
+            "The same cross-sectional momentum rule as the 50-name seed, over the "
+            "launch universe minus the two spot-crypto ETFs. This is not a claim "
+            "about crypto: it is a claim about measurement. The panel is the "
+            "intersection of every member's session dates, so ETHA (listed 2024-07) "
+            "and IBIT (2024-01) capped the first evaluation at roughly two years of "
+            "history while the remaining 48 names carried four to eight. Dropping "
+            "two names to quadruple the sample the rule is measured on is a trade "
+            "worth making, and holding both seeds at hypothesis makes it checkable "
+            "rather than assumed — if the longer panel does not change the verdict, "
+            "that is itself worth knowing. No world-changer anchor: the thesis is "
+            "entirely about relative price behaviour."
         ),
     ),
 )
@@ -346,6 +418,7 @@ __all__ = [
     "TechnicalSeed",
     "compute_momentum_spec_hash",
     "compute_spec_hash",
+    "momentum_exclusions",
     "momentum_kill_criteria",
     "momentum_record",
     "technical_record",

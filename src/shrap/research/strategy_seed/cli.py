@@ -198,10 +198,16 @@ async def load_technical(registry: RegistryPort, key: str) -> str:
 async def load_momentum(registry: RegistryPort, key: str) -> str:
     """Insert one cross-sectional momentum seed at ``hypothesis``, idempotently.
 
-    Unlike every other seed this one declares the whole launch universe, which
-    is what lets it clear the trade-count gate honestly: the engine counts a
-    trade per ticker per weight change, so breadth supplies sample size that a
-    single-name daily rule cannot.
+    Unlike every other seed this one declares a broad universe, which is what
+    lets it clear the trade-count gate honestly: the engine counts a trade per
+    ticker per weight change, so breadth supplies sample size that a single-name
+    daily rule cannot.
+
+    Which names is a per-strategy research choice (Mike, 2026-07-29), not
+    automatically the whole tradeable list: the panel is the intersection of its
+    members' session dates, so one recently-listed name truncates the history
+    every other name contributes. Each seed declares its own universe and
+    `momentum_exclusions()` records what was left out and why.
     """
 
     seed = MOMENTUM_SEEDS_BY_KEY.get(key)
