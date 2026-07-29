@@ -36,6 +36,20 @@ sudo docker compose --profile tools build strategy-evaluator
 sudo docker compose --profile tools run --rm strategy-evaluator <command>
 ```
 
+**`--profile tools` is required on the *build* line too, not just the run line.**
+A plain `docker compose build` skips profiled services silently — it prints a
+normal-looking success for everything else and leaves the tools images
+untouched. Hit again on 2026-07-29: a full-stack rebuild had just run, yet
+
+```
+shrap-market-data-backfill: error: unrecognized arguments: --launch-list
+shrap-strategy-seed: error: argument action: invalid choice: 'load-technical'
+```
+
+Both flags had been merged for days. Both images were from before that merge.
+An argument-parser error is the tell — it reads like a typo in the command,
+which is why this keeps costing time.
+
 This is the run-to-completion analogue of the always-on `--force-recreate`
 lesson (2026-07-19), where `up -d --build` built a new image but left the
 container on the old one. Same class of problem, different command.

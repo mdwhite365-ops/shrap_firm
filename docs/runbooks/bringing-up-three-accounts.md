@@ -54,15 +54,30 @@ start.
 line — the default is now the full 50-name launch list, and the env var wins
 over it.
 
-## 2. Build everything
+## 2. Build everything — **including the tools profile**
 
 Nearly every module changed across #117–#128, and every image installs the same
-`shrap` package. A partial build leaves one agent on stale code with no error.
+`shrap` package. A partial build leaves one image on stale code with no error.
 
 ```bash
 cd /mnt/Archive/shrap/shrap_firm/infra
 sudo docker compose build
+sudo docker compose --profile tools build
 ```
+
+**Both lines.** `docker compose build` skips profiled services entirely, so the
+tools images — `market-data`, `strategy-evaluator`, `infra-mapper` — stay on
+whatever was built last. The symptom is an argument parser from an older
+release, which reads like a typo rather than a stale image:
+
+```
+shrap-market-data-backfill: error: unrecognized arguments: --launch-list
+shrap-strategy-seed: error: argument action: invalid choice: 'load-technical'
+                     (choose from load-first, load-probe, list-probes, list)
+```
+
+This is the same lesson as `deploying-after-a-code-change.md` §1, one level up:
+that runbook says *build before run*, and this is *build the profile too*.
 
 ## 3. Bring the stack up
 
