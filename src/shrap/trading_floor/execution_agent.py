@@ -107,6 +107,47 @@ def is_duplicate_order_error(exc: Exception) -> bool:
     return "client order id" in message
 
 
+class AccountMismatchError(Exception):
+    """Configured account does not match the account the credentials open."""
+
+
+async def resolve_account_id(
+    client: AlpacaPaperClient,
+    http_client: AsyncHttpClient,
+    configured: str,
+) -> str:
+    """Ask the broker which account these credentials actually open.
+
+    The credential *is* the account: a key pair opens exactly one book, and only
+    the broker can say which. Deriving the id removes the transcription step
+    entirely — there is no account number to copy out of a dashboard and no
+    placeholder to leave in by accident.
+
+    When ``configured`` is set it is **verified, not trusted**. A mismatch means
+    the key pair and the account id were paired wrong — agent 1's credentials
+    beside agent 2's account id — which would route a strategy's orders into the
+    other strategy's book while every log line looked correct. That is the worst
+    failure this whole routing design can have, so it refuses to start.
+    """
+
+    account = await client.get_account(http_client)
+    actual = str(account.get("account_number", "")).strip()
+    if not actual:
+        raise AccountMismatchError(
+            "broker did not return an account_number, so this agent cannot know "
+            f"which book it trades (keys present: {sorted(account)})"
+        )
+    if configured and configured != actual:
+        raise AccountMismatchError(
+            f"configured account {configured!r} is not the account these "
+            f"credentials open ({actual!r}). The key pair and the account id "
+            "belong to different books — submitting here would put one "
+            "strategy's orders in another strategy's account. Fix "
+            "EXECUTION_AGENT_ACCOUNT_ID or the credentials; refusing to start."
+        )
+    return actual
+
+
 class Routing:
     """Whether an approved intent belongs to this agent's account."""
 
@@ -337,7 +378,14 @@ async def poll_once(
             routing = route_for_account(event, account_id)
             if routing is Routing.OTHER:
                 # Another agent's account. Acking in this consumer group leaves
-                # the owner's group untouched.
+                # the owner's group untouched. Logged at INFO (bounded by the
+                # daily order cap) so that an intent matching *no* running agent
+                # is visible in the logs rather than inferred from silence.
+                log.info(
+                    "execution_agent.intent_other_account",
+                    risk_event_id=event.envelope.event_id,
+                    account_id=account_id,
+                )
                 await subscriber.ack(event)
                 continue
             if routing is Routing.UNROUTABLE:
@@ -666,6 +714,19 @@ async def run(
     )
     async with httpx.AsyncClient(timeout=(block_ms / 1000) + 10) as http_client:
         broker = AlpacaPaperBroker(alpaca_settings, cast(AsyncHttpClient, http_client))
+        # Ask the broker which book these credentials open. Verifies the
+        # configured id when one is set, supplies it when one is not, and
+        # refuses to start on a mismatch — see resolve_account_id.
+        resolved = await resolve_account_id(
+            AlpacaPaperClient(alpaca_settings),
+            cast(AsyncHttpClient, http_client),
+            account_id,
+        )
+        log.info(
+            "execution_agent.account_resolved",
+            account_id=resolved,
+            was_configured=bool(account_id),
+        )
         try:
             await run_loop(
                 cast(RedisStreamClient, redis),
@@ -678,6 +739,7 @@ async def run(
                 status_poll_interval_seconds=status_poll_interval_seconds,
                 group=group,
                 consumer=consumer,
+                account_id=resolved,
             )
         finally:
             await redis.aclose()
@@ -693,6 +755,7 @@ __all__ = [
     "STREAM_EXECUTION_ORDER_SUBMITTED",
     "STREAM_RISK_APPROVED",
     "TERMINAL_ORDER_STATUSES",
+    "AccountMismatchError",
     "AlpacaPaperBroker",
     "PendingOrder",
     "Routing",
@@ -706,6 +769,7 @@ __all__ = [
     "process_order_status_event",
     "process_risk_event",
     "repoll_pending_once",
+    "resolve_account_id",
     "route_for_account",
     "run",
     "run_loop",

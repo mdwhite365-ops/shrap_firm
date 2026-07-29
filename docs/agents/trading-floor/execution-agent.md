@@ -36,7 +36,14 @@ The agent is deterministic and no-LLM. It refuses any approved intent whose mode
 ## Processing
 
 1. Read ADR-0006 envelopes from `risk.intent.approved`.
-2. **Route by account (ADR-0017).** One agent runs per broker account, each with
+2. **Resolve this agent's account at startup.** The agent asks the broker which
+   account its credentials open (`GET /v2/account` → `account_number`) and uses
+   that. `EXECUTION_AGENT_ACCOUNT_ID` is an optional *assertion*: when set and
+   disagreeing, the agent refuses to start, because keys and an account id from
+   different books would route one strategy's orders into another strategy's
+   account while every log line looked correct. The credential is the account;
+   only the broker can confirm which.
+3. **Route by account (ADR-0017).** One agent runs per broker account, each with
    its own consumer group on the single stream, so every agent sees every
    approved intent and acts only on its own:
    - `approved_intent_payload.account_id` matches `EXECUTION_AGENT_ACCOUNT_ID` →

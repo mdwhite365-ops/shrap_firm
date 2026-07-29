@@ -26,10 +26,12 @@ class Settings(BaseSettings):
     service_name: str = "execution-agent"
     instance_id: str = Field(default_factory=socket.gethostname)
     redis_url: str = _DEFAULT_REDIS_URL
-    # The broker account this agent submits to (Alpaca's account_number). Each
-    # account gets its own Execution Agent with its own consumer group, and each
-    # acts only on intents naming its own account — ADR-0017. Must match the
-    # account_id assigned to the strategy whose orders these are.
+    # OPTIONAL assertion, not a required setting. At startup the agent asks the
+    # broker which account its credentials open and uses that — the key pair
+    # already determines the book, so there is nothing to transcribe. When this
+    # IS set and disagrees, the agent refuses to start: that means the keys and
+    # the account id belong to different books, which would route one strategy's
+    # orders into another strategy's account with every log line looking correct.
     account_id: str = ""
     alpaca_api_key: str = ""
     alpaca_secret_key: SecretStr = SecretStr("")

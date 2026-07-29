@@ -487,3 +487,58 @@ def test_the_submitted_event_carries_the_account_for_the_status_loop() -> None:
         {"id": "order-1", "status": "accepted"},
     )
     assert payload["account_id"] == "PA3MINE"
+
+
+# --- account resolution: the credential IS the account ------------------------
+
+
+class _FakeAccountClient:
+    def __init__(self, account: dict[str, Any]) -> None:
+        self._account = account
+        self.calls = 0
+
+    async def get_account(self, http_client: Any) -> dict[str, Any]:
+        self.calls += 1
+        return self._account
+
+
+async def test_the_account_is_derived_from_the_broker_when_unset() -> None:
+    """Nothing to transcribe: a key pair opens exactly one book and only the
+    broker can say which one."""
+
+    from shrap.trading_floor.execution_agent import resolve_account_id
+
+    client = _FakeAccountClient({"account_number": "PA3REAL", "status": "ACTIVE"})
+    resolved = await resolve_account_id(client, object(), "")  # type: ignore[arg-type]
+    assert resolved == "PA3REAL"
+
+
+async def test_a_matching_configured_account_is_confirmed() -> None:
+    from shrap.trading_floor.execution_agent import resolve_account_id
+
+    client = _FakeAccountClient({"account_number": "PA3REAL"})
+    assert await resolve_account_id(client, object(), "PA3REAL") == "PA3REAL"  # type: ignore[arg-type]
+
+
+async def test_a_mismatched_account_refuses_to_start() -> None:
+    """THE dangerous case this guards.
+
+    Agent 1's credentials beside agent 2's account id would route one strategy's
+    orders into the other strategy's book — and every log line would look right,
+    because the agent would believe it was account 2 while the keys opened
+    account 1. Refusing to start is the only safe response.
+    """
+
+    from shrap.trading_floor.execution_agent import AccountMismatchError, resolve_account_id
+
+    client = _FakeAccountClient({"account_number": "PA3REAL"})
+    with pytest.raises(AccountMismatchError, match="belong to different books"):
+        await resolve_account_id(client, object(), "PA3TYPO")  # type: ignore[arg-type]
+
+
+async def test_a_broker_with_no_account_number_refuses() -> None:
+    from shrap.trading_floor.execution_agent import AccountMismatchError, resolve_account_id
+
+    client = _FakeAccountClient({"status": "ACTIVE"})
+    with pytest.raises(AccountMismatchError, match="did not return an account_number"):
+        await resolve_account_id(client, object(), "")  # type: ignore[arg-type]
