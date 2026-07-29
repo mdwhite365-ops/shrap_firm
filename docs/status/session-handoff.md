@@ -125,8 +125,16 @@ them — that is its own card.
    Evaluator spec's Sunday re-evaluation was never built, so a promoted strategy
    can decay silently. This is the missing half of "test them forward and back",
    and with kills already autonomous under ADR-0015 a decayed strategy can be
-   retired without waiting on review.
-4. **Multi-account routing**, once Mike creates the accounts.
+   retired without waiting on review. **ADR-0017 supplies the metric:** realised
+   account growth since deployment over max drawdown since deployment. It needs
+   item 4 first — the score is an account's equity curve, so the firm has to know
+   which account it is looking at. Do not annualise a three-week sample.
+4. **Account identity, then per-strategy account routing** (ADR-0017). Mike can
+   create three $10k Alpaca paper accounts, one strategy each. The blocking item
+   is that `ops.account_snapshots` carries no account column, so with three
+   accounts writing rows the Runner's `ORDER BY at DESC LIMIT 1` returns
+   whichever reported last — every strategy sizing against a random book. Fix
+   identity first, route second.
 5. Then Phase 2/3 of the timeline: intraday data decision, Sweep Detector,
    Hypothesis Generator, Langfuse instrumentation.
 
