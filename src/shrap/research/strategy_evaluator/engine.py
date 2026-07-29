@@ -48,7 +48,33 @@ from shrap.research.strategy_evaluator.strategy import PricePanel, StrategySigna
 
 # Bumped whenever the test protocol changes in a way that makes prior
 # evaluations non-comparable. Stamped onto every persisted evaluation.
-PROTOCOL_VERSION = "0.1"
+#
+# 0.1 -> 0.2 (2026-07-29). Three changes landed together and every one of them
+# alters what a number means, so a 0.1 row and a 0.2 row are not the same
+# measurement even for an identical spec:
+#
+#   #138  The panel aligns on the UNION of session dates, not the intersection.
+#         A universe now grows as names list instead of being truncated to its
+#         youngest member. The first momentum evaluation ran on 506 bars; the
+#         same spec now runs on 1,510 of the same data.
+#   #138  The benchmark weights 1/N over names trading THAT DAY rather than the
+#         full roster, so equal-weight buy-and-hold rebalances as names list.
+#         That is the promote gate: every information ratio on record was
+#         measured against a different benchmark.
+#   #139  `window_years` became a cap rather than a 5-year default, so a run
+#         reads every bar the store holds.
+#
+# This was missed when #138 shipped and caught on the first live dry-run, where
+# a 1,510-bar result printed `protocol=0.1` beside a stored 506-bar one. Nothing
+# had gone wrong yet — the run was a dry run — but committing it would have made
+# the two indistinguishable in `research.evaluations`, which is the single thing
+# this constant exists to prevent.
+#
+# Bumping also resets the trigger's re-evaluation floor: `latest_evaluation_at`
+# keys on (strategy_id, spec_hash, protocol_version), so every strategy is
+# re-asked at once rather than waiting out a cooldown earned under the old
+# protocol. That is intended.
+PROTOCOL_VERSION = "0.2"
 
 DEFAULT_FOLDS = 6
 # A CAP, not a default (Mike's ruling 2026-07-29). `window_years=None` — the
