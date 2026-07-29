@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS trading.paper_order_events (
     redis_stream_id TEXT NOT NULL,
     correlation_id TEXT,
     broker TEXT NOT NULL,
+    account_id TEXT,
     broker_order_id TEXT NOT NULL,
     status TEXT,
     symbol TEXT,
@@ -36,6 +37,18 @@ CREATE TABLE IF NOT EXISTS trading.paper_order_events (
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (event_topic, redis_stream_id)
 )
+""".strip()
+
+# ADR-0017: three broker accounts write to this one table. Reconciliation
+# compares stored orders against ONE account's broker orders, so without this
+# every other account's orders would read as missing-at-the-broker discrepancies.
+#
+# Nullable with no backfill: rows written before accounts existed have no
+# account and none can be invented. Reconciliation matches on it, so they are
+# never compared — correct, because their account is genuinely unknown.
+ALTER_PAPER_ORDER_EVENTS_ADD_ACCOUNT_ID_SQL = """
+ALTER TABLE trading.paper_order_events
+ADD COLUMN IF NOT EXISTS account_id TEXT
 """.strip()
 
 CREATE_PAPER_ORDER_EVENTS_BROKER_ORDER_INDEX_SQL = """
@@ -55,6 +68,7 @@ INSERT INTO trading.paper_order_events (
     redis_stream_id,
     correlation_id,
     broker,
+    account_id,
     broker_order_id,
     status,
     symbol,
@@ -67,7 +81,10 @@ INSERT INTO trading.paper_order_events (
     payload_json,
     occurred_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16)
+VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+    $14::jsonb, $15::jsonb, $16::jsonb, $17
+)
 ON CONFLICT (event_id) DO NOTHING
 """.strip()
 
@@ -92,6 +109,10 @@ class PaperOrderRecord:
     broker_response: dict[str, Any] | None
     payload_json: dict[str, Any]
     occurred_at: object
+    account_id: str | None = None
+    """Broker account this order belongs to (ADR-0017). None for rows written
+    before accounts existed — reconciliation matches on it, so those are never
+    compared, which is correct because their account is genuinely unknown."""
 
 
 class AsyncConnection(Protocol):
@@ -118,6 +139,7 @@ class PostgresPaperOrderSink:
         async with self._pool.acquire() as conn:
             await conn.execute(CREATE_TRADING_SCHEMA_SQL)
             await conn.execute(CREATE_PAPER_ORDER_EVENTS_TABLE_SQL)
+            await conn.execute(ALTER_PAPER_ORDER_EVENTS_ADD_ACCOUNT_ID_SQL)
             await conn.execute(CREATE_PAPER_ORDER_EVENTS_BROKER_ORDER_INDEX_SQL)
             await conn.execute(CREATE_PAPER_ORDER_EVENTS_STATUS_INDEX_SQL)
 
@@ -130,6 +152,7 @@ class PostgresPaperOrderSink:
                 record.redis_stream_id,
                 record.correlation_id,
                 record.broker,
+                record.account_id,
                 record.broker_order_id,
                 record.status,
                 record.symbol,
@@ -157,6 +180,11 @@ def record_from_execution_event(event: ReceivedEvent) -> PaperOrderRecord:
     if payload is None:
         raise ValueError("execution event must carry an inline payload")
     broker = str(payload.get("broker", "alpaca-paper"))
+    # Nullable: events recorded before accounts existed carry none, and no
+    # account can be invented for them. Reconciliation matches on it, so those
+    # rows are simply never compared — which is correct, since their account is
+    # genuinely unknown.
+    account_id = _optional_str(payload.get("account_id")) or None
     broker_order_id = str(payload.get("broker_order_id", "")).strip()
     if not broker_order_id:
         raise ValueError("execution event must include broker_order_id")
@@ -173,6 +201,7 @@ def record_from_execution_event(event: ReceivedEvent) -> PaperOrderRecord:
         redis_stream_id=event.redis_stream_id,
         correlation_id=event.envelope.correlation_id,
         broker=broker,
+        account_id=account_id,
         broker_order_id=broker_order_id,
         status=_optional_str(payload.get("status")),
         symbol=symbol,

@@ -184,11 +184,13 @@ async def test_postgres_order_sink_ensures_schema_and_upserts_record() -> None:
     assert "CREATE TABLE IF NOT EXISTS trading.paper_order_events" in sql_text
     assert "INSERT INTO trading.paper_order_events" in sql_text
     insert_args = pool.conn.executed[-1][1]
-    assert insert_args[:6] == (
+    assert insert_args[:7] == (
         "event-1",
         "execution.order.submitted",
         "1-0",
         "risk-event-1",
         "alpaca-paper",
+        None,  # account_id — unset on a record built without one
         "paper-order-1",
     )
+    assert "ADD COLUMN IF NOT EXISTS account_id" in sql_text

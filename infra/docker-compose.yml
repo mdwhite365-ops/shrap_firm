@@ -444,6 +444,90 @@ services:
       - shrap_net
 
   # -------------------------------------------------------------------------
+  # Execution Agent 1 - second/third paper account (ADR-0017). Same image,
+  # its own credentials, its own consumer group. It discovers which account
+  # its keys open and acts only on intents naming that account.
+  # -------------------------------------------------------------------------
+  execution-agent-1:
+    build:
+      context: ../
+      dockerfile: infra/execution-agent.Dockerfile
+    container_name: shrap_execution_agent_1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      EXECUTION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      # Distinct SERVICE_NAME => distinct consumer group. Without this the
+      # three agents would share one group, each event would go to exactly
+      # ONE of them, and an intent could land on an agent that is not its
+      # account — where it would be skipped and never executed by anyone.
+      EXECUTION_AGENT_SERVICE_NAME: "execution-agent-1"
+      # OPTIONAL. The agent asks the broker which account its credentials open
+      # and uses that, so there is normally nothing to set here — the key pair
+      # already determines the book. Set it only as an assertion: a mismatch
+      # between this and the account the credentials actually open makes the
+      # agent refuse to start, which catches a key/account pairing mistake that
+      # would otherwise route one strategy's orders into another's account.
+      EXECUTION_AGENT_ACCOUNT_ID: "${ALPACA_ACCOUNT_ID1:-}"
+      EXECUTION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY1}"
+      EXECUTION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY1}"
+      EXECUTION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      EXECUTION_AGENT_START_ID: "0-0"
+      EXECUTION_AGENT_COUNT: "100"
+      EXECUTION_AGENT_BLOCK_MS: "5000"
+      EXECUTION_AGENT_RETRY_DELAY_SECONDS: "1.0"
+      EXECUTION_AGENT_STATUS_POLL_INTERVAL_SECONDS: "5.0"
+      EXECUTION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Execution Agent 2 - second/third paper account (ADR-0017). Same image,
+  # its own credentials, its own consumer group. It discovers which account
+  # its keys open and acts only on intents naming that account.
+  # -------------------------------------------------------------------------
+  execution-agent-2:
+    build:
+      context: ../
+      dockerfile: infra/execution-agent.Dockerfile
+    container_name: shrap_execution_agent_2
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      EXECUTION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      # Distinct SERVICE_NAME => distinct consumer group. Without this the
+      # three agents would share one group, each event would go to exactly
+      # ONE of them, and an intent could land on an agent that is not its
+      # account — where it would be skipped and never executed by anyone.
+      EXECUTION_AGENT_SERVICE_NAME: "execution-agent-2"
+      # OPTIONAL. The agent asks the broker which account its credentials open
+      # and uses that, so there is normally nothing to set here — the key pair
+      # already determines the book. Set it only as an assertion: a mismatch
+      # between this and the account the credentials actually open makes the
+      # agent refuse to start, which catches a key/account pairing mistake that
+      # would otherwise route one strategy's orders into another's account.
+      EXECUTION_AGENT_ACCOUNT_ID: "${ALPACA_ACCOUNT_ID2:-}"
+      EXECUTION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY2}"
+      EXECUTION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY2}"
+      EXECUTION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      EXECUTION_AGENT_START_ID: "0-0"
+      EXECUTION_AGENT_COUNT: "100"
+      EXECUTION_AGENT_BLOCK_MS: "5000"
+      EXECUTION_AGENT_RETRY_DELAY_SECONDS: "1.0"
+      EXECUTION_AGENT_STATUS_POLL_INTERVAL_SECONDS: "5.0"
+      EXECUTION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
   # Paper Order Store - persists paper execution submitted/status/fill events
   # into trading.paper_order_events. It is append-only; reconciliation and
   # current position derivation are intentionally later cards.
@@ -490,6 +574,68 @@ services:
       RECONCILIATION_AGENT_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
       RECONCILIATION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY}"
       RECONCILIATION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      RECONCILIATION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      RECONCILIATION_AGENT_INTERVAL_SECONDS: "300"
+      RECONCILIATION_AGENT_RETRY_DELAY_SECONDS: "30"
+      RECONCILIATION_AGENT_LOOKBACK_DAYS: "${RECONCILIATION_AGENT_LOOKBACK_DAYS:-7}"
+      RECONCILIATION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+  # -------------------------------------------------------------------------
+  # Reconciliation Agent 1 - second/third paper account (ADR-0017). Writes
+  # ops.account_snapshots stamped with the account its own keys open, and
+  # compares only that account's stored orders.
+  # -------------------------------------------------------------------------
+  reconciliation-agent-1:
+    build:
+      context: ../
+      dockerfile: infra/reconciliation-agent.Dockerfile
+    container_name: shrap_reconciliation_agent_1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RECONCILIATION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      RECONCILIATION_AGENT_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      RECONCILIATION_AGENT_SERVICE_NAME: "reconciliation-agent-1"
+      RECONCILIATION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY1}"
+      RECONCILIATION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY1}"
+      RECONCILIATION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      RECONCILIATION_AGENT_INTERVAL_SECONDS: "300"
+      RECONCILIATION_AGENT_RETRY_DELAY_SECONDS: "30"
+      RECONCILIATION_AGENT_LOOKBACK_DAYS: "${RECONCILIATION_AGENT_LOOKBACK_DAYS:-7}"
+      RECONCILIATION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+  # -------------------------------------------------------------------------
+  # Reconciliation Agent 2 - second/third paper account (ADR-0017). Writes
+  # ops.account_snapshots stamped with the account its own keys open, and
+  # compares only that account's stored orders.
+  # -------------------------------------------------------------------------
+  reconciliation-agent-2:
+    build:
+      context: ../
+      dockerfile: infra/reconciliation-agent.Dockerfile
+    container_name: shrap_reconciliation_agent_2
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RECONCILIATION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      RECONCILIATION_AGENT_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      RECONCILIATION_AGENT_SERVICE_NAME: "reconciliation-agent-2"
+      RECONCILIATION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY2}"
+      RECONCILIATION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY2}"
       RECONCILIATION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
       RECONCILIATION_AGENT_INTERVAL_SECONDS: "300"
       RECONCILIATION_AGENT_RETRY_DELAY_SECONDS: "30"

@@ -147,12 +147,14 @@ class FakeRepository:
     def __init__(self, states: list[StoredOrderState]) -> None:
         self._states = states
         self.requested_brokers: list[str] = []
+        self.requested_accounts: list[str] = []
         self.requested_since: list[object | None] = []
 
     async def latest_order_states(
-        self, broker: str, since: object | None = None
+        self, broker: str, account_id: str, since: object | None = None
     ) -> list[StoredOrderState]:
         self.requested_brokers.append(broker)
+        self.requested_accounts.append(account_id)
         self.requested_since.append(since)
         return self._states
 
@@ -174,6 +176,7 @@ async def test_reconcile_once_publishes_account_summary_and_records_snapshot() -
     broker_reader = FakeBrokerReader(
         account={
             "status": "ACTIVE",
+            "account_number": "PA3RECON",
             "currency": "USD",
             "cash": "99883.42",
             "equity": "100011.58",
@@ -194,6 +197,9 @@ async def test_reconcile_once_publishes_account_summary_and_records_snapshot() -
 
     envelope = Envelope.from_redis_fields(normalize_redis_fields(redis.calls[-1][1]))
     assert envelope.payload is not None
+    # The account *summary* keeps its fixed key set; the account id travels as a
+    # top-level field so a reader can see which book the pass covered.
+    assert envelope.payload["account_id"] == "PA3RECON"
     assert envelope.payload["account"] == {
         "status": "ACTIVE",
         "currency": "USD",
@@ -305,7 +311,7 @@ async def test_reconcile_once_clean_pass_publishes_completed_only() -> None:
 
     redis = FakeRedis()
     broker_reader = FakeBrokerReader(
-        account={"status": "ACTIVE"},
+        account={"status": "ACTIVE", "account_number": "PA3RECON"},
         orders=[_broker("order-1")],
     )
     repository = FakeRepository([_stored("order-1")])
@@ -322,6 +328,7 @@ async def test_reconcile_once_clean_pass_publishes_completed_only() -> None:
     envelope = Envelope.from_redis_fields(normalize_redis_fields(redis.calls[0][1]))
     assert envelope.payload == {
         "broker": "alpaca-paper",
+        "account_id": "PA3RECON",
         "account_status": "ACTIVE",
         "account": {
             "status": "ACTIVE",
@@ -352,7 +359,7 @@ async def test_reconcile_once_publishes_discrepancy_events_before_completed() ->
 
     redis = FakeRedis()
     broker_reader = FakeBrokerReader(
-        account={"status": "ACTIVE"},
+        account={"status": "ACTIVE", "account_number": "PA3RECON"},
         orders=[_broker("order-1", status="filled"), _broker("order-2", status="accepted")],
     )
     repository = FakeRepository([_stored("order-1", status="accepted")])
@@ -396,7 +403,9 @@ async def test_reconcile_once_lookback_passes_cutoff_to_both_sides() -> None:
     from shrap.agents.operations.reconciliation_agent.agent import reconcile_once
 
     redis = FakeRedis()
-    broker_reader = FakeBrokerReader(account={"status": "ACTIVE"}, orders=[])
+    broker_reader = FakeBrokerReader(
+        account={"status": "ACTIVE", "account_number": "PA3RECON"}, orders=[]
+    )
     repository = FakeRepository([])
 
     await reconcile_once(
@@ -496,9 +505,9 @@ async def test_postgres_repository_maps_rows_to_stored_states() -> None:
 
     repository = PostgresOrderEventRepository(FakePool())
 
-    states = await repository.latest_order_states("alpaca-paper")
+    states = await repository.latest_order_states("alpaca-paper", "PA3RECON")
 
-    assert conn.queries == [(SELECT_LATEST_ORDER_STATES_SQL, ("alpaca-paper",))]
+    assert conn.queries == [(SELECT_LATEST_ORDER_STATES_SQL, ("alpaca-paper", "PA3RECON"))]
     assert states == [
         StoredOrderState(
             broker="alpaca-paper",
@@ -578,3 +587,68 @@ async def test_alpaca_snapshot_reader_maps_orders_and_rejects_missing_ids() -> N
     )
     with pytest.raises(ValueError, match="missing an order id"):
         await bad_reader.list_orders()
+
+
+# --- account scoping (ADR-0017) -----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_comparison_is_scoped_to_this_agent_s_account() -> None:
+    """THE defect this card fixes.
+
+    Three accounts write to one `trading.paper_order_events` table under
+    broker='alpaca-paper'. A broker-only query would compare THIS account's
+    broker orders against ALL THREE accounts' stored orders, so every order the
+    other two placed would be reported as missing-at-broker — on every pass,
+    forever.
+    """
+
+    from shrap.agents.operations.reconciliation_agent.agent import reconcile_once
+
+    repository = FakeRepository([])
+    await reconcile_once(
+        broker_reader=FakeBrokerReader(
+            account={"status": "ACTIVE", "account_number": "PA3RECON"}, orders=[]
+        ),
+        repository=repository,
+        publisher=EventPublisher(FakeRedis()),
+    )
+
+    assert repository.requested_accounts == ["PA3RECON"]
+
+
+@pytest.mark.asyncio
+async def test_the_account_is_derived_from_the_broker_not_configured() -> None:
+    """Same reasoning as the Execution Agent: the credential opens exactly one
+    book, so asking the broker removes the transcription step entirely."""
+
+    from shrap.agents.operations.reconciliation_agent.agent import reconcile_once
+
+    repository = FakeRepository([])
+    await reconcile_once(
+        broker_reader=FakeBrokerReader(
+            account={"status": "ACTIVE", "account_number": "PA3DERIVED"}, orders=[]
+        ),
+        repository=repository,
+        publisher=EventPublisher(FakeRedis()),
+    )
+
+    assert repository.requested_accounts == ["PA3DERIVED"]
+
+
+@pytest.mark.asyncio
+async def test_a_pass_with_no_broker_account_id_refuses_rather_than_comparing() -> None:
+    """Without an account there is nothing to scope to, and an unscoped
+    comparison manufactures a discrepancy for every other account's order."""
+
+    from shrap.agents.operations.reconciliation_agent.agent import reconcile_once
+    from shrap.agents.operations.reconciliation_agent.db import UnidentifiedAccountError
+
+    redis = FakeRedis()
+    with pytest.raises(UnidentifiedAccountError, match="which account's orders"):
+        await reconcile_once(
+            broker_reader=FakeBrokerReader(account={"status": "ACTIVE"}, orders=[]),
+            repository=FakeRepository([]),
+            publisher=EventPublisher(redis),
+        )
+    assert redis.calls == []  # nothing published on a refused pass

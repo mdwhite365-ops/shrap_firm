@@ -140,10 +140,16 @@ them — that is its own card.
    Unset refuses every pass — deliberately, since the alternative is sizing
    against whichever account reported last.
 
-5. **Per-strategy account routing** (ADR-0017). One runner currently serves one
-   account. Three accounts, one strategy each, needs a strategy → account
-   assignment and either three runner instances or an account-aware one.
-   Execution and Reconciliation still hold a single `alpaca_api_key` apiece.
+5. ~~**Per-strategy account routing**~~ **Done** (ADR-0017, cards A–D). Strategy
+   → account assignment (`shrap-strategy-stage assign-account`), an
+   account-aware Runner sizing each strategy against its own book, the account
+   carried on signals/intents so each Execution Agent claims only its own, and
+   three of each broker-facing agent in compose.
+
+   **Deploy order on the Dell matters.** Bring up the reconciliation agents
+   first: they write `ops.account_snapshots` stamped with the account their keys
+   open, and the Runner refuses to size an account with no snapshot. Then assign
+   each strategy an account, then the execution agents.
 6. Then, stocks first (ADR-0016 sequence, Mike 2026-07-29 — futures and crypto
    later): intraday bars, a Runner that fires more than once a session, and the
    intraday equities path. Futures/crypto cards stay parked.

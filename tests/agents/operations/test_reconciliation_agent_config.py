@@ -117,7 +117,7 @@ class FakeRedis:
 
 class FakeBrokerReader:
     async def get_account(self) -> dict[str, Any]:
-        return {"status": "ACTIVE"}
+        return {"status": "ACTIVE", "account_number": "PA3RECON"}
 
     async def list_orders(self, since: str | None = None) -> list[BrokerOrderState]:
         return []
@@ -125,7 +125,7 @@ class FakeBrokerReader:
 
 class FakeRepository:
     async def latest_order_states(
-        self, broker: str, since: object | None = None
+        self, broker: str, account_id: str, since: object | None = None
     ) -> list[StoredOrderState]:
         return []
 
@@ -170,7 +170,7 @@ async def test_run_loop_survives_a_failing_pass() -> None:
             attempts += 1
             if attempts == 1:
                 raise RuntimeError("broker unreachable")
-            return {"status": "ACTIVE"}
+            return {"status": "ACTIVE", "account_number": "PA3RECON"}
 
         async def list_orders(self, since: str | None = None) -> list[BrokerOrderState]:
             return []
