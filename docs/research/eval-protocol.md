@@ -1,9 +1,9 @@
 # Strategy Evaluator — Test Protocol
 
-**Version:** 0.1 (draft)
+**Version:** 0.2 (draft)
 **Date:** 2026-07-26
 **Owner:** Mike White
-**Status:** Draft — versioned; `PROTOCOL_VERSION = "0.1"`
+**Status:** Draft — versioned; `PROTOCOL_VERSION = "0.2"`
 **Serves:** `docs/agents/research/strategy-evaluator.md` (the spec references this
 file as the authoritative test protocol).
 
@@ -381,4 +381,16 @@ silent decisions:
 
 ---
 
-*End of protocol v0.1.*
+## Version history
+
+- **0.2 (2026-07-29)** — the panel aligns on the union of session dates rather
+  than the intersection, so a universe grows as names list (#138); the benchmark
+  weights `1/N` over names trading that day rather than the full roster, which
+  changes the promote gate itself (#138); `window_years` became a cap rather
+  than a five-year default (#139). A 0.1 result and a 0.2 result are not the
+  same measurement even for an identical spec — the first momentum evaluation
+  ran on 506 bars and the same spec now runs on 1,510 of the same data.
+- **0.1** — the first card's protocol: intersected panel, full-roster
+  benchmark, five-year default lookback.
+
+*End of protocol v0.2.*
