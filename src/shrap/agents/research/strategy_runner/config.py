@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shrap.research.strategy_runner.engine import (
     DEFAULT_CONFIDENCE,
+    DEFAULT_MAX_GROSS_EXPOSURE,
     DEFAULT_MAX_QUANTITY,
     RunnerSignalConfig,
 )
@@ -41,6 +42,12 @@ class Settings(BaseSettings):
     max_quantity: int = DEFAULT_MAX_QUANTITY
     confidence: float = DEFAULT_CONFIDENCE
 
+    # Firm-wide exposure budget as a multiple of equity, split equally across
+    # active strategies. 1.0 = fully invested, unlevered. Raising this above 1.0
+    # levers the whole book and should wait for drawdown/loss limits and an
+    # intraday-margin-deficit model (ADR-0016).
+    max_gross_exposure: float = DEFAULT_MAX_GROSS_EXPOSURE
+
     # Bar read + price adjustment (matches the Evaluator's default mode).
     adjustment: str = "all"
     lookback_buffer_days: int = 10
@@ -54,7 +61,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     def signal_config(self) -> RunnerSignalConfig:
-        return RunnerSignalConfig(max_quantity=self.max_quantity, confidence=self.confidence)
+        return RunnerSignalConfig(
+            max_quantity=self.max_quantity,
+            confidence=self.confidence,
+            max_gross_exposure=self.max_gross_exposure,
+        )
 
     def redacted(self) -> dict[str, object]:
         """Return a log-safe settings snapshot (never the DSN's credentials)."""
@@ -65,6 +76,7 @@ class Settings(BaseSettings):
             "redis_url": self.redis_url,
             "postgres_dsn": "***",
             "max_quantity": self.max_quantity,
+            "max_gross_exposure": self.max_gross_exposure,
             "confidence": self.confidence,
             "adjustment": self.adjustment,
             "lookback_buffer_days": self.lookback_buffer_days,
