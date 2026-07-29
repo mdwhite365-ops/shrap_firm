@@ -85,12 +85,12 @@ so the order path does not hit Postgres per order.
   so recovery is re-checked on the next order.
 - **Enabled: Tier 3 is the authoritative universe gate (Mike's 2026-07-24
   ruling).** When enforcement is on, Tier 3 membership is the binding universe
-  gate and the static `allowed_universe` allowlist — a Month-1 stub loaded
-  from `PRE_TRADE_CHECKER_ALLOWED_UNIVERSE` — is no longer enforced: the base
+  gate and the static `allowed_universe` allowlist — which defaults to the
+  50-name launch list, *imported* from `launch_list.py` rather than copied into
+  an env var so it cannot drift — is no longer enforced: the base
   `check()` skips its `TICKER_NOT_IN_UNIVERSE` rejection and delegates
   eligibility entirely to the Tier 3 gate. Without this, only the
-  allowlist ∩ Tier 3 intersection would be tradeable, so the 50-name Tier 3
-  set could never trade past the 6-name Month-1 stub. The service couples the
+  allowlist ∩ Tier 3 intersection would be tradeable. The service couples the
   two to a single flag in `run()` (`couple_universe_gate` sets
   `RiskPolicy.universe_check_enabled = not tier3_enforcement`): the static
   allowlist is disabled if and only if the Tier 3 gate is active, so there is
@@ -125,7 +125,9 @@ The pure-function check has no persistence needs. Stream offsets persist in the 
 
 - Month 1 Card 3: Wire-only event-loop wrapper around the existing pure-function `PreTradeChecker`; publish approved/vetoed events with correlation and tests proving the signal-to-risk path.
 - Tier 3 membership check (ADR-0012): shipped flag-gated and **off by default**; flipping `PRE_TRADE_CHECKER_TIER3_ENFORCEMENT=true` waits on the Universe Curator's first implementation card populating `research.universe_tiers` (post DQ-004 lock-in). While off, the env-var `allowed_universe` remains the only ticker filter; once on, Tier 3 membership supersedes it as the authoritative universe gate (see the Tier 3 membership rule).
+- Limits raised for the $10,000 aggressive paper book (Mike's ruling, `docs/status/session-handoff.md`): `max_quantity_per_order` 1 → **100**, `max_orders_per_day` 10 → **80**, and the default allowlist from 6 smoke names to the **50-name launch list**. This was gated on notional sizing landing first (#117) — raising the share cap while the Runner emitted a fixed quantity would have sent *N shares of everything*, as disconnected from a strategy's weights as one share was.
 - Future cards: Position correlation, exposure limits, kill-switch state, daily-loss limits, execution handoff, and persistent risk decision tables.
+- **A notional per-order cap.** The share cap is a weak backstop: 100 shares of a $700 name is $70,000, seven times the account. What makes that safe today is the Runner sizing to a target weight, plus the broker rejecting an order beyond buying power — not this gate. A dollar cap would be the real control, and it needs a price on the intent, which market orders do not carry. Its own card.
 
 ## Deployability
 

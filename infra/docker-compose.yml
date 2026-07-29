@@ -373,10 +373,20 @@ services:
       - .env
     environment:
       PRE_TRADE_CHECKER_REDIS_URL: "redis://redis:6379/0"
-      PRE_TRADE_CHECKER_ALLOWED_UNIVERSE: "${PRE_TRADE_CHECKER_ALLOWED_UNIVERSE:-AAPL,NVDA,QQQ,SPY,TSLA,LMT}"
-      PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER: "${PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER:-1}"
+      # PRE_TRADE_CHECKER_ALLOWED_UNIVERSE is deliberately NOT pinned here. The
+      # default is the 50-name launch list, imported from launch_list.py so it
+      # cannot drift from the universe strategies are evaluated against; set it
+      # in .env to override. Pinning "${VAR:-}" would set the variable to an
+      # EMPTY STRING when unset, which is an empty allowlist — every order
+      # vetoed — and would also override .env.
+      # Ignored entirely once TIER3_ENFORCEMENT is on (Tier 3 becomes
+      # authoritative), which is the intended end state.
+      #
+      # Must equal STRATEGY_RUNNER_MAX_QUANTITY — the checker clamps rather than
+      # vetoes, so a larger Runner cap records an intent bigger than the fill.
+      PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER: "${PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER:-100}"
       PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE: "${PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE:-false}"
-      PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY: "${PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY:-10}"
+      PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY: "${PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY:-80}"
       PRE_TRADE_CHECKER_SYMBOL_COOLDOWN_SECONDS: "${PRE_TRADE_CHECKER_SYMBOL_COOLDOWN_SECONDS:-300}"
       # Tier 3 membership enforcement (ADR-0012). Default off until the
       # Universe Curator's first card populates research.universe_tiers and
@@ -590,10 +600,10 @@ services:
       STRATEGY_RUNNER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
       STRATEGY_RUNNER_START_ID: "$$"
       STRATEGY_RUNNER_CONFIDENCE: "0.75"
-      # Must equal PRE_TRADE_MAX_QUANTITY_PER_ORDER — the checker clamps rather
-      # than vetoes, so a larger value here records an intent bigger than the
-      # fill and the later exit would oversell. Raise both together.
-      STRATEGY_RUNNER_MAX_QUANTITY: "1"
+      # Must equal PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER — the checker clamps
+      # rather than vetoes, so a larger value here records an intent bigger than
+      # the fill and the later exit would oversell. Raise both together.
+      STRATEGY_RUNNER_MAX_QUANTITY: "${PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER:-100}"
       STRATEGY_RUNNER_ADJUSTMENT: "all"
       STRATEGY_RUNNER_COUNT: "100"
       STRATEGY_RUNNER_BLOCK_MS: "5000"

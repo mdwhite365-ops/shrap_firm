@@ -33,9 +33,9 @@ def test_settings_redacted_output_is_log_safe() -> None:
         "instance_id": settings.instance_id,
         "redis_url": "redis://redis:6379/0",
         "allowed_universe": ["AAPL", "SPY"],
-        "max_quantity_per_order": 1,
+        "max_quantity_per_order": 100,
         "kill_switch_active": False,
-        "max_orders_per_day": 10,
+        "max_orders_per_day": 80,
         "symbol_cooldown_seconds": 300,
         "tier3_enforcement": False,
         "postgres_dsn": "***",
@@ -46,6 +46,53 @@ def test_settings_redacted_output_is_log_safe() -> None:
         "retry_delay_seconds": 1.0,
         "log_level": "INFO",
     }
+
+
+# --- the $10k aggressive book (Mike's ruling, docs/status/session-handoff.md) --
+
+
+def test_the_default_universe_is_the_launch_list_not_a_copy_of_it() -> None:
+    """A copied ticker list is free to drift from the universe strategies are
+    evaluated against. This one is imported, so it cannot."""
+
+    from shrap.agents.risk_compliance.pre_trade_checker.config import Settings
+    from shrap.research.universe_curator.launch_list import LAUNCH_LIST
+
+    assert Settings().allowed_universe_set() == {name.ticker for name in LAUNCH_LIST}
+    assert len(LAUNCH_LIST) == 50
+
+
+def test_compose_does_not_pin_the_allowlist_to_an_empty_string() -> None:
+    """`VAR: "${VAR:-}"` sets the variable to an EMPTY STRING when unset, which
+    is an empty allowlist — every order vetoed — and overrides .env besides.
+
+    The variable must stay absent from `environment:` so the imported default
+    applies and .env can still override it.
+    """
+
+    compose = Path("infra/docker-compose.yml").read_text()
+    assert 'PRE_TRADE_CHECKER_ALLOWED_UNIVERSE: "' not in compose
+
+
+def test_the_two_per_order_caps_cannot_diverge_in_compose() -> None:
+    """Both services read the *same* env var, so a raise applies to both or
+    neither. A comment asking two numbers to stay equal is not a mechanism."""
+
+    compose = Path("infra/docker-compose.yml").read_text()
+    assert (
+        'STRATEGY_RUNNER_MAX_QUANTITY: "${PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER:-100}"'
+        in compose
+    )
+
+
+def test_the_daily_cap_covers_entering_the_whole_universe() -> None:
+    """A 50-name universe entered from flat is 50 approvals. A cap below that
+    would silently truncate a strategy's first session partway through."""
+
+    from shrap.agents.risk_compliance.pre_trade_checker.config import Settings
+    from shrap.research.universe_curator.launch_list import LAUNCH_LIST
+
+    assert Settings().max_orders_per_day > len(LAUNCH_LIST)
 
 
 def test_console_script_is_registered() -> None:
