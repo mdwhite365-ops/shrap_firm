@@ -27,15 +27,20 @@ ADR-0015's kill-asymmetric autonomy · CI on every push · the full-firm audit �
 rules · the momentum seed · **notional sizing, arithmetic and wiring**.
 
 **The scope changed on 2026-07-29.** ADR-0016 commits the firm to three asset
-classes operating continuously, because FINRA's pattern-day-trader rule makes an
-intraday $10k US-equity account impossible — the target and the instrument set
-turned out to be one decision. Read ADR-0016 before planning anything in Phase 2
-Track B; several items below were scoped for an equities-only firm.
+classes — equities, MES futures, spot crypto — operating continuously. Read it
+before planning anything in Phase 2 Track B; several items below were scoped for
+an equities-only, daily-bar firm.
+
+**And a regulatory correction changed the order.** FINRA's PDT rule was
+eliminated effective 2026-06-04, so intraday equity trading at $10k is available
+now. What replaced it — continuous intraday margin requirements — is a Risk
+Officer problem that applies immediately, because margin is reachable today and
+the firm has no leverage bound in code.
 
 **Next, in order:** forward-test scoring (nothing evaluates a strategy *after*
-promotion — more urgent under ADR-0016, not less) → per-venue calendars (2.7) →
-non-session-keyed Runner idempotency (2.8) → spot crypto (2.9). Risk Officer
-limits (2.10) must land before MES, not alongside it.
+promotion — more urgent under ADR-0016, not less) → Risk Officer limits (2.7,
+now a live exposure rather than a futures prerequisite) → intraday bars (2.8) →
+Runner firing intraday (2.9) → intraday equities (2.10).
 
 ---
 
@@ -125,16 +130,28 @@ what unblocks fastest, not by importance.
 futures were a long-run intent. They are now a decision: **ADR-0016 commits the
 firm to US equities + MES futures + spot crypto, operating continuously.**
 
-The forcing constraint is regulatory, not strategic. FINRA's pattern-day-trader
-rule caps a margin account under $25,000 at three day trades per five rolling
-business days, so **a $10k US-equity account cannot trade intraday at all** in
-any meaningful sense. Futures and spot crypto are not PDT-bound. That is why the
-target and the instrument set are now the same decision.
+**A regulatory correction reshaped this on 2026-07-29.** FINRA's
+pattern-day-trader rule — the $25,000 minimum and day-trade counting — was
+**eliminated effective 2026-06-04** (SEC approval 2026-04-14; FINRA Notice
+26-10). Margin now needs $2,000 minimum equity. **Intraday equity trading at
+$10k is legal and available today**, and has been for seven weeks.
 
-**Sequence, per ADR-0016:** spot crypto first (only true 24/7, existing broker,
-no PDT, stays under the ADR-0003 gate, and forces every architectural change the
-others need) → MES behind the NautilusTrader validation card *and* a Risk Officer
-leverage bound → extended/overnight equities once broker capability is verified.
+What replaced PDT matters more: **intraday margin requirements**, a continuous
+position-based constraint (25% maintenance margin held through the day, an
+intraday-margin-deficit calculation, and a 90-day new-position freeze after a
+pattern of unmet deficits). That is a Risk Officer requirement, and it applies
+now — margin is already reachable by a $10k account with no leverage bound
+anywhere in the code.
+
+**Sequence, per ADR-0016:** intraday equities first (reuses broker, universe,
+Tier 3, strategies and Evaluator; needs only intraday bars and a Runner that can
+fire more than once a session) → spot crypto (the genuine 24/7 piece; forces
+per-venue calendars) → MES behind the NautilusTrader validation card *and* Risk
+Officer bounds → extended/overnight equities once broker capability is verified.
+
+**Frequency is a capability, not a quota** (Mike, 2026-07-29). Nothing here
+targets a trade count; "no signal today" is a correct outcome, and turnover
+stays a cost in the Evaluator rather than a virtue.
 
 **Item 2.3 below is now decided in principle:** the intraday data question is no
 longer "which equities feed" but "three ingest paths — crypto, futures,
@@ -163,15 +180,21 @@ chains are worth weighing now even though neither is bought now.
 
 ### New cards created by ADR-0016
 
+Reordered after the PDT correction: intraday equities moved from blocked to
+first, and the Risk Officer moved from "before MES" to "before margin", which is
+now.
+
 | # | Item | Depends on | Note |
 |---|---|---|---|
-| 2.7 | **Per-venue market calendars** | — | `operations/market_phase.py` computes XNYS phases from one calendar. Crypto has no `open`; MES runs Sun 18:00 → Fri 17:00 ET with a daily halt. Blocks everything else here. |
-| 2.8 | **Non-session-keyed Runner idempotency** | 2.7 | The guard is `(strategy_id, session_date)` and the pass fires once, on `open`. Neither survives a continuous market. |
-| 2.9 | **Spot crypto ingest + trading path** | 2.7, 2.8 | First asset under ADR-0016. Bar polling, not streaming, keeps it under the ADR-0003 gate. **Verify broker crypto availability in paper before scoping.** |
-| 2.10 | **Risk Officer: leverage, drawdown and per-strategy loss limits** | — | Today the firm has none of the three. MES supplies leverage by construction, so this must land *before* futures, not alongside. |
-| 2.11 | **NautilusTrader bridge-coverage validation** | 2.10 | The ADR-0003 gate card. Prerequisite for MES; verify Alpaca **and** IBKR adapter event coverage against the by-then consumer inventory. |
-| 2.12 | **Contract-based sizing** | 2.11 | `shares = notional / price` does not describe a futures contract. One MES ≈ $5 × index ≈ $32k notional on a $10k account. |
-| 2.13 | **MES futures path** | 2.11, 2.12 | The step that can end the account in a day. It should not also be the step debuting new plumbing. |
+| 2.7 | **Risk Officer: leverage, drawdown, per-strategy loss limits, and an intraday-margin-deficit model** | — | The firm has none of these. Margin is reachable by a $10k account *today* (post-2026-06-04, $2,000 minimum), so this is a live exposure, not a futures prerequisite. The 90-day new-position freeze after a pattern of unmet deficits is the specific failure an autonomous agent can repeat without tiring. |
+| 2.8 | **Intraday bars ingest** | — | Second price path. `market_data.daily_bars` cannot express a fast loop at any parameterisation. Scope bar size and feed against ADR-0016's three asset classes, not equities alone. |
+| 2.9 | **Runner fires more than once per session** | 2.8 | The pass triggers on entry to `open` and the guard is `(strategy_id, session_date)`. Both are daily-bar assumptions. Note this is *capability*: a strategy that declines to act intraday stays correct and must stay cheap. |
+| 2.10 | **Intraday equities path** | 2.7, 2.8, 2.9 | First asset under ADR-0016 and the cheapest — reuses the broker, the 50-name universe, Tier 3, the strategies and the Evaluator. No new calendar; no ADR-0003 gate if bars are polled rather than streamed. |
+| 2.11 | **Per-venue market calendars** | — | `operations/market_phase.py` computes XNYS phases from one calendar. Crypto has no `open` at all; MES runs Sun 18:00 → Fri 17:00 ET with a daily halt. Blocks crypto and MES, not intraday equities. |
+| 2.12 | **Spot crypto ingest + trading path** | 2.9, 2.11 | The genuinely 24/7 asset. Existing broker, no new gate with bar polling. **Verify broker crypto availability in paper before scoping.** |
+| 2.13 | **NautilusTrader bridge-coverage validation** | 2.7 | The ADR-0003 gate card. Prerequisite for MES; verify Alpaca **and** IBKR adapter event coverage against the by-then consumer inventory. |
+| 2.14 | **Contract-based sizing** | 2.13 | `shares = notional / price` does not describe a futures contract. One MES ≈ $5 × index ≈ $32k notional on a $10k account. |
+| 2.15 | **MES futures path** | 2.13, 2.14 | The step that can end the account in a day. It must not also be the step debuting new plumbing. |
 
 ---
 
