@@ -336,8 +336,30 @@ class EvaluationOutcome:
             f"[{self.from_stage} -> {self.to_stage or self.from_stage}] "
             f"anchor={self.anchor_state} engine_ran={self.engine_ran} "
             f"trades={self.total_trades} sharpe={self.base_sharpe:.3f} "
-            f"stress_sharpe={self.stress_sharpe:.3f} protocol={self.protocol_version}"
+            f"stress_sharpe={self.stress_sharpe:.3f} ir={self.reported_ir} "
+            f"protocol={self.protocol_version}"
         )
+
+    @property
+    def reported_ir(self) -> str:
+        """Information ratio vs the benchmark, or ``n/a`` when it was not computed.
+
+        The single number the promote gate turns on, and it was computed and then
+        not shown. Reading the first real verdict — sharpe 0.797, hold on the
+        sharpe floor — the interesting question was *did it beat equal-weight
+        buy-and-hold*, and the only way to answer it was to reason backwards from
+        gate ordering: ``no-active-edge`` fires before ``below-sharpe-floor``, so
+        surviving to the latter proves IR > 0. That is a correct inference and a
+        ridiculous way to read a number the run already had.
+
+        ``n/a`` rather than ``0.000`` when absent: a missing benchmark and a
+        benchmark the strategy exactly matched are different facts.
+        """
+
+        raw = self.active_metrics.get("information_ratio")
+        if raw is None:
+            return "n/a"
+        return f"{float(raw):.3f}"
 
     @property
     def anchor_state(self) -> str:
