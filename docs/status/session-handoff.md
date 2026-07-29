@@ -146,10 +146,9 @@ them — that is its own card.
    carried on signals/intents so each Execution Agent claims only its own, and
    three of each broker-facing agent in compose.
 
-   **Deploy order on the Dell matters.** Bring up the reconciliation agents
-   first: they write `ops.account_snapshots` stamped with the account their keys
-   open, and the Runner refuses to size an account with no snapshot. Then assign
-   each strategy an account, then the execution agents.
+   **Deploying it: `docs/runbooks/bringing-up-three-accounts.md`.** Order
+   matters — reconcilers first (they write the snapshots the Runner needs), then
+   assign each strategy an account, then the execution agents.
 6. Then, stocks first (ADR-0016 sequence, Mike 2026-07-29 — futures and crypto
    later): intraday bars, a Runner that fires more than once a session, and the
    intraday equities path. Futures/crypto cards stay parked.
