@@ -27,11 +27,16 @@ Fail-safe: a single bad strategy (missing bars, bad spec, factory error) is
 skipped by the planner with a logged reason; it never crashes the loop and
 never emits a partial signal.
 
-Sizing: each pass reads account equity from ``ops.account_snapshots`` (written by
-the Reconciliation Agent) and converts every entry's target weight into a share
-count. Unusable equity — missing or stale — refuses the *whole pass* rather than
-falling back to a fixed size, and the phase event is left un-acked so the pass
-retries once a fresh snapshot lands.
+Sizing: each pass reads equity for **its own account** from
+``ops.account_snapshots`` (written by the Reconciliation Agent) and converts every
+entry's target weight into a share count. Unusable equity — missing, stale, or
+belonging to no configured account — refuses the *whole pass* rather than falling
+back, and the phase event is left un-acked so the pass retries once a fresh
+snapshot lands.
+
+``account_id`` is required. ADR-0017 gives each strategy its own broker account,
+and an unscoped read returns whichever account reported most recently: a
+plausible number from the wrong book, which is the worst kind of wrong.
 """
 
 from __future__ import annotations
@@ -128,7 +133,7 @@ class BarReader(Protocol):
 class StateStore(Protocol):
     async def read_state(self) -> dict[tuple[str, str], TargetState]: ...
 
-    async def latest_equity(self) -> tuple[float | None, datetime | None]: ...
+    async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]: ...
 
     async def upsert(self, write: PlannedStateWrite) -> None: ...
 
@@ -205,6 +210,7 @@ async def run_pass(
     adjustment: str,
     lookback_buffer_days: int,
     lookback_max_days: int,
+    account_id: str,
     produced_by: str = PRODUCED_BY,
 ) -> int:
     """Run one evaluation pass for ``session_date``; returns signals emitted.
@@ -222,7 +228,13 @@ async def run_pass(
     # unusable snapshot must stop the pass before any signal is planned.
     # SizingRefused propagates — the caller leaves the phase event un-acked and
     # the pass retries once the Reconciliation Agent writes a fresh snapshot.
-    raw_equity, observed_at = await state_store.latest_equity()
+    if not account_id:
+        raise SizingRefused(
+            "no account configured (STRATEGY_RUNNER_ACCOUNT_ID is unset), so there "
+            "is no book to size against. Refusing rather than picking whichever "
+            "account reported most recently."
+        )
+    raw_equity, observed_at = await state_store.latest_equity(account_id)
     equity = assert_equity_usable(raw_equity, observed_at, datetime.now(UTC))
 
     stored_state = await state_store.read_state()
@@ -307,6 +319,7 @@ async def poll_once(
     adjustment: str,
     lookback_buffer_days: int,
     lookback_max_days: int,
+    account_id: str,
     count: int,
     block_ms: int,
     retry_delay_seconds: float = 0.0,
@@ -351,6 +364,7 @@ async def poll_once(
                 adjustment=adjustment,
                 lookback_buffer_days=lookback_buffer_days,
                 lookback_max_days=lookback_max_days,
+                account_id=account_id,
                 produced_by=produced_by,
             )
             await subscriber.ack(event)
@@ -409,6 +423,7 @@ async def run_loop(
     adjustment: str,
     lookback_buffer_days: int,
     lookback_max_days: int,
+    account_id: str,
     start_id: str = "$",
     count: int = 100,
     block_ms: int = 5000,
@@ -436,6 +451,7 @@ async def run_loop(
                 adjustment=adjustment,
                 lookback_buffer_days=lookback_buffer_days,
                 lookback_max_days=lookback_max_days,
+                account_id=account_id,
                 count=count,
                 block_ms=block_ms,
                 retry_delay_seconds=retry_delay_seconds,
@@ -459,6 +475,7 @@ async def run(
     adjustment: str = "all",
     lookback_buffer_days: int = 10,
     lookback_max_days: int = 1200,
+    account_id: str = "",
     start_id: str = "$",
     count: int = 100,
     block_ms: int = 5000,
@@ -503,6 +520,7 @@ async def run(
             adjustment=adjustment,
             lookback_buffer_days=lookback_buffer_days,
             lookback_max_days=lookback_max_days,
+            account_id=account_id,
             start_id=start_id,
             count=count,
             block_ms=block_ms,

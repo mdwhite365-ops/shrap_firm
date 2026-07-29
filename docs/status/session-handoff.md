@@ -129,14 +129,24 @@ them — that is its own card.
    account growth since deployment over max drawdown since deployment. It needs
    item 4 first — the score is an account's equity curve, so the firm has to know
    which account it is looking at. Do not annualise a three-week sample.
-4. **Account identity, then per-strategy account routing** (ADR-0017). Mike can
-   create three $10k Alpaca paper accounts, one strategy each. The blocking item
-   is that `ops.account_snapshots` carries no account column, so with three
-   accounts writing rows the Runner's `ORDER BY at DESC LIMIT 1` returns
-   whichever reported last — every strategy sizing against a random book. Fix
-   identity first, route second.
-5. Then Phase 2/3 of the timeline: intraday data decision, Sweep Detector,
-   Hypothesis Generator, Langfuse instrumentation.
+4. ~~**Account identity.**~~ **Done — the account-identity card.**
+   `ops.account_snapshots` now carries `account_id` (the broker's own
+   `account_number`, so identity comes from the venue rather than a config value
+   someone could mistype), and the Runner reads equity scoped to
+   `STRATEGY_RUNNER_ACCOUNT_ID`.
+
+   **Operator step, required before the Runner will trade:** set
+   `STRATEGY_RUNNER_ACCOUNT_ID` in `infra/.env` to the Alpaca account number.
+   Unset refuses every pass — deliberately, since the alternative is sizing
+   against whichever account reported last.
+
+5. **Per-strategy account routing** (ADR-0017). One runner currently serves one
+   account. Three accounts, one strategy each, needs a strategy → account
+   assignment and either three runner instances or an account-aware one.
+   Execution and Reconciliation still hold a single `alpaca_api_key` apiece.
+6. Then, stocks first (ADR-0016 sequence, Mike 2026-07-29 — futures and crypto
+   later): intraday bars, a Runner that fires more than once a session, and the
+   intraday equities path. Futures/crypto cards stay parked.
 
 **On the Dell, after these merge:** rebuild both `pre-trade-checker` and
 `strategy-runner` (`docker compose run` never rebuilds), then confirm the new

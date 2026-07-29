@@ -72,10 +72,17 @@ ON CONFLICT (strategy_id, ticker) DO UPDATE SET
 # The Runner needs its own account size to convert target weights into share
 # counts, and ADR-0003 keeps broker credentials inside broker-facing containers
 # only — so it reads the persisted snapshot rather than becoming one of them.
+# Scoped to one account. ADR-0017 puts one strategy in each of three broker
+# accounts, so an unscoped "newest snapshot" would return whichever account
+# reported most recently and size this strategy against a book that is not its
+# own. The account_id match also excludes rows written before the column existed:
+# they carry NULL and can never satisfy it, which is the intended behaviour —
+# a legacy row's account is genuinely unknown.
 SELECT_LATEST_EQUITY_SQL = """
 SELECT equity, at
 FROM ops.account_snapshots
-WHERE equity IS NOT NULL
+WHERE account_id = $1
+  AND equity IS NOT NULL
 ORDER BY at DESC
 LIMIT 1
 """.strip()
@@ -134,12 +141,16 @@ class PostgresStrategyRunnerStateStore:
             )
         return state
 
-    async def latest_equity(self) -> tuple[float | None, datetime | None]:
-        """Most recent account equity and when it was observed.
+    async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]:
+        """Most recent equity for ``account_id``, and when it was observed.
 
-        Returns ``(None, None)`` when no snapshot exists — the caller refuses to
-        size rather than defaulting, because an unknown account size is worse
-        than not trading (see ``sizing.assert_equity_usable``).
+        ``account_id`` is required and has no default. Under ADR-0017 each
+        strategy trades its own broker account, and sizing against the wrong
+        one is silent — the number is plausible, just not this book's.
+
+        Returns ``(None, None)`` when that account has no snapshot — the caller
+        refuses to size rather than defaulting, because an unknown account size
+        is worse than not trading (see ``sizing.assert_equity_usable``).
 
         A missing ``ops.account_snapshots`` table is an infrastructure fault
         surfaced to the caller, not papered over here: the Reconciliation Agent
@@ -147,7 +158,7 @@ class PostgresStrategyRunnerStateStore:
         """
 
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(SELECT_LATEST_EQUITY_SQL)
+            row = await conn.fetchrow(SELECT_LATEST_EQUITY_SQL, account_id)
         if row is None:
             return None, None
         equity = row["equity"]
