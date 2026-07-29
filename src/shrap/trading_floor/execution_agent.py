@@ -266,6 +266,11 @@ def build_order_status_payload(
         "submitted_stream": event.stream,
         "submitted_redis_stream_id": event.redis_stream_id,
         "broker": submitted_payload.get("broker", "alpaca-paper"),
+        # Carried forward so every persisted order event can be attributed to an
+        # account. Reconciliation compares stored orders against one account's
+        # broker orders, and an unattributed row would read as a discrepancy in
+        # every other account.
+        "account_id": str(submitted_payload.get("account_id", "")).strip(),
         "broker_order_id": broker_order_id,
         "status": broker_response.get("status"),
         "filled_qty": broker_response.get("filled_qty"),

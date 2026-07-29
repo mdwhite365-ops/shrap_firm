@@ -80,3 +80,63 @@ def test_compose_defines_execution_agent_service() -> None:
     assert "dockerfile: infra/execution-agent.Dockerfile" in compose
     assert "EXECUTION_AGENT_REDIS_URL" in compose
     assert "EXECUTION_AGENT_ALPACA_ENDPOINT" in compose
+
+
+# --- three accounts, three agents (ADR-0017) ----------------------------------
+
+
+def _compose() -> str:
+    from pathlib import Path
+
+    return Path("infra/docker-compose.yml").read_text()
+
+
+def test_three_execution_agents_exist_one_per_account() -> None:
+    compose = _compose()
+    for name in ("execution-agent:", "execution-agent-1:", "execution-agent-2:"):
+        assert name in compose
+    for container in (
+        "container_name: shrap_execution_agent\n",
+        "container_name: shrap_execution_agent_1\n",
+        "container_name: shrap_execution_agent_2\n",
+    ):
+        assert container in compose
+
+
+def test_each_execution_agent_has_its_own_consumer_group() -> None:
+    """THE invariant that makes account filtering work at all.
+
+    The group name comes from EXECUTION_AGENT_SERVICE_NAME. If the three agents
+    shared one group, Redis would deliver each approved intent to exactly ONE of
+    them — quite possibly the agent whose account it is not, which would skip it.
+    The order would then be executed by nobody, silently.
+
+    Separate groups mean every agent sees every intent and exactly one claims it.
+    """
+
+    compose = _compose()
+    assert 'EXECUTION_AGENT_SERVICE_NAME: "execution-agent-1"' in compose
+    assert 'EXECUTION_AGENT_SERVICE_NAME: "execution-agent-2"' in compose
+    # The original keeps the default group name, which is already distinct.
+    assert compose.count("EXECUTION_AGENT_SERVICE_NAME:") == 2
+
+
+def test_each_agent_pair_uses_its_own_credentials() -> None:
+    """Two agents on one key pair would both claim the same account's intents
+    and submit every order twice."""
+
+    compose = _compose()
+    for suffix in ("", "1", "2"):
+        assert f'EXECUTION_AGENT_ALPACA_API_KEY: "${{ALPACA_API_KEY{suffix}}}"' in compose
+        assert f'EXECUTION_AGENT_ALPACA_SECRET_KEY: "${{ALPACA_SECRET_KEY{suffix}}}"' in compose
+
+
+def test_three_reconciliation_agents_exist_one_per_account() -> None:
+    """Each account needs its own snapshot writer: the Strategy Runner reads
+    equity per account, and an account with no reconciler never trades."""
+
+    compose = _compose()
+    for name in ("reconciliation-agent:", "reconciliation-agent-1:", "reconciliation-agent-2:"):
+        assert name in compose
+    for suffix in ("", "1", "2"):
+        assert f'RECONCILIATION_AGENT_ALPACA_API_KEY: "${{ALPACA_API_KEY{suffix}}}"' in compose

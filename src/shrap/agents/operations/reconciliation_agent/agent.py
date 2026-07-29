@@ -17,7 +17,10 @@ import structlog
 from ulid import ULID
 
 from shrap.agents.operations.reconciliation_agent.broker import BrokerSnapshotReader
-from shrap.agents.operations.reconciliation_agent.db import UnidentifiedAccountError
+from shrap.agents.operations.reconciliation_agent.db import (
+    BROKER_ACCOUNT_ID_FIELD,
+    UnidentifiedAccountError,
+)
 from shrap.agents.operations.reconciliation_agent.records import (
     ReconciliationReport,
     StoredOrderState,
@@ -35,7 +38,7 @@ DEFAULT_BROKER = "alpaca-paper"
 
 class OrderStateRepository(Protocol):
     async def latest_order_states(
-        self, broker: str, since: object | None = None
+        self, broker: str, account_id: str, since: object | None = None
     ) -> Sequence[StoredOrderState]: ...
 
 
@@ -78,8 +81,20 @@ async def reconcile_once(
         cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
 
     account = await broker_reader.get_account()
+    # Derived, never configured: these credentials open exactly one book and
+    # only the broker can say which. Scoping the stored-order query to it is
+    # what stops three accounts on one broker reporting each other's orders as
+    # missing — see BROKER_ACCOUNT_ID_FIELD.
+    account_id = str(account.get(BROKER_ACCOUNT_ID_FIELD, "")).strip()
+    if not account_id:
+        raise UnidentifiedAccountError(
+            f"broker payload has no {BROKER_ACCOUNT_ID_FIELD!r}, so this pass "
+            "cannot tell which account's orders to compare (keys present: "
+            f"{sorted(account)}). Refusing rather than comparing against every "
+            "account's stored orders, which would report the others as missing."
+        )
     broker_orders = await broker_reader.list_orders(since=cutoff.isoformat() if cutoff else None)
-    stored = await repository.latest_order_states(broker, since=cutoff)
+    stored = await repository.latest_order_states(broker, account_id, since=cutoff)
 
     report = compare_orders(stored=stored, broker_orders=broker_orders, broker=broker)
 
@@ -135,6 +150,7 @@ async def reconcile_once(
         schema_version=SCHEMA_VERSION,
         payload={
             "broker": broker,
+            "account_id": account_id,
             "account_status": str(account.get("status", "")),
             "account": account_summary,
             "stored_orders": report.stored_orders,

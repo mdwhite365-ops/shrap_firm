@@ -11,6 +11,14 @@ from typing import Any, Protocol
 
 from shrap.agents.operations.reconciliation_agent.records import StoredOrderState
 
+# Scoped to one account as well as one broker. ADR-0017 puts three accounts on
+# `alpaca-paper`, and each Reconciliation Agent compares against ONE account's
+# broker orders — so a broker-only filter would report every other account's
+# orders as missing at the broker, on every pass.
+#
+# `account_id = $2` also excludes rows written before the column existed: they
+# carry NULL and can never match, which is right because their account is
+# genuinely unknown and guessing would manufacture false discrepancies.
 SELECT_LATEST_ORDER_STATES_SQL = """
 SELECT DISTINCT ON (broker_order_id)
     broker,
@@ -20,6 +28,7 @@ SELECT DISTINCT ON (broker_order_id)
     filled_quantity
 FROM trading.paper_order_events
 WHERE broker = $1
+  AND account_id = $2
 ORDER BY broker_order_id, occurred_at DESC, recorded_at DESC
 """.strip()
 
@@ -32,12 +41,14 @@ SELECT DISTINCT ON (broker_order_id)
     filled_quantity
 FROM trading.paper_order_events
 WHERE broker = $1
+  AND account_id = $2
   AND broker_order_id IN (
     SELECT broker_order_id
     FROM trading.paper_order_events
     WHERE broker = $1
+      AND account_id = $2
     GROUP BY broker_order_id
-    HAVING min(occurred_at) >= $2
+    HAVING min(occurred_at) >= $3
   )
 ORDER BY broker_order_id, occurred_at DESC, recorded_at DESC
 """.strip()
@@ -66,13 +77,22 @@ class PostgresOrderEventRepository:
         self._pool = pool
 
     async def latest_order_states(
-        self, broker: str, since: object | None = None
+        self, broker: str, account_id: str, since: object | None = None
     ) -> list[StoredOrderState]:
+        """Latest state per order for one ``(broker, account)``.
+
+        ``account_id`` is required and has no default: comparing one account's
+        broker orders against every account's stored orders manufactures a
+        discrepancy for each order the other accounts placed.
+        """
+
         async with self._pool.acquire() as conn:
             if since is None:
-                rows = await conn.fetch(SELECT_LATEST_ORDER_STATES_SQL, broker)
+                rows = await conn.fetch(SELECT_LATEST_ORDER_STATES_SQL, broker, account_id)
             else:
-                rows = await conn.fetch(SELECT_LATEST_ORDER_STATES_SINCE_SQL, broker, since)
+                rows = await conn.fetch(
+                    SELECT_LATEST_ORDER_STATES_SINCE_SQL, broker, account_id, since
+                )
         return [
             StoredOrderState(
                 broker=str(row["broker"]),
