@@ -2,8 +2,8 @@
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
-`main` is green (`723 passed`), CI runs on every push and PR, and **no PRs are
-open**. Fourteen cards merged this session: #102–#115.
+`main` is green (`739 passed` with #117), CI runs on every push and PR. Cards
+#102–#116 merged; **#117 (notional sizing wired) is open**.
 
 ---
 
@@ -22,55 +22,83 @@ name cancel at the broker, and per-strategy P&L cannot be attributed at all.
 Per-account books **delete KI-005 (position-state derivation) rather than
 solving it** — per-strategy P&L becomes that account's equity curve.
 
-### 2. The growth target, and what it is for
+### 2. The growth target: **35% a year**
 
-**Mike's stated goal: grow the account 1% per day, "at least if it can."**
+**Mike's ruling (2026-07-28): the target is 35% annually.** He raised 1%/day
+first, then set it aside himself as too ambitious. Both numbers are recorded here
+because the difference between them is the most useful thing in this document.
 
-Recorded with the arithmetic, because the vision asks for honest probability
-framing and this number deserves it:
+| | 1%/day (set aside) | **35%/year (the target)** |
+|---|---|---|
+| Compounded | 12.3x/year (+1,130%) | **1.35x** |
+| Per trading day | 1.00% | **0.119%** |
+| Per month | ~21% | **2.5%** |
+| Implied Sharpe at 15% book vol | ≈ 10.6 | **≈ 2.1** |
+| Implied Sharpe at 25% book vol | — | **≈ 1.2** |
+| Sharpe run by elite quant funds | 2–4 | 2–4 |
 
-| | |
-|---|---|
-| 1%/day compounded | `1.01^252` ≈ **12.3x/year (+1,130%)** |
-| Best long-running fund on record | roughly **40–66%/year** |
-| Sharpe implied at ~1.5% daily book vol | ≈ **10.6** |
-| Sharpe run by elite quant funds | **2–4** |
+**This is the difference between impossible and hard.** 1%/day sat an order of
+magnitude beyond anything documented. 35%/year at moderate volatility implies a
+Sharpe of roughly 1.2–2.1 — inside the range real funds actually run, at the good
+end of it. It is a target the firm can be honestly measured against, which the
+previous one was not.
 
-So the target is roughly an order of magnitude beyond anything documented. That
-is not a reason to discard it — it is a reason to be precise about what it is:
-**a direction-setter that ranks the roadmap, not a threshold to tune gates
-toward.**
+#### What 35% requires, stated as a number
 
-What it correctly implies, and this is genuinely useful:
+The promote gate is the information ratio against equal-weight buy-and-hold. If
+the benchmark returns ~10% and the book runs 10–15% tracking error, reaching 35%
+needs a **portfolio** information ratio of roughly **1.7–2.5**.
 
-- **Daily-bar equities cannot plausibly deliver it.** A rule holding positions
-  for weeks compounds at weekly frequency, not daily.
-- It is therefore an argument for the **fast layer**, for **intraday data**, and
-  eventually for **options and futures** — exactly the direction Mike already
-  stated independently. The target and the plan agree.
+The promote floor is **0.5**. That is a floor for admitting one strategy, not a
+target — and uncorrelated strategies add in quadrature (portfolio IR ≈ IR × √k):
 
-**What it must never become:** a reason to lower `DEFAULT_MIN_TRADES`, the Sharpe
-floor, or the information-ratio floor. A firm that hits 1%/day by relaxing its
-gates has not hit 1%/day; it has stopped measuring. Every gate in
+| Per-strategy IR | Uncorrelated strategies needed for portfolio IR 1.7 | for 2.5 |
+|---|---|---|
+| 0.5 (bare promote floor) | ~11 | ~25 |
+| 1.0 | ~3 | ~6 |
+| 1.5 | ~1–2 | ~3 |
+
+**So the binding constraint on 35% is the number of genuinely uncorrelated
+strategies the firm can find and keep, not the quality of any single one.** That
+is a direct ranking of the roadmap: research throughput — the Hypothesis
+Generator, the Sweep Detector, more archetypes — matters more than tuning
+anything already built. One strategy at the promote floor does not get there and
+never will.
+
+The caveat that makes the table honest: "uncorrelated" is doing heavy lifting.
+Fifty US equities in a drawdown move together, and so do most long-only equity
+strategies over them. Real diversification likely requires different *horizons*
+and eventually different *instruments* — which is the same argument the fast
+layer, intraday data, and eventually options and futures were already making.
+
+**What the target must never become:** a reason to lower `DEFAULT_MIN_TRADES`,
+the Sharpe floor, or the information-ratio floor. A firm that hits 35% by
+relaxing its gates has not hit 35%; it has stopped measuring. Every gate in
 `docs/research/eval-protocol.md` exists because a specific failure was caught in
-the act, and three of them were caught this session.
+the act, and three of them were caught in the session before this one.
 
-### 3. Risk limits — recorded, NOT yet applied
+### 3. Risk limits — recorded, now unblocked
 
 The Pre-Trade Checker still runs smoke-test values: 6 hardcoded names, **1 share
 per order**, 10 orders/day.
 
-**These must not be raised until notional sizing is wired into the signal path**
-(the card immediately below). Raising `MAX_QUANTITY_PER_ORDER` today would send
-*N shares of everything* — as disconnected from the strategy's weights as one
-share was, just larger. Sizing first, limits second. That ordering is the whole
+Sizing landed in #117, so the ordering constraint is satisfied and these can now
+be raised — they could not before, because raising `MAX_QUANTITY_PER_ORDER`
+without sizing would have sent *N shares of everything*, as disconnected from the
+strategy's weights as one share was, just larger. That ordering was the whole
 point of splitting #115.
 
-Proposed for an aggressive $10k book once sizing lands:
+**The two per-order caps must be raised in the same change.** The Pre-Trade
+Checker clamps rather than vetoes, so a Runner cap above the checker's records an
+intent larger than the fill — and the exit sells shares that were never bought.
+`test_the_production_default_matches_the_pre_trade_cap` fails if they diverge.
+
+Proposed for an aggressive $10k book:
 
 | Setting | Now | Proposed |
 |---|---|---|
 | `MAX_QUANTITY_PER_ORDER` | 1 | **100** — a $1,000 slot buys 100 shares at $10; binds only on cheap names |
+| `STRATEGY_RUNNER_MAX_QUANTITY` | 1 | **100** — must equal the row above |
 | `MAX_ORDERS_PER_DAY` | 10 | **80** — 10-name entry plus rebalancing headroom |
 | `ALLOWED_UNIVERSE` | 6 hardcoded | **the Tier-3 table** (requires `load-launch-list`, then flipping `TIER3_ENFORCEMENT`) |
 | `SYMBOL_COOLDOWN_SECONDS` | 300 | unchanged — the guard against a signal loop hammering one name |
@@ -85,10 +113,14 @@ them — that is its own card.
 
 ## What is next, in order
 
-1. **Wire notional sizing into the signal path.** #115 shipped the arithmetic and
-   the equity source; the Runner still emits a fixed 1 share. Until this lands
-   the live book cannot match the evaluated book, and the risk limits above must
-   stay where they are.
+1. ~~**Wire notional sizing into the signal path.**~~ **Done — PR #117.** Entries
+   are now `target_weight × equity / price`, floored, with equity read from
+   `ops.account_snapshots`. Note what it does *not* change yet: both per-order
+   caps stay at 1, so sizing computes the truthful number and the cap clamps it —
+   the clamp is now logged rather than invisible. Raising the caps is item 2, and
+   they must be raised **together** (the Pre-Trade Checker clamps rather than
+   vetoes, so a larger Runner cap records an intent bigger than the fill and the
+   exit oversells).
 2. **Apply the risk limits** (table above) and load the launch list.
 3. **Forward-test scoring.** Nothing evaluates a strategy *after* promotion — the
    Evaluator spec's Sunday re-evaluation was never built, so a promoted strategy
