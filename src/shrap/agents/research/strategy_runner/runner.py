@@ -27,22 +27,29 @@ Fail-safe: a single bad strategy (missing bars, bad spec, factory error) is
 skipped by the planner with a logged reason; it never crashes the loop and
 never emits a partial signal.
 
-Sizing: each pass reads equity for **its own account** from
-``ops.account_snapshots`` (written by the Reconciliation Agent) and converts every
-entry's target weight into a share count. Unusable equity — missing, stale, or
-belonging to no configured account — refuses the *whole pass* rather than falling
-back, and the phase event is left un-acked so the pass retries once a fresh
-snapshot lands.
+Sizing: each strategy's target weight becomes a share count against its own
+account's equity, read from ``ops.account_snapshots`` (written by the
+Reconciliation Agent). There is no fixed-quantity fallback — an account whose
+equity cannot be established simply does not trade this pass.
 
-``account_id`` is required. ADR-0017 gives each strategy its own broker account,
-and an unscoped read returns whichever account reported most recently: a
-plausible number from the wrong book, which is the worst kind of wrong.
+The account comes from the **strategy**, not from config. ADR-0017 gives each
+strategy its own broker account, so the pass groups strategies by account and
+sizes each group against that account's equity. The exposure budget is therefore
+per-account too: with one strategy per account it gets the whole book.
+
+Accounts are independent. A stale snapshot on one account defers only its own
+strategies — the others still trade — and the phase event stays un-acked so the
+deferred ones get another chance this session. A strategy with *no* account is
+dropped rather than deferred: no snapshot will ever arrive for it, so retrying
+would be a poison loop. It needs `shrap-strategy-stage assign-account`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import signal
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol, cast
 
@@ -199,6 +206,40 @@ async def _build_input(
     return StrategyInput(record=record, tickers=tickers, bars_by_ticker=bars_by_ticker)
 
 
+@dataclass(frozen=True, slots=True)
+class PassResult:
+    """What one pass did, and whether it is finished.
+
+    ``deferred`` names strategies skipped for a *retryable* reason — their
+    account has no usable equity snapshot right now. The caller leaves the phase
+    event un-acked when this is non-empty, so the pass runs again and they get
+    another chance this session. Strategies that already traded are stamped, so
+    the retry does not re-emit for them (the ``(strategy_id, session_date)``
+    guard).
+
+    Unassigned strategies are **not** deferred. No snapshot will ever arrive for
+    a strategy with no account; that needs a human, so retrying forever would be
+    a poison loop.
+    """
+
+    emitted: int
+    deferred: tuple[str, ...] = ()
+
+    @property
+    def is_complete(self) -> bool:
+        return not self.deferred
+
+
+def _group_by_account(records: Sequence[StrategyRecord]) -> dict[str, list[StrategyRecord]]:
+    """Partition strategies by the account they trade. Unassigned excluded."""
+
+    grouped: dict[str, list[StrategyRecord]] = {}
+    for record in records:
+        if record.account_id:
+            grouped.setdefault(record.account_id, []).append(record)
+    return grouped
+
+
 async def run_pass(
     *,
     session_date: date,
@@ -210,10 +251,13 @@ async def run_pass(
     adjustment: str,
     lookback_buffer_days: int,
     lookback_max_days: int,
-    account_id: str,
     produced_by: str = PRODUCED_BY,
-) -> int:
-    """Run one evaluation pass for ``session_date``; returns signals emitted.
+) -> PassResult:
+    """Run one evaluation pass for ``session_date``, account by account.
+
+    Each strategy is sized against **its own** broker account (ADR-0017), so the
+    accounts are independent: a stale snapshot on one does not stop the others
+    trading, and the exposure budget is per-account rather than firm-wide.
 
     Systemic errors (registry/bars/state/publish) propagate so the caller can
     leave the market-phase event un-acked and retry the whole pass next cycle.
@@ -222,90 +266,124 @@ async def run_pass(
     records = await _active_paper_strategies(registry)
     if not records:
         log.info("strategy_runner.no_active_strategies", session_date=session_date.isoformat())
-        return 0
+        return PassResult(emitted=0)
 
-    # Account size first: every entry this pass is a fraction of it, so an
-    # unusable snapshot must stop the pass before any signal is planned.
-    # SizingRefused propagates — the caller leaves the phase event un-acked and
-    # the pass retries once the Reconciliation Agent writes a fresh snapshot.
-    if not account_id:
-        raise SizingRefused(
-            "no account configured (STRATEGY_RUNNER_ACCOUNT_ID is unset), so there "
-            "is no book to size against. Refusing rather than picking whichever "
-            "account reported most recently."
+    unassigned = [r for r in records if not r.account_id]
+    for record in unassigned:
+        # Permanent until a human acts, so this is logged and dropped rather than
+        # deferred — there is no book to send its orders to, and no snapshot will
+        # ever arrive to change that.
+        log.error(
+            "strategy_runner.strategy_unassigned",
+            strategy_id=record.strategy_id,
+            name=record.name,
+            reason=(
+                "no account_id — assign one with `shrap-strategy-stage "
+                "assign-account`, or it will never trade"
+            ),
+            session_date=session_date.isoformat(),
         )
-    raw_equity, observed_at = await state_store.latest_equity(account_id)
-    equity = assert_equity_usable(raw_equity, observed_at, datetime.now(UTC))
+
+    grouped = _group_by_account(records)
+    if not grouped:
+        return PassResult(emitted=0)
 
     stored_state = await state_store.read_state()
     regime_label = await latest_regime_label(cast(FixtureRedis, redis))  # informational only
-
-    inputs = [
-        await _build_input(
-            record,
-            reader,
-            session_date,
-            adjustment=adjustment,
-            buffer_days=lookback_buffer_days,
-            max_days=lookback_max_days,
-        )
-        for record in records
-    ]
-
-    plans = plan_session(
-        session_date=session_date,
-        strategies=inputs,
-        stored_state=stored_state,
-        factory=_default_strategy_factory,
-        config=config,
-        regime_label=regime_label,
-        equity=equity,
-    )
-
     publisher = EventPublisher(cast(RedisPublisher, redis))
+    now = datetime.now(UTC)
+
     emitted = 0
-    for plan in plans:
-        if plan.skipped:
-            log.info(
-                "strategy_runner.strategy_skipped",
-                strategy_id=plan.strategy_id,
-                reason=plan.skip_reason,
+    deferred: list[str] = []
+    for account_id, account_records in sorted(grouped.items()):
+        raw_equity, observed_at = await state_store.latest_equity(account_id)
+        try:
+            equity = assert_equity_usable(raw_equity, observed_at, now)
+        except SizingRefused as exc:
+            # Retryable and isolated: this account cannot be sized right now, but
+            # the others still can. Deferring rather than raising is what keeps
+            # one stale snapshot from halting the whole firm.
+            log.error(
+                "strategy_runner.account_equity_unusable",
+                account_id=account_id,
+                reason=str(exc),
+                strategies=[r.strategy_id for r in account_records],
                 session_date=session_date.isoformat(),
             )
+            deferred.extend(r.strategy_id for r in account_records)
             continue
-        # A clamped or unfundable entry means the live book is not the evaluated
-        # book for that name. Silence here is the failure mode this card exists
-        # to remove, so it is logged even though nothing went wrong.
-        for note in plan.sizing_notes:
-            log.warning(
-                "strategy_runner.sizing_note",
-                strategy_id=plan.strategy_id,
-                note=note,
-                equity=equity,
-                session_date=session_date.isoformat(),
+
+        inputs = [
+            await _build_input(
+                record,
+                reader,
+                session_date,
+                adjustment=adjustment,
+                buffer_days=lookback_buffer_days,
+                max_days=lookback_max_days,
             )
-        for planned in plan.signals:
-            result = await publisher.publish(
-                stream=STREAM_STRATEGY_SIGNAL,
-                produced_by=produced_by,
-                schema_version=SCHEMA_VERSION,
-                payload=planned.payload,
-            )
-            emitted += 1
-            log.info(
-                "strategy_runner.signal_published",
-                strategy_id=planned.strategy_id,
-                ticker=planned.ticker,
-                side=planned.side,
-                quantity=planned.payload["quantity"],
-                event_id=result.envelope.event_id,
-                session_date=session_date.isoformat(),
-            )
-        # Stamp state only after this strategy's signals are published, so a
-        # crash mid-strategy re-runs (and re-emits) at most this one strategy.
-        for write in plan.state_writes:
-            await state_store.upsert(write)
-    return emitted
+            for record in account_records
+        ]
+
+        # One plan_session per account, so the exposure budget divides this
+        # account's equity among the strategies in this account only. With one
+        # strategy per account (ADR-0017) that gives it the whole book.
+        plans = plan_session(
+            session_date=session_date,
+            strategies=inputs,
+            stored_state=stored_state,
+            factory=_default_strategy_factory,
+            config=config,
+            regime_label=regime_label,
+            equity=equity,
+        )
+
+        for plan in plans:
+            if plan.skipped:
+                log.info(
+                    "strategy_runner.strategy_skipped",
+                    strategy_id=plan.strategy_id,
+                    account_id=account_id,
+                    reason=plan.skip_reason,
+                    session_date=session_date.isoformat(),
+                )
+                continue
+            # A clamped or unfundable entry means the live book is not the
+            # evaluated book for that name. Silence here is the failure mode
+            # sizing exists to remove, so it is logged even though nothing broke.
+            for note in plan.sizing_notes:
+                log.warning(
+                    "strategy_runner.sizing_note",
+                    strategy_id=plan.strategy_id,
+                    account_id=account_id,
+                    note=note,
+                    equity=equity,
+                    session_date=session_date.isoformat(),
+                )
+            for planned in plan.signals:
+                result = await publisher.publish(
+                    stream=STREAM_STRATEGY_SIGNAL,
+                    produced_by=produced_by,
+                    schema_version=SCHEMA_VERSION,
+                    payload=planned.payload,
+                )
+                emitted += 1
+                log.info(
+                    "strategy_runner.signal_published",
+                    strategy_id=planned.strategy_id,
+                    account_id=account_id,
+                    ticker=planned.ticker,
+                    side=planned.side,
+                    quantity=planned.payload["quantity"],
+                    event_id=result.envelope.event_id,
+                    session_date=session_date.isoformat(),
+                )
+            # Stamp state only after this strategy's signals are published, so a
+            # crash mid-strategy re-runs (and re-emits) at most this one strategy.
+            for write in plan.state_writes:
+                await state_store.upsert(write)
+
+    return PassResult(emitted=emitted, deferred=tuple(deferred))
 
 
 async def poll_once(
@@ -319,7 +397,6 @@ async def poll_once(
     adjustment: str,
     lookback_buffer_days: int,
     lookback_max_days: int,
-    account_id: str,
     count: int,
     block_ms: int,
     retry_delay_seconds: float = 0.0,
@@ -354,7 +431,7 @@ async def poll_once(
                 await subscriber.ack(event)
                 continue
             session_date = _parse_session_date(payload)
-            emitted += await run_pass(
+            result = await run_pass(
                 session_date=session_date,
                 redis=redis,
                 registry=registry,
@@ -364,9 +441,24 @@ async def poll_once(
                 adjustment=adjustment,
                 lookback_buffer_days=lookback_buffer_days,
                 lookback_max_days=lookback_max_days,
-                account_id=account_id,
                 produced_by=produced_by,
             )
+            emitted += result.emitted
+            if not result.is_complete:
+                # Some account could not be sized. Leave the phase event pending
+                # so those strategies get another chance this session; the ones
+                # that already traded are stamped and will not re-emit. Break
+                # rather than continue: the next event is a later phase and
+                # acking it would advance past this one.
+                log.warning(
+                    "strategy_runner.pass_deferred",
+                    session_date=session_date.isoformat(),
+                    emitted=result.emitted,
+                    deferred=list(result.deferred),
+                    phase_event_id=event.envelope.event_id,
+                )
+                await asyncio.sleep(retry_delay_seconds)
+                break
             await subscriber.ack(event)
             log.info(
                 "strategy_runner.pass_complete",
@@ -423,7 +515,6 @@ async def run_loop(
     adjustment: str,
     lookback_buffer_days: int,
     lookback_max_days: int,
-    account_id: str,
     start_id: str = "$",
     count: int = 100,
     block_ms: int = 5000,
@@ -451,7 +542,6 @@ async def run_loop(
                 adjustment=adjustment,
                 lookback_buffer_days=lookback_buffer_days,
                 lookback_max_days=lookback_max_days,
-                account_id=account_id,
                 count=count,
                 block_ms=block_ms,
                 retry_delay_seconds=retry_delay_seconds,
@@ -475,7 +565,6 @@ async def run(
     adjustment: str = "all",
     lookback_buffer_days: int = 10,
     lookback_max_days: int = 1200,
-    account_id: str = "",
     start_id: str = "$",
     count: int = 100,
     block_ms: int = 5000,
@@ -520,7 +609,6 @@ async def run(
             adjustment=adjustment,
             lookback_buffer_days=lookback_buffer_days,
             lookback_max_days=lookback_max_days,
-            account_id=account_id,
             start_id=start_id,
             count=count,
             block_ms=block_ms,
@@ -538,6 +626,7 @@ __all__ = [
     "ACTIVE_PAPER_STAGES",
     "CONSUMER_GROUP",
     "STREAM_MARKET_PHASE",
+    "PassResult",
     "poll_once",
     "run",
     "run_loop",

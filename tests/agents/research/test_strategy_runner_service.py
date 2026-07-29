@@ -1,16 +1,19 @@
-"""Service-loop tests for the Strategy Runner — specifically the equity gate.
+"""Service-loop tests for the Strategy Runner — account routing and the equity gate.
 
 The pure planner is tested in ``tests/research/test_strategy_runner_engine.py``.
-What is only observable here is what the *service* does with account equity:
+What is only observable here is what the *service* does with accounts:
 
-- it reads equity before planning and sizes the pass against it;
-- unusable equity (missing or stale) emits nothing **and does not ack**, so the
-  market-phase event stays pending and the pass retries once the Reconciliation
-  Agent writes a fresh snapshot.
+- each strategy is sized against **its own** broker account (ADR-0017), so two
+  strategies in two accounts each get their own full book rather than a share of
+  a blended one;
+- an account whose snapshot is missing or stale defers only *its* strategies —
+  the others still trade — and the phase event is left un-acked so the deferred
+  ones get another chance this session;
+- a strategy with no account at all is dropped rather than deferred, because no
+  snapshot will ever arrive for it and retrying forever is a poison loop.
 
-The un-acked refusal is the load-bearing one. Acking would silently drop a whole
-trading session; falling back to a fixed size would trade a book nobody
-evaluated. Refusing and retrying is the only option that does neither.
+The un-acked deferral and the acked drop are the two load-bearing cases: one
+would silently lose a trading session, the other would wedge the consumer.
 """
 
 from __future__ import annotations
@@ -18,10 +21,9 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-import pytest
-
 from shrap.agents.research.strategy_runner.runner import (
     STREAM_MARKET_PHASE,
+    PassResult,
     poll_once,
     run_pass,
 )
@@ -34,19 +36,20 @@ from shrap.research.strategy_runner.engine import (
     RunnerSignalConfig,
     TargetState,
 )
-from shrap.research.strategy_runner.sizing import DEFAULT_MAX_EQUITY_AGE, SizingRefused
+from shrap.research.strategy_runner.sizing import DEFAULT_MAX_EQUITY_AGE
 
-SESSION = date(2026, 7, 28)
+SESSION = date(2026, 7, 29)
 PRICE = 50.0
 EQUITY = 10_000.0
+ACCOUNT_A = "PA3ACCTONE"
+ACCOUNT_B = "PA3ACCTTWO"
 UNCAPPED = RunnerSignalConfig(max_quantity=1_000_000)
-ACCOUNT_ID = "PA3TESTACCT"
 
 
-def _record() -> StrategyRecord:
+def _record(strategy_id: str, account_id: str | None) -> StrategyRecord:
     return StrategyRecord(
-        strategy_id="01RUNNERSVC",
-        name="reference-ma-crossover",
+        strategy_id=strategy_id,
+        name=f"strategy-{strategy_id}",
         version=1,
         archetype="infra-graph-play",
         status=STATUS_PAPER,
@@ -56,18 +59,22 @@ def _record() -> StrategyRecord:
         tickers={"long": ["NVDA"]},
         # Rising closes: fast(2) > slow(3) => target 1.0 => a buy.
         spec={"params": {"fast": 2, "slow": 3, "target_weight": 1.0}},
-        spec_hash="hash-runner-svc",
+        spec_hash=f"hash-{strategy_id}",
         regime_sizing_modifier=None,
         kill_criteria=["md>0.5"],
         code_ref=None,
         created_at=None,
         updated_at=None,
+        account_id=account_id,
     )
 
 
 class FakeRegistry:
+    def __init__(self, records: list[StrategyRecord]) -> None:
+        self._records = records
+
     async def list_by_status(self, status: str) -> list[StrategyRecord]:
-        return [_record()] if status == STATUS_PAPER else []
+        return list(self._records) if status == STATUS_PAPER else []
 
 
 class FakeReader:
@@ -91,13 +98,10 @@ class FakeReader:
 
 
 class FakeStateStore:
-    def __init__(
-        self,
-        equity: float | None = EQUITY,
-        observed_at: datetime | None = None,
-    ) -> None:
-        self._equity = equity
-        self._observed_at = observed_at if observed_at is not None else datetime.now(UTC)
+    """Per-account equity, so one account can be stale while another is fresh."""
+
+    def __init__(self, equity_by_account: dict[str, tuple[float | None, datetime | None]]) -> None:
+        self._equity = equity_by_account
         self.writes: list[PlannedStateWrite] = []
         self.equity_lookups: list[str] = []
 
@@ -106,10 +110,18 @@ class FakeStateStore:
 
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]:
         self.equity_lookups.append(account_id)
-        return self._equity, self._observed_at
+        return self._equity.get(account_id, (None, None))
 
     async def upsert(self, write: PlannedStateWrite) -> None:
         self.writes.append(write)
+
+
+def _fresh(equity: float = EQUITY) -> tuple[float, datetime]:
+    return equity, datetime.now(UTC)
+
+
+def _stale(equity: float = EQUITY) -> tuple[float, datetime]:
+    return equity, datetime.now(UTC) - DEFAULT_MAX_EQUITY_AGE - timedelta(minutes=1)
 
 
 class FakeRedis:
@@ -160,172 +172,184 @@ def _open_phase_entries() -> list[tuple[str, dict[str, str]]]:
     return [("1-0", envelope.to_redis_fields())]
 
 
-async def _run(store: FakeStateStore) -> int:
+async def _run(
+    records: list[StrategyRecord],
+    store: FakeStateStore,
+    redis: FakeRedis | None = None,
+) -> PassResult:
     return await run_pass(
         session_date=SESSION,
-        redis=FakeRedis(),  # type: ignore[arg-type]
-        registry=FakeRegistry(),  # type: ignore[arg-type]
+        redis=redis or FakeRedis(),  # type: ignore[arg-type]
+        registry=FakeRegistry(records),  # type: ignore[arg-type]
         reader=FakeReader(),  # type: ignore[arg-type]
         state_store=store,  # type: ignore[arg-type]
         config=UNCAPPED,
         adjustment="all",
         lookback_buffer_days=10,
         lookback_max_days=1200,
-        account_id=ACCOUNT_ID,
     )
 
 
-# --- the happy path -----------------------------------------------------------
+def _quantities(redis: FakeRedis) -> list[int]:
+    out: list[int] = []
+    for _, fields in redis.published:
+        payload = Envelope.from_redis_fields(fields).payload
+        assert payload is not None
+        out.append(int(payload["quantity"]))
+    return out
 
 
-async def test_a_pass_sizes_its_signals_against_the_account_snapshot() -> None:
-    """$10,000 fully weighted into a $50 name is 200 shares, read from the
-    Reconciliation Agent's snapshot rather than hardcoded."""
+# --- account routing ----------------------------------------------------------
+
+
+async def test_a_strategy_is_sized_against_its_own_account() -> None:
+    """$10,000 fully weighted into a $50 name is 200 shares."""
 
     redis = FakeRedis()
-    store = FakeStateStore()
-    emitted = await run_pass(
-        session_date=SESSION,
-        redis=redis,  # type: ignore[arg-type]
-        registry=FakeRegistry(),  # type: ignore[arg-type]
-        reader=FakeReader(),  # type: ignore[arg-type]
-        state_store=store,  # type: ignore[arg-type]
-        config=UNCAPPED,
-        adjustment="all",
-        lookback_buffer_days=10,
-        lookback_max_days=1200,
-        account_id=ACCOUNT_ID,
-    )
+    store = FakeStateStore({ACCOUNT_A: _fresh()})
+    result = await _run([_record("s1", ACCOUNT_A)], store, redis=redis)
 
-    assert emitted == 1
-    (stream, fields) = redis.published[0]
-    assert stream == "trading.strategy.signal"
-    envelope = Envelope.from_redis_fields(fields)
-    assert envelope.payload is not None
-    assert envelope.payload["quantity"] == 200
-    assert store.writes[0].last_quantity == 200
+    assert result.emitted == 1
+    assert result.is_complete
+    assert store.equity_lookups == [ACCOUNT_A]
+    assert _quantities(redis) == [200]
 
 
-# --- the equity gate ----------------------------------------------------------
+async def test_two_accounts_each_get_their_own_full_book() -> None:
+    """THE ADR-0017 property.
 
-
-async def test_the_pass_reads_equity_for_its_own_account() -> None:
-    """Not "whichever account reported most recently" — this strategy's book."""
-
-    store = FakeStateStore()
-    await _run(store)
-    assert store.equity_lookups == [ACCOUNT_ID]
-
-
-async def test_an_unconfigured_account_refuses_rather_than_guessing() -> None:
-    """A runner with no account has no book to size against.
-
-    Before ADR-0017 an unset account silently meant "the newest snapshot from
-    any account". With three accounts that is a plausible number from the wrong
-    one, and nothing about the resulting orders would look wrong.
+    Under the old firm-wide budget these two would have split one $10,000
+    allocation and traded 100 shares each. They are separate books, so each gets
+    its own $10,000 and its own 200 shares.
     """
 
-    with pytest.raises(SizingRefused, match="no account configured"):
-        await run_pass(
-            session_date=SESSION,
-            redis=FakeRedis(),  # type: ignore[arg-type]
-            registry=FakeRegistry(),  # type: ignore[arg-type]
-            reader=FakeReader(),  # type: ignore[arg-type]
-            state_store=FakeStateStore(),  # type: ignore[arg-type]
-            config=UNCAPPED,
-            adjustment="all",
-            lookback_buffer_days=10,
-            lookback_max_days=1200,
-            account_id="",
-        )
-
-
-async def test_a_missing_snapshot_refuses_the_whole_pass() -> None:
-    with pytest.raises(SizingRefused, match="no account snapshot"):
-        await _run(FakeStateStore(equity=None))
-
-
-async def test_a_stale_snapshot_refuses_the_whole_pass() -> None:
-    stale = datetime.now(UTC) - DEFAULT_MAX_EQUITY_AGE - timedelta(minutes=1)
-    with pytest.raises(SizingRefused, match="stale"):
-        await _run(FakeStateStore(observed_at=stale))
-
-
-async def test_refusal_publishes_nothing_and_writes_no_state() -> None:
-    """A refused pass must be a no-op, not a partial one."""
-
-    store = FakeStateStore(equity=None)
     redis = FakeRedis()
-    with pytest.raises(SizingRefused):
-        await run_pass(
-            session_date=SESSION,
-            redis=redis,  # type: ignore[arg-type]
-            registry=FakeRegistry(),  # type: ignore[arg-type]
-            reader=FakeReader(),  # type: ignore[arg-type]
-            state_store=store,  # type: ignore[arg-type]
-            config=UNCAPPED,
-            adjustment="all",
-            lookback_buffer_days=10,
-            lookback_max_days=1200,
-            account_id=ACCOUNT_ID,
-        )
-    assert redis.published == []
-    assert store.writes == []
+    store = FakeStateStore({ACCOUNT_A: _fresh(), ACCOUNT_B: _fresh()})
+    result = await _run([_record("s1", ACCOUNT_A), _record("s2", ACCOUNT_B)], store, redis=redis)
+
+    assert result.emitted == 2
+    assert _quantities(redis) == [200, 200]
 
 
-async def test_a_refused_pass_is_not_acked_so_the_session_retries() -> None:
-    """THE test in this file.
+async def test_two_strategies_in_one_account_still_share_that_account() -> None:
+    """The exposure budget did not disappear — it became per-account."""
 
-    Acking here would drop a whole trading session on a transient dependency
-    failure — the snapshot comes back on the Reconciliation Agent's next pass,
-    minutes later. Leaving the phase event pending means the session resumes on
-    its own, and the per-session state guard makes the retry safe.
+    redis = FakeRedis()
+    store = FakeStateStore({ACCOUNT_A: _fresh()})
+    result = await _run([_record("s1", ACCOUNT_A), _record("s2", ACCOUNT_A)], store, redis=redis)
+
+    assert result.emitted == 2
+    assert _quantities(redis) == [100, 100]  # one book split two ways
+
+
+# --- isolation between accounts -----------------------------------------------
+
+
+async def test_a_stale_account_defers_only_its_own_strategies() -> None:
+    """THE isolation test.
+
+    One account's Reconciliation Agent falling behind must not stop the other
+    accounts trading — that would couple three independent books through a
+    shared failure.
     """
 
-    redis = FakeRedis(_open_phase_entries())
+    redis = FakeRedis()
+    store = FakeStateStore({ACCOUNT_A: _stale(), ACCOUNT_B: _fresh()})
+    result = await _run([_record("s1", ACCOUNT_A), _record("s2", ACCOUNT_B)], store, redis=redis)
+
+    assert result.emitted == 1  # B traded
+    assert result.deferred == ("s1",)  # A did not
+    assert not result.is_complete
+    assert [w.strategy_id for w in store.writes] == ["s2"]  # only B stamped
+
+
+async def test_a_missing_snapshot_defers_rather_than_raising() -> None:
+    store = FakeStateStore({})
+    result = await _run([_record("s1", ACCOUNT_A)], store)
+    assert result.emitted == 0
+    assert result.deferred == ("s1",)
+
+
+# --- unassigned strategies ----------------------------------------------------
+
+
+async def test_an_unassigned_strategy_is_dropped_not_deferred() -> None:
+    """No snapshot will ever arrive for a strategy with no account.
+
+    Deferring it would leave the phase event pending forever — a poison loop
+    that also blocks every later session. It needs a human, so it is logged and
+    dropped and the pass completes.
+    """
+
+    redis = FakeRedis()
+    store = FakeStateStore({ACCOUNT_A: _fresh()})
+    result = await _run([_record("s1", None), _record("s2", ACCOUNT_A)], store, redis=redis)
+
+    assert result.emitted == 1  # only the assigned one traded
+    assert result.deferred == ()  # NOT deferred
+    assert result.is_complete  # so the event can be acked
+    assert [w.strategy_id for w in store.writes] == ["s2"]
+
+
+async def test_a_pass_with_only_unassigned_strategies_completes() -> None:
+    result = await _run([_record("s1", None)], FakeStateStore({}))
+    assert result.emitted == 0
+    assert result.is_complete
+
+
+# --- ack discipline -----------------------------------------------------------
+
+
+async def _poll(records: list[StrategyRecord], store: FakeStateStore, redis: FakeRedis) -> int:
     subscriber = GroupEventSubscriber(redis, group="strategy-runner", start_id="0")  # type: ignore[arg-type]
-
-    emitted = await poll_once(
+    return await poll_once(
         redis,  # type: ignore[arg-type]
         subscriber,
-        registry=FakeRegistry(),  # type: ignore[arg-type]
+        registry=FakeRegistry(records),  # type: ignore[arg-type]
         reader=FakeReader(),  # type: ignore[arg-type]
-        state_store=FakeStateStore(equity=None),  # type: ignore[arg-type]
+        state_store=store,  # type: ignore[arg-type]
         config=UNCAPPED,
         adjustment="all",
         lookback_buffer_days=10,
         lookback_max_days=1200,
-        account_id=ACCOUNT_ID,
         count=10,
         block_ms=0,
     )
 
-    assert emitted == 0
-    assert redis.acked == []  # pending: the pass will run again
-    assert redis.published == []
+
+async def test_a_deferred_pass_is_not_acked_so_the_session_retries() -> None:
+    """Acking here would drop a whole trading session for the deferred account
+    on a transient failure. The per-session state guard makes the retry safe:
+    strategies that already traded are stamped and will not re-emit."""
+
+    redis = FakeRedis(_open_phase_entries())
+    store = FakeStateStore({ACCOUNT_A: _stale(), ACCOUNT_B: _fresh()})
+
+    emitted = await _poll([_record("s1", ACCOUNT_A), _record("s2", ACCOUNT_B)], store, redis)
+
+    assert emitted == 1  # B still traded
+    assert redis.acked == []  # pending, so A retries
 
 
-async def test_a_healthy_pass_does_ack() -> None:
+async def test_a_complete_pass_does_ack() -> None:
     """The contrast case — otherwise the test above would pass on a loop that
     never acks anything."""
 
     redis = FakeRedis(_open_phase_entries())
-    subscriber = GroupEventSubscriber(redis, group="strategy-runner", start_id="0")  # type: ignore[arg-type]
+    store = FakeStateStore({ACCOUNT_A: _fresh()})
 
-    emitted = await poll_once(
-        redis,  # type: ignore[arg-type]
-        subscriber,
-        registry=FakeRegistry(),  # type: ignore[arg-type]
-        reader=FakeReader(),  # type: ignore[arg-type]
-        state_store=FakeStateStore(),  # type: ignore[arg-type]
-        config=UNCAPPED,
-        adjustment="all",
-        lookback_buffer_days=10,
-        lookback_max_days=1200,
-        account_id=ACCOUNT_ID,
-        count=10,
-        block_ms=0,
-    )
+    emitted = await _poll([_record("s1", ACCOUNT_A)], store, redis)
 
     assert emitted == 1
+    assert redis.acked == ["1-0"]
+
+
+async def test_an_unassigned_strategy_does_not_wedge_the_consumer() -> None:
+    """The poison-loop guard, at the loop level."""
+
+    redis = FakeRedis(_open_phase_entries())
+    store = FakeStateStore({})
+
+    await _poll([_record("s1", None)], store, redis)
+
     assert redis.acked == ["1-0"]

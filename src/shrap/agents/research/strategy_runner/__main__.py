@@ -29,7 +29,6 @@ def main() -> None:
             adjustment=settings.adjustment,
             lookback_buffer_days=settings.lookback_buffer_days,
             lookback_max_days=settings.lookback_max_days,
-            account_id=settings.account_id,
             start_id=settings.start_id,
             count=settings.count,
             block_ms=settings.block_ms,

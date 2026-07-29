@@ -48,13 +48,6 @@ class Settings(BaseSettings):
     # intraday-margin-deficit model (ADR-0016).
     max_gross_exposure: float = DEFAULT_MAX_GROSS_EXPOSURE
 
-    # The broker account this runner sizes against — Alpaca's `account_number`,
-    # matched against ops.account_snapshots.account_id. Required: ADR-0017 puts
-    # one strategy in each of three accounts, and an unset value used to mean
-    # "whichever account reported most recently", which is a plausible-looking
-    # number from the wrong book. Unset refuses the pass rather than guessing.
-    account_id: str = ""
-
     # Bar read + price adjustment (matches the Evaluator's default mode).
     adjustment: str = "all"
     lookback_buffer_days: int = 10
@@ -84,7 +77,6 @@ class Settings(BaseSettings):
             "postgres_dsn": "***",
             "max_quantity": self.max_quantity,
             "max_gross_exposure": self.max_gross_exposure,
-            "account_id": self.account_id,
             "confidence": self.confidence,
             "adjustment": self.adjustment,
             "lookback_buffer_days": self.lookback_buffer_days,
