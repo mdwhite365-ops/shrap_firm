@@ -133,6 +133,35 @@ class CrossSectionalTrendStrategy:
         )
 
 
+def _long_short_weights(
+    tickers: tuple[str, ...],
+    longs: list[str],
+    shorts: list[str],
+    gross_exposure: float,
+) -> dict[str, float]:
+    """Dollar-neutral: each side gets half the gross, spread over its members.
+
+    An empty side contributes nothing rather than handing its half to the other.
+    In a market with nothing worth shorting the book is half long and half cash,
+    which is an honest statement about opportunity — silently giving the long
+    side full exposure would turn this back into a long-only strategy exactly
+    when the long-only strategy does best, and hide the switch it was built to
+    express.
+    """
+
+    weights = dict.fromkeys(tickers, 0.0)
+    half = gross_exposure / 2.0
+    if longs:
+        per_long = half / len(longs)
+        for ticker in longs:
+            weights[ticker] = per_long
+    if shorts:
+        per_short = half / len(shorts)
+        for ticker in shorts:
+            weights[ticker] = -per_short
+    return weights
+
+
 @dataclass(frozen=True, slots=True)
 class CrossSectionalMomentumStrategy:
     """Hold the top ``top_n`` names by trailing return, equal-weighted.
@@ -148,6 +177,33 @@ class CrossSectionalMomentumStrategy:
     skip: int = DEFAULT_SKIP
     top_n: int = DEFAULT_TOP_N
     gross_exposure: float = DEFAULT_GROSS_EXPOSURE
+    long_short: bool = False
+    """Short the bottom of the ranking as well as buying the top.
+
+    Momentum is a two-sided effect and this rule ran half of it. The textbook
+    construction (Jegadeesh-Titman) is long the winners AND short the losers;
+    dropping the short side leaves a book that is structurally ~100% long
+    equity, competing against a 100%-long benchmark on stock selection alone.
+
+    The first evaluation showed exactly that shape — fold information ratio
+    correlating +0.97 with fold RETURN once the crash is excluded. It beat the
+    benchmark in the three folds the market ran hard (IR +1.090, +0.692,
+    +1.073), was dead flat in the crash (-0.004), and lost in the two quiet
+    years (-0.457, -0.241). That is a trend amplifier, not a market-neutral
+    factor.
+
+    **This is also the answer to "how does it know the market switched".** It
+    does not have to. Holding both sides of the cross-section expresses the
+    switch continuously — when leadership rolls over, names migrate from the
+    long leg to the short leg on their own. No regime call, no classifier, no
+    `spec.regime_gate`.
+
+    **Symmetric, so no new numeric parameter.** The short leg is the bottom
+    ``top_n``, mirroring the long leg's top ``top_n``, and requires a NEGATIVE
+    formation return exactly as the long leg requires a positive one. Sizing is
+    dollar-neutral, half the gross per side.
+    """
+
     market_filter: bool = False
     """Hold nothing while the average name in the universe is falling.
 
@@ -238,6 +294,16 @@ class CrossSectionalMomentumStrategy:
         # Sort by ticker first so ties resolve deterministically rather than by
         # panel order — a reproducible backtest cannot depend on dict ordering.
         scored.sort(key=lambda pair: (-pair[0], pair[1]))
+        if self.long_short:
+            # `k` caps each leg at half the rankable names so the two slices can
+            # never overlap. With 50 names and top_n=10 this is simply 10; it
+            # only binds on a universe too small to fill both legs, where taking
+            # `top_n` from each end would put a name on both sides of the book.
+            n = len(scored)
+            k = min(self.top_n, n // 2)
+            longs = [t for r, t in scored[:k] if r > 0.0]
+            shorts = [t for r, t in scored[n - k :] if r < 0.0]
+            return _long_short_weights(window.tickers, longs, shorts, self.gross_exposure)
         # Long-only by construction: a negative formation return is a loser, and
         # holding it would make this a different strategy wearing this name.
         selected = [t for r, t in scored[: self.top_n] if r > 0.0]
@@ -251,6 +317,7 @@ class CrossSectionalMomentumStrategy:
             top_n=int(params.get("top_n", DEFAULT_TOP_N)),
             gross_exposure=float(params.get("gross_exposure", DEFAULT_GROSS_EXPOSURE)),
             market_filter=bool(params.get("market_filter", False)),
+            long_short=bool(params.get("long_short", False)),
         )
 
 
