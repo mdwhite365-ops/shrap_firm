@@ -22,6 +22,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+import pytest
+
 from shrap.research.strategy_evaluator.strategy import BarSample, PanelWindow
 from shrap.research.strategy_registry import (
     SCHEMA_VERSION,
@@ -35,8 +37,10 @@ from shrap.research.strategy_runner.engine import (
     RunnerSignalConfig,
     StrategyInput,
     TargetState,
+    allocate_equity,
     plan_session,
 )
+from shrap.research.strategy_runner.sizing import SizingRefused
 from shrap.trading_floor.decision_maker_stub import DEFAULT_CONFIDENCE_THRESHOLD
 
 SESSION = date(2026, 7, 24)
@@ -403,6 +407,113 @@ def test_a_zero_equity_pass_cannot_be_planned_at_all() -> None:
     import inspect
 
     assert inspect.signature(plan_session).parameters["equity"].default is inspect.Parameter.empty
+
+
+# --- firm-wide exposure: the book cannot lever itself by promoting strategies --
+
+
+def _plan_many(
+    strategies: list[tuple[str, dict[str, float]]],
+    *,
+    config: RunnerSignalConfig = UNCAPPED,
+    equity: float = EQUITY,
+) -> float:
+    """Plan N strategies and return total ordered notional at PRICE_FLAT."""
+
+    price = 10.0  # _bars default close
+    items: list[StrategyInput] = []
+    fakes: dict[str, FakeStrategy] = {}
+    for sid, weights in strategies:
+        tickers = list(weights)
+        items.append(
+            StrategyInput(
+                record=_make_record(sid, tickers),
+                tickers=tickers,
+                bars_by_ticker={t: _bars(5) for t in tickers},
+            )
+        )
+        fakes[sid] = FakeStrategy(name=sid, warmup=3, weights=weights)
+
+    plans = plan_session(
+        session_date=SESSION,
+        strategies=items,
+        stored_state={},
+        factory=lambda rec, tks: fakes[rec.strategy_id],
+        config=config,
+        regime_label=None,
+        equity=equity,
+    )
+    return sum(s.payload["quantity"] * price for p in plans for s in p.signals)
+
+
+def test_one_strategy_fully_invested_deploys_the_account_once() -> None:
+    assert _plan_many([("s1", {"AAA": 1.0})]) == pytest.approx(EQUITY)
+
+
+def test_two_strategies_do_not_order_two_accounts_worth() -> None:
+    """THE test in this card, and it was a real defect.
+
+    Before the exposure budget, every strategy sized against the *whole*
+    account, so two strategies at full investment ordered $20,000 against
+    $10,000 of equity. Measured on this engine — arithmetic, not a hypothetical.
+    """
+
+    total = _plan_many([("s1", {"AAA": 1.0}), ("s2", {"BBB": 1.0})])
+    assert total == pytest.approx(EQUITY)  # not 2 x EQUITY
+
+
+def test_four_strategies_still_deploy_exactly_one_account() -> None:
+    """Four was 4.0x gross — precisely the FINRA 25% maintenance ceiling, so a
+    fifth strategy would have breached it and opened a margin deficit."""
+
+    total = _plan_many([(f"s{i}", {f"T{i}": 1.0}) for i in range(4)])
+    assert total == pytest.approx(EQUITY)
+
+
+def test_promoting_a_strategy_shrinks_the_others_rather_than_growing_the_book() -> None:
+    one = _plan_many([("s1", {"AAA": 1.0})])
+    four = _plan_many([(f"s{i}", {f"T{i}": 1.0}) for i in range(4)])
+    assert one == pytest.approx(four)
+
+
+def test_the_exposure_budget_is_a_multiple_of_equity() -> None:
+    """The knob exists so leverage is a decision someone makes, not a side
+    effect of how many strategies happen to be promoted."""
+
+    levered = _plan_many(
+        [("s1", {"AAA": 1.0}), ("s2", {"BBB": 1.0})],
+        config=RunnerSignalConfig(max_quantity=1_000_000, max_gross_exposure=2.0),
+    )
+    assert levered == pytest.approx(2 * EQUITY)
+
+
+def test_the_default_is_unlevered() -> None:
+    """Mike's ruling is 'it can be aggressive', but leverage is how accounts
+    reach zero and there is still no drawdown limit or margin-deficit model."""
+
+    assert RunnerSignalConfig().max_gross_exposure == 1.0
+
+
+def test_weights_within_a_strategy_keep_their_shape_as_others_are_added() -> None:
+    """Equal slices, not proportional rescaling.
+
+    A strategy must trade the shape the Evaluator measured. Only its scale may
+    depend on what else is running.
+    """
+
+    alone = _plan_many([("s1", {"AAA": 0.75, "BBB": 0.25})])
+    shared = _plan_many([("s1", {"AAA": 0.75, "BBB": 0.25}), ("s2", {"CCC": 1.0})])
+    # s1's own split is untouched; only its slice halved.
+    assert shared == pytest.approx(alone)
+
+
+def test_allocate_equity_refuses_a_zero_budget_rather_than_sizing_to_nothing() -> None:
+    with pytest.raises(SizingRefused, match="no capital may be deployed"):
+        allocate_equity(EQUITY, 2, 0.0)
+
+
+def test_allocate_equity_handles_an_empty_pass() -> None:
+    assert allocate_equity(EQUITY, 0, 1.0) == 0.0
 
 
 def test_confidence_clears_the_decision_maker_threshold() -> None:

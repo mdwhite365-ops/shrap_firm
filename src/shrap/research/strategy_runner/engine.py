@@ -24,6 +24,12 @@ Invariants enforced in this module (the service enforces the delivery ones):
   (:mod:`shrap.research.strategy_runner.sizing`). Equity is a required input:
   there is no default and no fallback, so a pass with unknown account size emits
   nothing rather than emitting a size nobody evaluated.
+- **Bounded firm-wide, not just per strategy.** Total intended exposure across
+  every active strategy is capped at ``max_gross_exposure`` x equity (default
+  1.0 — fully invested, unlevered). Each strategy sizes against an equal slice
+  of that budget, so its weights are fractions of its own allocation. Sizing
+  every strategy against the *whole* account is how a book silently levers: two
+  strategies at full investment order 200% of equity, four order 400%.
 - **Idempotent per session.** A strategy whose stored ``last_session_date``
   already equals this session's date is skipped, so a re-delivered / startup /
   catch-up market-phase event (or a restart) never produces a second pass. At
@@ -49,7 +55,7 @@ from typing import TYPE_CHECKING, Any
 
 from shrap.research.strategy_evaluator.strategy import BarSample, PanelWindow, PricePanel
 from shrap.research.strategy_registry import StrategyRecord
-from shrap.research.strategy_runner.sizing import size_position
+from shrap.research.strategy_runner.sizing import SizingRefused, size_position
 
 if TYPE_CHECKING:
     from shrap.research.strategy_evaluator.pipeline import StrategyFactory
@@ -89,6 +95,21 @@ DEFAULT_MAX_QUANTITY = 100
 # runner emitted a hardcoded 1 share, so 1 is exactly what any such position holds.
 LEGACY_EXIT_QUANTITY = 1
 
+# Total intended exposure across ALL strategies, as a multiple of account equity.
+#
+# 1.0 means fully invested and unlevered. This is a *firm-wide* budget, not a
+# per-strategy one, because sizing each strategy against full equity is how a
+# book silently becomes levered: two strategies at 100% target 200% of the
+# account, four target 400%. Measured on this engine before the cap existed —
+# it is arithmetic, not a hypothetical.
+#
+# Deliberately 1.0 rather than something aggressive, even though Mike's ruling
+# is "it can be aggressive". Leverage is the mechanism by which accounts reach
+# zero, and the firm currently has no drawdown limit, no per-strategy loss limit,
+# and no model of FINRA's intraday margin deficit (ADR-0016). Raising this is a
+# decision to make once those exist, and it is one config value away.
+DEFAULT_MAX_GROSS_EXPOSURE = 1.0
+
 
 @dataclass(frozen=True, slots=True)
 class RunnerSignalConfig:
@@ -97,6 +118,7 @@ class RunnerSignalConfig:
     max_quantity: int = DEFAULT_MAX_QUANTITY  # keep equal to the Pre-Trade cap
     confidence: float = DEFAULT_CONFIDENCE  # must clear the Decision Maker threshold
     urgency: str = DEFAULT_URGENCY
+    max_gross_exposure: float = DEFAULT_MAX_GROSS_EXPOSURE  # firm-wide, not per strategy
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +259,44 @@ def _build_payload(
         "regime_label": regime_label or UNKNOWN_REGIME,
         "justification_text": justification,
     }
+
+
+def allocate_equity(equity: float, n_strategies: int, max_gross_exposure: float) -> float:
+    """Split the firm-wide exposure budget into one equal slice per strategy.
+
+    A strategy's target weights are *its own* fractions — "100%" means all of
+    what that strategy was given, not all of the account. Before this, every
+    strategy sized against the whole account independently, so N strategies at
+    full investment ordered N times the equity. That was measured on this engine,
+    not theorised.
+
+    Equal slices rather than proportional scaling, deliberately. Scaling every
+    strategy's weights to make the total fit would change the relative sizing
+    *within* a strategy as unrelated strategies came and went, so a strategy
+    would trade differently depending on what else happened to be running. A
+    fixed slice keeps each strategy trading the shape the Evaluator measured; only
+    its scale changes.
+
+    Divides by the count of *active* strategies rather than the count that
+    actually emit today. A slice that changed daily with who happened to trade
+    would resize the meaning of "100%" between an entry and its exit.
+
+    **Honest limit.** This bounds *intended* exposure while the slice is stable.
+    Promoting or killing a strategy changes the divisor, so positions opened
+    under an older, larger slice stay larger than the new one until they exit —
+    bounded by the old cap, converging as they close. Making this exact requires
+    live position values, which the Runner does not have (KI-005); that is the
+    Risk Officer's job, not this function's.
+    """
+
+    if n_strategies <= 0:
+        return 0.0
+    if max_gross_exposure <= 0.0:
+        raise SizingRefused(
+            f"max_gross_exposure is {max_gross_exposure}, so no capital may be "
+            "deployed. Set it above zero or stop the runner — refusing to size."
+        )
+    return equity * max_gross_exposure / n_strategies
 
 
 def _latest_close(window: PanelWindow, ticker: str) -> float:
@@ -447,8 +507,13 @@ def plan_session(
     ``equity`` has no default on purpose. The caller must have established a
     usable account size (``sizing.assert_equity_usable``) before planning, and a
     default here would be a silent fiction the whole book was sized against.
+
+    ``equity`` is the *whole account*. Each strategy is then sized against its
+    own slice of the firm-wide exposure budget (:func:`allocate_equity`), so a
+    strategy's "100%" is 100% of what it was allocated, never 100% of the book.
     """
 
+    budget = allocate_equity(equity, len(strategies), config.max_gross_exposure)
     return [
         _plan_strategy(
             session_date=session_date,
@@ -457,7 +522,7 @@ def plan_session(
             factory=factory,
             config=config,
             regime_label=regime_label,
-            equity=equity,
+            equity=budget,
         )
         for item in strategies
     ]
@@ -465,6 +530,7 @@ def plan_session(
 
 __all__ = [
     "DEFAULT_CONFIDENCE",
+    "DEFAULT_MAX_GROSS_EXPOSURE",
     "DEFAULT_MAX_QUANTITY",
     "DEFAULT_URGENCY",
     "FLAT_TARGET",
@@ -481,5 +547,6 @@ __all__ = [
     "StrategyInput",
     "StrategyPlan",
     "TargetState",
+    "allocate_equity",
     "plan_session",
 ]

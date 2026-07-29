@@ -42,10 +42,40 @@ What this agent deliberately does **not** do:
 
 ## Sizing
 
-An entry converts the strategy's target weight into shares against real account
-equity:
+An entry converts the strategy's target weight into shares against the
+strategy's **slice** of a firm-wide exposure budget:
 
-    target_weight x equity = notional slot;  slot / price = shares, floored
+    slice          = equity x max_gross_exposure / active strategies
+    notional slot  = target_weight x slice
+    shares         = slot / price, floored
+
+### The exposure budget
+
+`max_gross_exposure` (default **1.0** — fully invested, unlevered) caps *total*
+intended exposure across every active strategy, and each strategy gets an equal
+slice. A strategy's weights are therefore fractions of its own allocation, never
+of the whole account.
+
+This exists because the alternative was measured and was wrong: sizing every
+strategy against full equity meant **two strategies at full investment ordered
+$20,000 against $10,000 of equity, and four ordered $40,000** — 4.0x gross,
+exactly FINRA's 25% maintenance ceiling, reached by promoting strategies rather
+than by anyone deciding to lever.
+
+Equal slices rather than proportionally rescaling everyone's weights: a strategy
+must keep trading the *shape* the Evaluator measured, so only its scale may
+depend on what else is running.
+
+**Honest limit.** This bounds *intended* exposure while the slice is stable.
+Promoting or killing a strategy changes the divisor, so positions opened under an
+older, larger slice stay larger than the new one until they exit — bounded by the
+old cap, converging as they close. Making it exact needs live position values,
+which the Runner does not have (KI-005). That is the Risk Officer's job.
+
+The default is 1.0 even though Mike's ruling is "it can be aggressive". Leverage
+is the mechanism by which accounts reach zero, and the firm has no drawdown
+limit, no per-strategy loss limit, and no model of FINRA's intraday margin
+deficit (ADR-0016). Raising it is one config value, once those exist.
 
 Equity comes from `ops.account_snapshots`, which the Reconciliation Agent writes
 every pass — ADR-0003 keeps broker credentials inside broker-facing containers,
