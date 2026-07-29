@@ -338,6 +338,9 @@ class EvaluationOutcome:
     trigger: str
     ts: datetime
     card_markdown: str
+    consistency_metrics: dict[str, Any] = field(default_factory=dict)
+    """Cross-fold consistency. Empty when the engine did not run."""
+
     coverage: PanelCoverage | None = None
     """Panel extent and what truncated it. ``None`` when no panel was built —
     a spec refusal or a dead anchor stops before the dataset, and reporting
@@ -356,7 +359,8 @@ class EvaluationOutcome:
             f"anchor={self.anchor_state} engine_ran={self.engine_ran} "
             f"trades={self.total_trades} sharpe={self.base_sharpe:.3f} "
             f"stress_sharpe={self.stress_sharpe:.3f} ir={self.reported_ir} "
-            f"{self.reported_coverage} protocol={self.protocol_version}"
+            f"{self.reported_coverage} {self.reported_consistency} "
+            f"protocol={self.protocol_version}"
         )
 
     @property
@@ -379,6 +383,22 @@ class EvaluationOutcome:
         if raw is None:
             return "n/a"
         return f"{float(raw):.3f}"
+
+    @property
+    def reported_consistency(self) -> str:
+        """``folds=3/6`` — how many year-sets the strategy actually beat the
+        benchmark in.
+
+        The aggregate pools every fold into one number and discards the rest. On
+        the first real evaluation that concealed a spread of 2.69 in fold Sharpe
+        behind an aggregate of 0.782 — an edge indistinguishable from zero
+        across periods, reported as a single respectable-looking figure.
+        """
+
+        raw = self.consistency_metrics
+        if not raw:
+            return "folds=n/a"
+        return f"folds={raw.get('folds_with_active_edge')}/{raw.get('n_folds')}"
 
     @property
     def reported_coverage(self) -> str:
@@ -627,6 +647,7 @@ class EvaluationPipeline:
             fold_metrics=[f.as_dict() for f in result.folds],
             stress_metrics=result.stress.as_dict(),
             active_metrics=result.active.as_dict(),
+            consistency_metrics=result.consistency.as_dict(),
             coverage=coverage,
             trigger=trigger,
             ts=ts,
@@ -842,6 +863,7 @@ class EvaluationPipeline:
         trigger: str,
         ts: datetime,
         coverage: PanelCoverage | None = None,
+        consistency_metrics: dict[str, Any] | None = None,
     ) -> EvaluationOutcome:
         to_stage = _verdict_to_stage(verdict.verdict)
         evaluation_id = str(ULID())
@@ -872,6 +894,7 @@ class EvaluationPipeline:
             ts=ts,
             card_markdown="",
             coverage=coverage,
+            consistency_metrics=consistency_metrics or {},
         )
         return _with_card(outcome, render_evaluation_card(outcome))
 
@@ -941,6 +964,39 @@ def _panel_start(window_years: int | None, today: date) -> date:
     if window_years is None:
         return DATA_FLOOR
     return today - timedelta(days=window_years * 365)
+
+
+def _consistency_lines(outcome: EvaluationOutcome) -> list[str]:
+    """Whether the edge showed up across year-sets or in a couple of them.
+
+    Placed under the fold table because it is that table's summary — and because
+    the aggregate above it is the number that hides this one.
+    """
+
+    raw = outcome.consistency_metrics
+    if not raw:
+        return []
+    beat = raw.get("folds_with_active_edge")
+    total = raw.get("n_folds")
+    consistency = raw.get("consistency")
+    lines = [
+        "### Consistency across year-sets",
+        "",
+        f"- Beat the benchmark in **{beat} of {total}** folds",
+        f"- Worst fold IR: {_num(raw.get('worst_fold_ir'))}",
+        f"- Fold IR mean {_num(raw.get('fold_ir_mean'))}, "
+        f"spread {_num(raw.get('fold_ir_stdev'))} "
+        f"→ **consistency {_num(consistency)}**",
+    ]
+    if isinstance(consistency, (int, float)) and 0.0 < float(consistency) < 1.0:
+        lines.append(
+            "- **Below 1.0: the variation between year-sets exceeds the average "
+            "edge.** An aggregate computed over such folds is a pooled number "
+            "standing in for periods that disagree with each other, and it will "
+            "look steadier than the strategy is."
+        )
+    lines.append("")
+    return lines
 
 
 def _coverage_lines(outcome: EvaluationOutcome) -> list[str]:
@@ -1054,17 +1110,23 @@ def render_evaluation_card(outcome: EvaluationOutcome) -> str:
             "",
             "## Walk-forward folds",
             "",
-            "| Fold | Start | End | Periods | Return | Sharpe | Max DD | Trades |",
-            "|---|---|---|---|---|---|---|---|",
+            "Each fold is a separate year-set. **IR** is the promote gate applied "
+            "to that period alone: absolute return says little, because +9% in a "
+            "year the basket did +30% is a loss.",
+            "",
+            "| Fold | Start | End | Periods | Return | Sharpe | IR | Max DD | Trades |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         for fold in outcome.fold_metrics:
             lines.append(
                 f"| {fold.get('index')} | {fold.get('start_date')} | {fold.get('end_date')} "
                 f"| {fold.get('n_periods')} | {_pct(fold.get('total_return'))} "
-                f"| {_num(fold.get('sharpe'))} | {_pct(fold.get('max_drawdown'))} "
+                f"| {_num(fold.get('sharpe'))} | {_num(fold.get('information_ratio'))} "
+                f"| {_pct(fold.get('max_drawdown'))} "
                 f"| {fold.get('trade_count')} |"
             )
         lines.append("")
+        lines += _consistency_lines(outcome)
     lines += [
         "## Notes",
         "",

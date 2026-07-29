@@ -173,6 +173,16 @@ class FoldMetrics:
     sharpe: float
     max_drawdown: float
     trade_count: int
+    information_ratio: float = 0.0
+    """The promote gate applied to THIS year-set alone.
+
+    Absolute fold return says little: +9% in a year the basket did +30% is a
+    loss. The active series is already computed per period against the identical
+    benchmark, so slicing it by fold costs nothing and answers the question the
+    aggregate cannot — did the edge show up in each period, or in a couple?
+    """
+
+    active_return: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -184,6 +194,8 @@ class FoldMetrics:
             "sharpe": self.sharpe,
             "max_drawdown": self.max_drawdown,
             "trade_count": self.trade_count,
+            "information_ratio": self.information_ratio,
+            "active_return": self.active_return,
         }
 
 
@@ -235,6 +247,82 @@ class ActiveMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class ConsistencyMetrics:
+    """Does the edge show up across year-sets, or in a couple of them?
+
+    The walk-forward already runs the strategy over N separate periods and the
+    verdict then pools them into one number and discards the rest. On the first
+    real evaluation that hid a great deal: an aggregate Sharpe of 0.782 was six
+    folds ranging -1.036 to +1.655, a spread of 2.69 against a mean of 0.708.
+    The fold-to-fold variation exceeded the average, which is the signature of
+    an edge you cannot distinguish from zero across periods — and no gate saw
+    it, because no gate was looking at the folds.
+
+    ``consistency`` is the mean fold information ratio over its standard
+    deviation. Below 1.0 means the variation between year-sets is larger than
+    the average edge itself. It is deliberately NOT annualised or turned into a
+    p-value: with six folds any such number would carry more precision than the
+    sample supports, and the point is to make the dispersion visible rather than
+    to manufacture a significance test out of it.
+
+    Reported, not gated. What a promote decision should DO about three folds out
+    of six is a calibration, and calibrations are Mike's.
+    """
+
+    n_folds: int
+    folds_with_active_edge: int
+    """Folds whose information ratio beat the benchmark, i.e. was above zero."""
+
+    worst_fold_ir: float
+    fold_ir_mean: float
+    fold_ir_stdev: float
+
+    @property
+    def consistency(self) -> float:
+        """Mean fold IR over its dispersion; 0.0 when there is nothing to divide."""
+
+        if self.fold_ir_stdev == 0.0:
+            return 0.0
+        return self.fold_ir_mean / self.fold_ir_stdev
+
+    def summary(self) -> str:
+        """One field for the verdict line: ``folds=3/6``."""
+
+        return f"folds={self.folds_with_active_edge}/{self.n_folds}"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "n_folds": self.n_folds,
+            "folds_with_active_edge": self.folds_with_active_edge,
+            "worst_fold_ir": self.worst_fold_ir,
+            "fold_ir_mean": self.fold_ir_mean,
+            "fold_ir_stdev": self.fold_ir_stdev,
+            "consistency": self.consistency,
+        }
+
+    @classmethod
+    def from_folds(cls, folds: Sequence[FoldMetrics]) -> ConsistencyMetrics:
+        if not folds:
+            return cls(0, 0, 0.0, 0.0, 0.0)
+        irs = [f.information_ratio for f in folds]
+        mean = sum(irs) / len(irs)
+        # Sample stdev (ddof=1) to match the Sharpe convention used everywhere
+        # else; a single fold has no dispersion to report.
+        if len(irs) > 1:
+            var = sum((x - mean) ** 2 for x in irs) / (len(irs) - 1)
+            stdev = math.sqrt(var)
+        else:
+            stdev = 0.0
+        return cls(
+            n_folds=len(folds),
+            folds_with_active_edge=sum(1 for x in irs if x > 0.0),
+            worst_fold_ir=min(irs),
+            fold_ir_mean=mean,
+            fold_ir_stdev=stdev,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class WalkForwardResult:
     """The full deterministic result of one evaluation run."""
 
@@ -246,6 +334,7 @@ class WalkForwardResult:
     aggregate: AggregateMetrics
     stress: AggregateMetrics
     active: ActiveMetrics
+    consistency: ConsistencyMetrics
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -503,6 +592,12 @@ def walk_forward(
     for i, (start_off, end_off) in enumerate(_fold_bounds(n_periods, config.n_folds)):
         returns_slice = base.daily_returns[start_off : end_off + 1]
         trades_slice = base.trades_per_period[start_off : end_off + 1]
+        # Sliced from the SAME offsets as the strategy returns, so a fold's
+        # active number cannot describe a different span than its own.
+        active_slice = active_series[start_off : end_off + 1]
+        active_eq: list[float] = [1.0]
+        for r in active_slice:
+            active_eq.append(active_eq[-1] * (1.0 + r))
         # Fold-local equity curve (resets to 1.0 at the fold's first period).
         eq: list[float] = [1.0]
         for r in returns_slice:
@@ -517,6 +612,8 @@ def walk_forward(
                 sharpe=sharpe(returns_slice, config.periods_per_year),
                 max_drawdown=max_drawdown(eq),
                 trade_count=sum(trades_slice),
+                information_ratio=sharpe(active_slice, config.periods_per_year),
+                active_return=total_return(active_eq),
             )
         )
 
@@ -535,6 +632,7 @@ def walk_forward(
             benchmark_total_return=total_return(bench.equity),
             n_periods=len(active_series),
         ),
+        consistency=ConsistencyMetrics.from_folds(folds),
     )
 
 
@@ -551,6 +649,7 @@ __all__ = [
     "ActiveMetrics",
     "AggregateMetrics",
     "BacktestSegment",
+    "ConsistencyMetrics",
     "EvalConfig",
     "FoldMetrics",
     "InsufficientDataError",

@@ -155,6 +155,38 @@ follow and both are deliberate:
 > differently than a live desk on SIP would see. See
 > `docs/infrastructure/market-data.md`.
 
+### Consistency across year-sets (added 2026-07-29)
+
+Each fold is a separate year-set, and the walk-forward has always produced
+several. The verdict pools them into one aggregate and discards the rest, which
+on the first real evaluation concealed a great deal:
+
+```
+aggregate sharpe the gate used : 0.782
+six fold sharpes               : +1.286 -1.036 +0.451 +1.655 +1.516 +0.374
+mean 0.708, spread 1.010       -> consistency 0.70
+```
+
+The variation *between* year-sets exceeded the average — an edge that cannot be
+distinguished from zero across periods, reported as one respectable-looking
+number. Five of six folds beat the benchmark and that was still true, which is
+why neither figure alone was enough.
+
+Every fold therefore now carries its own **information ratio** — the promote gate
+applied to that period alone. Absolute fold return is not the measure: +9% in a
+year the basket returned +30% is a loss.
+
+`consistency` is the mean fold IR over its standard deviation. Below 1.0 means
+the dispersion is larger than the edge. It is deliberately not annualised or
+converted to a p-value: with six folds any such number carries more precision
+than the sample supports, and the purpose is to make dispersion visible rather
+than to manufacture significance.
+
+**Reported, not gated.** What a promote decision should *do* about three folds
+out of six is a calibration and belongs to Mike. The same applies to the two
+other gaps this exposed and does not close: nothing gates on max drawdown, and
+nothing compares a revision to the parent it revised.
+
 ## 3. Walk-forward (spec step 5)
 
 Expanding-window walk-forward, **6 folds** (default; ≥6 required), train on

@@ -942,3 +942,108 @@ def test_the_card_reports_how_wide_the_cross_section_was_at_each_end() -> None:
 
     assert "**1** names at the first bar" in card
     assert "**3** at the last" in card
+
+
+def test_the_summary_reports_how_many_year_sets_the_edge_showed_up_in() -> None:
+    """The aggregate pools every fold into one number and discards the rest.
+
+    On the first real evaluation that hid six fold Sharpes spanning -1.036 to
+    +1.655 behind an aggregate of 0.782 — a spread larger than the mean, which
+    is an edge indistinguishable from zero across periods.
+    """
+
+    outcome = _outcome_with(
+        {"information_ratio": 0.392},
+        consistency_metrics={
+            "n_folds": 6,
+            "folds_with_active_edge": 3,
+            "worst_fold_ir": -1.036,
+            "fold_ir_mean": 0.708,
+            "fold_ir_stdev": 1.010,
+            "consistency": 0.70,
+        },
+    )
+
+    assert "folds=3/6" in outcome.summary()
+
+
+def test_a_run_without_folds_reports_na_not_zero_of_zero() -> None:
+    """A refusal never ran the engine. `folds=0/0` would read as "it was tested
+    across no periods and failed", which is a different and wrong claim."""
+
+    assert "folds=n/a" in _outcome_with({}, engine_ran=False).summary()
+
+
+def test_the_card_warns_when_dispersion_exceeds_the_edge() -> None:
+    """A consistency below 1.0 is the tell, and it needs saying in words — the
+    number alone does not carry its own interpretation."""
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+
+    card = render_evaluation_card(
+        _outcome_with(
+            {"information_ratio": 0.392},
+            consistency_metrics={
+                "n_folds": 6,
+                "folds_with_active_edge": 5,
+                "worst_fold_ir": -1.036,
+                "fold_ir_mean": 0.708,
+                "fold_ir_stdev": 1.010,
+                "consistency": 0.70,
+            },
+        )
+    )
+
+    assert "### Consistency across year-sets" in card
+    assert "5 of 6" in card
+    assert "variation between year-sets exceeds the average" in card
+
+
+def test_the_card_does_not_warn_on_a_steady_edge() -> None:
+    """Warning on the good case would train the reader to ignore the warning."""
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+
+    card = render_evaluation_card(
+        _outcome_with(
+            {"information_ratio": 0.8},
+            consistency_metrics={
+                "n_folds": 6,
+                "folds_with_active_edge": 6,
+                "worst_fold_ir": 0.62,
+                "fold_ir_mean": 0.71,
+                "fold_ir_stdev": 0.05,
+                "consistency": 14.2,
+            },
+        )
+    )
+
+    assert "### Consistency across year-sets" in card
+    assert "variation between year-sets exceeds the average" not in card
+
+
+async def test_per_fold_information_ratio_is_computed_end_to_end(tmp_path: Path) -> None:
+    """The wiring test. Per-fold IR slices the same active series the aggregate
+    uses, so a mistake here would show up as folds that disagree with the
+    headline number rather than as an error."""
+
+    registry = FakeRegistry(_record())
+    pipeline = _pipeline(
+        registry=registry,
+        reader=FakeReader(bars=_square_wave_bars()),
+        store=FakeStore(),
+        redis=FakeRedis(),
+        card_root=tmp_path,
+        strategy_factory=lambda record, tickers: SquareWaveSignal(tickers[0], 8),
+    )
+
+    outcome = await pipeline.evaluate("01STRAT")
+
+    assert outcome.consistency_metrics
+    assert outcome.consistency_metrics["n_folds"] == len(outcome.fold_metrics)
+    for fold in outcome.fold_metrics:
+        assert "information_ratio" in fold
+    # The square-wave fixture is deliberately skilful, so it should beat the
+    # benchmark in most periods rather than on average only.
+    assert outcome.consistency_metrics["folds_with_active_edge"] >= 1
+    assert "folds=" in outcome.summary()
