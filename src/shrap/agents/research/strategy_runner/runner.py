@@ -336,6 +336,7 @@ async def run_pass(
             config=config,
             regime_label=regime_label,
             equity=equity,
+            account_id=account_id,
         )
 
         for plan in plans:

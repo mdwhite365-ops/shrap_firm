@@ -421,6 +421,13 @@ services:
       - .env
     environment:
       EXECUTION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      # OPTIONAL. The agent asks the broker which account its credentials open
+      # and uses that, so there is normally nothing to set here — the key pair
+      # already determines the book. Set it only as an assertion: a mismatch
+      # between this and the account the credentials actually open makes the
+      # agent refuse to start, which catches a key/account pairing mistake that
+      # would otherwise route one strategy's orders into another's account.
+      EXECUTION_AGENT_ACCOUNT_ID: "${ALPACA_ACCOUNT_ID:-}"
       EXECUTION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY}"
       EXECUTION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
       EXECUTION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"

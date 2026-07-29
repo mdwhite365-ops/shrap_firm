@@ -80,8 +80,14 @@ def build_stub_intent(
     urgency = str(signal.get("urgency", DEFAULT_URGENCY)).strip() or DEFAULT_URGENCY
     expiry = str(signal.get("expiry", DEFAULT_EXPIRY)).strip() or DEFAULT_EXPIRY
 
+    # The account rides through untouched. Dropping it here would unroute every
+    # order downstream: each Execution Agent acts only on its own account, so an
+    # intent with no account is executed by none of them.
+    account_id = str(signal.get("account_id", "")).strip()
+
     return {
         "ticker": ticker,
+        "account_id": account_id,
         "side": side,
         "size_hint": size_hint,
         "quantity": size_hint,

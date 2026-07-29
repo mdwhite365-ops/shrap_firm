@@ -48,6 +48,7 @@ def test_settings_redacted_output_is_log_safe() -> None:
         "service_name": "execution-agent",
         "instance_id": settings.instance_id,
         "redis_url": "redis://redis:6379/0",
+        "account_id": "",
         "alpaca": {
             "api_key": "***",
             "secret_key": "***",

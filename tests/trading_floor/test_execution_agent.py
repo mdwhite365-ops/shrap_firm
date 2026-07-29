@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import fakeredis.aioredis
 import pytest
 
-from shrap.events import EventPublisher
+from shrap.common.envelope import Envelope
+from shrap.events import EventPublisher, ReceivedEvent
 from shrap.events.groups import GroupEventSubscriber
 
 
@@ -99,6 +101,7 @@ def approved_risk_payload(**overrides: object) -> dict[str, Any]:
         "strategy_ids": ["manual-smoke"],
         "approved_intent_payload": {
             "ticker": "AAPL",
+            "account_id": "PA3TESTACCT",
             "side": "buy",
             "quantity": 2,
             "mode": "paper",
@@ -133,6 +136,7 @@ async def test_poll_once_submits_approved_paper_order_and_publishes_submitted_ev
         subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
+        account_id="PA3TESTACCT",
     )
 
     assert processed == 1
@@ -173,6 +177,7 @@ async def test_poll_once_refuses_non_paper_approved_intent_and_skips_past_it() -
         schema_version="1.0.0",
         payload=approved_risk_payload(
             approved_intent_payload={
+                "account_id": "PA3TESTACCT",
                 "ticker": "AAPL",
                 "side": "buy",
                 "quantity": 2,
@@ -188,6 +193,7 @@ async def test_poll_once_refuses_non_paper_approved_intent_and_skips_past_it() -
         subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
+        account_id="PA3TESTACCT",
     )
 
     assert processed == 0
@@ -234,6 +240,7 @@ async def test_poll_order_status_once_publishes_status_update_for_open_order() -
         subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
+        account_id="PA3TESTACCT",
     )
 
     assert processed == 1
@@ -285,6 +292,7 @@ async def test_poll_order_status_once_publishes_filled_event_for_filled_order() 
         subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
+        account_id="PA3TESTACCT",
     )
 
     assert processed == 1
@@ -394,3 +402,143 @@ async def test_alpaca_paper_client_submit_order_posts_to_paper_orders_endpoint()
             order,
         )
     ]
+
+
+# --- account routing (ADR-0017) -----------------------------------------------
+
+
+def _approved_event(account_id: str | None, event_id: str = "risk-1") -> ReceivedEvent:
+    """An approved risk decision, optionally naming an account."""
+
+    intent: dict[str, Any] = {
+        "ticker": "AAPL",
+        "side": "buy",
+        "quantity": 2,
+        "mode": "paper",
+    }
+    if account_id is not None:
+        intent["account_id"] = account_id
+    envelope = Envelope.new(
+        produced_by="risk/pre-trade-checker",
+        schema_version="1.0.0",
+        payload={"approved": True, "approved_intent_payload": intent},
+    )
+    object.__setattr__(envelope, "event_id", event_id)
+    return ReceivedEvent(stream="risk.intent.approved", redis_stream_id="1-0", envelope=envelope)
+
+
+def test_an_intent_for_this_account_is_claimed() -> None:
+    from shrap.trading_floor.execution_agent import Routing, route_for_account
+
+    assert route_for_account(_approved_event("PA3MINE"), "PA3MINE") == Routing.MINE
+
+
+def test_an_intent_for_another_account_is_left_alone() -> None:
+    """Three agents share one stream. Each must ignore the other two's work."""
+
+    from shrap.trading_floor.execution_agent import Routing, route_for_account
+
+    assert route_for_account(_approved_event("PA3THEIRS"), "PA3MINE") == Routing.OTHER
+
+
+def test_an_intent_with_no_account_is_unroutable_not_mine() -> None:
+    """THE test in this card.
+
+    If a missing account defaulted to "execute", all three agents would claim
+    the same intent and the firm would open three positions for one signal.
+    Missing one trade is recoverable; three unintended ones are not.
+    """
+
+    from shrap.trading_floor.execution_agent import Routing, route_for_account
+
+    assert route_for_account(_approved_event(None), "PA3MINE") == Routing.UNROUTABLE
+    assert route_for_account(_approved_event(""), "PA3MINE") == Routing.UNROUTABLE
+
+
+def test_routing_survives_an_out_of_band_payload() -> None:
+    """An ADR-0006 envelope may carry payload_ref instead of an inline payload.
+
+    Routing cannot read one, so it must report unroutable rather than raise —
+    a crash here would take down the whole loop for every account.
+    """
+
+    from shrap.trading_floor.execution_agent import Routing, route_for_account
+
+    envelope = Envelope(
+        event_id="01OUTOFBAND",
+        schema_version="1.0.0",
+        produced_at=datetime(2026, 7, 29, tzinfo=UTC),
+        produced_by="risk/pre-trade-checker",
+        payload_ref="ref://elsewhere",
+    )
+    event = ReceivedEvent(stream="risk.intent.approved", redis_stream_id="1-0", envelope=envelope)
+    assert route_for_account(event, "PA3MINE") == Routing.UNROUTABLE
+
+
+def test_the_submitted_event_carries_the_account_for_the_status_loop() -> None:
+    """The status loop polls the broker by order id, and an id from another
+    account is a 404 it cannot act on — so the account is stamped here."""
+
+    from shrap.trading_floor.execution_agent import build_order_submitted_payload
+
+    payload = build_order_submitted_payload(
+        _approved_event("PA3MINE"),
+        {"symbol": "AAPL", "qty": "2"},
+        {"id": "order-1", "status": "accepted"},
+    )
+    assert payload["account_id"] == "PA3MINE"
+
+
+# --- account resolution: the credential IS the account ------------------------
+
+
+class _FakeAccountClient:
+    def __init__(self, account: dict[str, Any]) -> None:
+        self._account = account
+        self.calls = 0
+
+    async def get_account(self, http_client: Any) -> dict[str, Any]:
+        self.calls += 1
+        return self._account
+
+
+async def test_the_account_is_derived_from_the_broker_when_unset() -> None:
+    """Nothing to transcribe: a key pair opens exactly one book and only the
+    broker can say which one."""
+
+    from shrap.trading_floor.execution_agent import resolve_account_id
+
+    client = _FakeAccountClient({"account_number": "PA3REAL", "status": "ACTIVE"})
+    resolved = await resolve_account_id(client, object(), "")  # type: ignore[arg-type]
+    assert resolved == "PA3REAL"
+
+
+async def test_a_matching_configured_account_is_confirmed() -> None:
+    from shrap.trading_floor.execution_agent import resolve_account_id
+
+    client = _FakeAccountClient({"account_number": "PA3REAL"})
+    assert await resolve_account_id(client, object(), "PA3REAL") == "PA3REAL"  # type: ignore[arg-type]
+
+
+async def test_a_mismatched_account_refuses_to_start() -> None:
+    """THE dangerous case this guards.
+
+    Agent 1's credentials beside agent 2's account id would route one strategy's
+    orders into the other strategy's book — and every log line would look right,
+    because the agent would believe it was account 2 while the keys opened
+    account 1. Refusing to start is the only safe response.
+    """
+
+    from shrap.trading_floor.execution_agent import AccountMismatchError, resolve_account_id
+
+    client = _FakeAccountClient({"account_number": "PA3REAL"})
+    with pytest.raises(AccountMismatchError, match="belong to different books"):
+        await resolve_account_id(client, object(), "PA3TYPO")  # type: ignore[arg-type]
+
+
+async def test_a_broker_with_no_account_number_refuses() -> None:
+    from shrap.trading_floor.execution_agent import AccountMismatchError, resolve_account_id
+
+    client = _FakeAccountClient({"status": "ACTIVE"})
+    with pytest.raises(AccountMismatchError, match="did not return an account_number"):
+        await resolve_account_id(client, object(), "")  # type: ignore[arg-type]

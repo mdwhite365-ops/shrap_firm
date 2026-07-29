@@ -51,6 +51,7 @@ EQUITY = 10_000.0
 # effectively off. The cap has its own tests below; leaving the production
 # default (1) in place here would make every buy assert the clamp by accident.
 UNCAPPED = RunnerSignalConfig(max_quantity=1_000_000)
+ACCOUNT = "PA3TESTACCT"
 
 
 # --- fabricated strategy seam -------------------------------------------------
@@ -136,6 +137,7 @@ def _plan_one(
         config=config,
         regime_label=regime_label,
         equity=equity,
+        account_id=ACCOUNT,
     )
     assert len(plans) == 1
     return plans[0]
@@ -247,6 +249,7 @@ def test_factory_error_skips_only_that_strategy() -> None:
         config=UNCAPPED,
         regime_label=None,
         equity=EQUITY,
+        account_id=ACCOUNT,
     )
     by_id = {p.strategy_id: p for p in plans}
     assert by_id["bad"].skipped
@@ -442,6 +445,7 @@ def _plan_many(
         config=config,
         regime_label=None,
         equity=equity,
+        account_id=ACCOUNT,
     )
     return sum(s.payload["quantity"] * price for p in plans for s in p.signals)
 

@@ -120,6 +120,7 @@ def _approved_payload(intent_id: str) -> dict[str, Any]:
         "intent_event_id": intent_id,
         "approved_intent_payload": {
             "ticker": "AAPL",
+            "account_id": "PA3TESTACCT",
             "side": "buy",
             "quantity": 1,
             "mode": "paper",
@@ -155,6 +156,7 @@ async def test_duplicate_replay_is_skipped_and_new_intent_still_submits() -> Non
         subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
+        account_id="PA3TESTACCT",
     )
 
     assert processed == 1  # only the new intent counts as processed
@@ -184,6 +186,7 @@ async def test_malformed_approved_event_is_skipped() -> None:
         subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
+        account_id="PA3TESTACCT",
     )
 
     assert processed == 1
@@ -204,6 +207,7 @@ async def test_systemic_broker_error_still_retries_same_event() -> None:
         subscriber=subscriber_for(redis),
         count=10,
         block_ms=1,
+        account_id="PA3TESTACCT",
     )
 
     assert processed == 0

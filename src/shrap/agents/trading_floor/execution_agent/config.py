@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     service_name: str = "execution-agent"
     instance_id: str = Field(default_factory=socket.gethostname)
     redis_url: str = _DEFAULT_REDIS_URL
+    # OPTIONAL assertion, not a required setting. At startup the agent asks the
+    # broker which account its credentials open and uses that — the key pair
+    # already determines the book, so there is nothing to transcribe. When this
+    # IS set and disagrees, the agent refuses to start: that means the keys and
+    # the account id belong to different books, which would route one strategy's
+    # orders into another strategy's account with every log line looking correct.
+    account_id: str = ""
     alpaca_api_key: str = ""
     alpaca_secret_key: SecretStr = SecretStr("")
     alpaca_endpoint: HttpUrl = HttpUrl(_DEFAULT_ALPACA_ENDPOINT)
@@ -52,6 +59,7 @@ class Settings(BaseSettings):
             "service_name": self.service_name,
             "instance_id": self.instance_id,
             "redis_url": self.redis_url,
+            "account_id": self.account_id,
             "alpaca": self.alpaca_settings().redacted(),
             "start_id": self.start_id,
             "count": self.count,

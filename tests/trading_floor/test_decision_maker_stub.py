@@ -33,6 +33,7 @@ def test_build_stub_intent_locks_card_2_envelope_shape() -> None:
     intent = build_stub_intent(
         signal={
             "ticker": " aapl ",
+            "account_id": "PA3TESTACCT",
             "side": "buy",
             "confidence": 0.91,
             "size_hint": 2,
@@ -43,6 +44,7 @@ def test_build_stub_intent_locks_card_2_envelope_shape() -> None:
 
     assert intent == {
         "ticker": "AAPL",
+        "account_id": "PA3TESTACCT",
         "side": "buy",
         "size_hint": 2,
         "quantity": 2,

@@ -36,12 +36,33 @@ The agent is deterministic and no-LLM. It refuses any approved intent whose mode
 ## Processing
 
 1. Read ADR-0006 envelopes from `risk.intent.approved`.
-2. Require the payload to be approved and to include `approved_intent_payload`.
+2. **Resolve this agent's account at startup.** The agent asks the broker which
+   account its credentials open (`GET /v2/account` → `account_number`) and uses
+   that. `EXECUTION_AGENT_ACCOUNT_ID` is an optional *assertion*: when set and
+   disagreeing, the agent refuses to start, because keys and an account id from
+   different books would route one strategy's orders into another strategy's
+   account while every log line looked correct. The credential is the account;
+   only the broker can confirm which.
+3. **Route by account (ADR-0017).** One agent runs per broker account, each with
+   its own consumer group on the single stream, so every agent sees every
+   approved intent and acts only on its own:
+   - `approved_intent_payload.account_id` matches `EXECUTION_AGENT_ACCOUNT_ID` →
+     submit it;
+   - it names a different account → skip and ack. Acking in *this* group leaves
+     the owning agent's group untouched;
+   - it names **no** account → skip and ack, logged at ERROR. This is the case
+     that cannot default to "submit": if it did, all three agents would claim
+     the same intent and the firm would open three positions for one signal.
+     A missed trade is recoverable; three unintended ones are not.
+3. Require the payload to be approved and to include `approved_intent_payload`.
 3. Require `approved_intent_payload.mode == "paper"`.
 4. Build an Alpaca paper market order with `symbol`, `qty`, `side`, `type=market`, `time_in_force=day`, and `client_order_id` equal to the risk event ID.
 5. Submit to the injected paper broker client.
 6. Publish `execution.order.submitted` with the broker order ID/status, submitted order, original risk payload, and correlation ID set to the risk event ID.
-7. Read ADR-0006 envelopes from `execution.order.submitted`.
+7. Read ADR-0006 envelopes from `execution.order.submitted`, **filtered on the
+   same account**. The submitted event carries `account_id` for exactly this:
+   asking the broker about an order id belonging to another account returns a
+   404 the agent cannot act on.
 8. Query Alpaca paper order status by `broker_order_id`.
 9. Publish `execution.order.status-updated` for non-filled statuses and `execution.order.filled` when Alpaca reports `status=filled`; correlation ID is the submitted-order event ID.
 10. Advance each stream offset only after the corresponding broker operation and event publication succeed.
@@ -63,6 +84,7 @@ Stateless in the Month 1 core. The in-memory stream offset map starts at `0-0` s
 1. **Containment:** Non-paper intents, malformed approved payloads, broker failures, or publish failures do not advance offsets.
 2. **Replay safety:** The risk event ID is used as `client_order_id`, making replay detection possible at the broker/audit layer. Full idempotent reconciliation is deferred to the Reconciliation Agent.
 3. **Paper-only invariant:** The agent refuses non-paper payloads and the Alpaca settings object refuses non-paper hosts.
+4. **Unroutable intents:** An approved intent with no `account_id` is claimed by no agent and logged at ERROR by each. It is acked rather than left pending — no account will appear on a replay, so deferring would wedge every agent's consumer. The producer stamps the account: the Strategy Runner from `research.strategies.account_id`, and the Strategy Fixture from its own `account_id` config (empty by default, so an armed fixture exercises the pipeline as far as risk approval and stops).
 
 ## Sprint scope
 
