@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     service_name: str = "execution-agent"
     instance_id: str = Field(default_factory=socket.gethostname)
     redis_url: str = _DEFAULT_REDIS_URL
+    # The broker account this agent submits to (Alpaca's account_number). Each
+    # account gets its own Execution Agent with its own consumer group, and each
+    # acts only on intents naming its own account — ADR-0017. Must match the
+    # account_id assigned to the strategy whose orders these are.
+    account_id: str = ""
     alpaca_api_key: str = ""
     alpaca_secret_key: SecretStr = SecretStr("")
     alpaca_endpoint: HttpUrl = HttpUrl(_DEFAULT_ALPACA_ENDPOINT)
@@ -52,6 +57,7 @@ class Settings(BaseSettings):
             "service_name": self.service_name,
             "instance_id": self.instance_id,
             "redis_url": self.redis_url,
+            "account_id": self.account_id,
             "alpaca": self.alpaca_settings().redacted(),
             "start_id": self.start_id,
             "count": self.count,

@@ -106,6 +106,7 @@ def test_reference_factory_seam_emits_a_buy_end_to_end() -> None:
         config=RunnerSignalConfig(max_quantity=1_000_000),
         regime_label="risk-on",
         equity=10_000.0,
+        account_id="PA3TESTACCT",
     )
     (plan,) = plans
     assert not plan.skipped
@@ -113,3 +114,6 @@ def test_reference_factory_seam_emits_a_buy_end_to_end() -> None:
     # Sized against equity through the real factory seam: fully weighted into a
     # $5 close is 2,000 shares.
     assert plan.signals[0].payload["quantity"] == 2_000
+    # The routing key rides on the signal: without it no Execution Agent claims
+    # the resulting intent.
+    assert plan.signals[0].payload["account_id"] == "PA3TESTACCT"

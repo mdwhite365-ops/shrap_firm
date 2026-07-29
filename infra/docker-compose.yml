@@ -421,6 +421,12 @@ services:
       - .env
     environment:
       EXECUTION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      # The broker account this agent submits to (Alpaca account_number). Each
+      # account gets its own agent with its own consumer group, and each acts
+      # only on intents naming its own account (ADR-0017). Must match the
+      # account_id assigned to the strategy — `shrap-strategy-stage
+      # assign-account`. Unset means this agent claims nothing.
+      EXECUTION_AGENT_ACCOUNT_ID: "${ALPACA_ACCOUNT_ID:-}"
       EXECUTION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY}"
       EXECUTION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
       EXECUTION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"

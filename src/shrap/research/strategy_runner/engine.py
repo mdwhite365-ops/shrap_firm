@@ -242,14 +242,23 @@ def _build_payload(
     ticker: str,
     side: str,
     quantity: int,
+    account_id: str,
     config: RunnerSignalConfig,
     regime_label: str | None,
     justification: str,
 ) -> dict[str, Any]:
-    """Build the exact Strategy Fixture signal payload schema."""
+    """Build the signal payload: the Strategy Fixture schema plus the account.
+
+    ``account_id`` is the routing key. Three Execution Agents each watch the one
+    ``risk.intent.approved`` stream with their own consumer group and act only on
+    their own account, so a signal that does not name one cannot be routed —
+    every agent would skip it, or, if they defaulted to acting, all three would
+    submit the same order.
+    """
 
     return {
         "strategy_id": strategy_id,
+        "account_id": account_id,
         "ticker": ticker.upper(),
         "side": side,
         "size_hint": quantity,
@@ -357,6 +366,7 @@ def _plan_strategy(
     config: RunnerSignalConfig,
     regime_label: str | None,
     equity: float,
+    account_id: str,
 ) -> StrategyPlan:
     strategy_id = item.record.strategy_id
     try:
@@ -442,6 +452,7 @@ def _plan_strategy(
                     ticker=ticker,
                     side=side,
                     quantity=emit_quantity,
+                    account_id=account_id,
                     config=config,
                     regime_label=regime_label,
                     justification=_justification(
@@ -497,6 +508,7 @@ def plan_session(
     config: RunnerSignalConfig,
     regime_label: str | None,
     equity: float,
+    account_id: str,
 ) -> list[StrategyPlan]:
     """Plan one session: fabricated strategies + bars + state -> signals to emit.
 
@@ -523,6 +535,7 @@ def plan_session(
             config=config,
             regime_label=regime_label,
             equity=budget,
+            account_id=account_id,
         )
         for item in strategies
     ]

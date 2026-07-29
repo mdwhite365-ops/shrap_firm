@@ -107,6 +107,42 @@ def is_duplicate_order_error(exc: Exception) -> bool:
     return "client order id" in message
 
 
+class Routing:
+    """Whether an approved intent belongs to this agent's account."""
+
+    MINE = "mine"
+    OTHER = "other-account"
+    UNROUTABLE = "no-account"
+
+
+def route_for_account(event: ReceivedEvent, account_id: str) -> str:
+    """Decide whether this agent should execute ``event``.
+
+    ADR-0017 runs one Execution Agent per broker account, each with its own
+    consumer group on the single ``risk.intent.approved`` stream. Every agent
+    therefore sees every approved intent and must act only on its own.
+
+    Three outcomes, and the third is why this cannot default to "execute":
+
+    - ``MINE`` — the intent names this account. Submit it.
+    - ``OTHER`` — it names a different account. Skip and ack; another agent owns
+      it, and acking in *this* group does not affect theirs.
+    - ``UNROUTABLE`` — it names no account at all. Skip and ack, loudly. If this
+      defaulted to executing, all three agents would submit the same order and
+      the firm would open three positions for one signal. Silence costs one
+      missed trade; the alternative costs three unintended ones.
+    """
+
+    payload = event.envelope.payload or {}
+    intent = payload.get("approved_intent_payload")
+    intent_account = ""
+    if isinstance(intent, dict):
+        intent_account = str(intent.get("account_id", "")).strip()
+    if not intent_account:
+        return Routing.UNROUTABLE
+    return Routing.MINE if intent_account == account_id else Routing.OTHER
+
+
 def build_paper_order(event: ReceivedEvent) -> dict[str, Any]:
     """Build the broker order payload from an approved risk event."""
 
@@ -149,11 +185,20 @@ def build_order_submitted_payload(
 ) -> dict[str, Any]:
     """Build the event payload recording a submitted paper order."""
 
+    risk_payload = event.envelope.payload or {}
+    intent = risk_payload.get("approved_intent_payload")
+    account_id = str(intent.get("account_id", "")).strip() if isinstance(intent, dict) else ""
+
     return {
         "risk_event_id": event.envelope.event_id,
         "risk_stream": event.stream,
         "risk_redis_stream_id": event.redis_stream_id,
         "broker": "alpaca-paper",
+        # Stamped so the status loop can tell its own orders apart. Every agent
+        # reads this stream through its own consumer group, and polling the
+        # broker for another account's order id returns a 404 the agent cannot
+        # act on.
+        "account_id": account_id,
         "broker_order_id": str(broker_response.get("id", "")),
         "status": broker_response.get("status"),
         "submitted_order": order,
@@ -273,8 +318,9 @@ async def poll_once(
     count: int,
     block_ms: int,
     retry_delay_seconds: float = 0.0,
+    account_id: str = "",
 ) -> int:
-    """Read approved risk decisions and submit paper orders."""
+    """Read approved risk decisions and submit paper orders for this account."""
 
     try:
         events = await subscriber.read(
@@ -288,6 +334,27 @@ async def poll_once(
     processed = 0
     for event in events:
         try:
+            routing = route_for_account(event, account_id)
+            if routing is Routing.OTHER:
+                # Another agent's account. Acking in this consumer group leaves
+                # the owner's group untouched.
+                await subscriber.ack(event)
+                continue
+            if routing is Routing.UNROUTABLE:
+                # Permanent: no account will appear on a replay. Every agent
+                # skips it, so it is logged at ERROR and acked rather than left
+                # to wedge the consumer.
+                log.error(
+                    "execution_agent.intent_unroutable",
+                    reason=(
+                        "approved_intent_payload has no account_id, so no agent "
+                        "can claim it — the producer did not stamp the account"
+                    ),
+                    risk_event_id=event.envelope.event_id,
+                    account_id=account_id,
+                )
+                await subscriber.ack(event)
+                continue
             result = await process_risk_event(redis, broker, event)
             await subscriber.ack(event)
             processed += 1
@@ -427,8 +494,14 @@ async def poll_order_status_once(
     poll_interval_seconds: float = 5.0,
     now: float = 0.0,
     retry_delay_seconds: float = 0.0,
+    account_id: str = "",
 ) -> int:
-    """Read submitted paper orders and publish current broker status/fill events."""
+    """Read submitted paper orders and publish this account's status/fill events.
+
+    Filtered like the risk loop: every agent sees every submitted order through
+    its own consumer group, and asking the broker about an order that belongs to
+    a different account returns a 404 this agent cannot do anything with.
+    """
 
     try:
         events = await subscriber.read(
@@ -442,6 +515,11 @@ async def poll_order_status_once(
     processed = 0
     for event in events:
         try:
+            submitted = event.envelope.payload or {}
+            order_account = str(submitted.get("account_id", "")).strip()
+            if order_account and order_account != account_id:
+                await subscriber.ack(event)
+                continue
             result = await process_order_status_event(redis, broker, event)
             await subscriber.ack(event)
             processed += 1
@@ -487,6 +565,7 @@ async def run_loop(
     status_poll_interval_seconds: float = 5.0,
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
+    account_id: str = "",
 ) -> None:
     """Run the paper Execution Agent loop until ``stop`` is set.
 
@@ -512,6 +591,7 @@ async def run_loop(
                 count=count,
                 block_ms=block_ms,
                 retry_delay_seconds=retry_delay_seconds,
+                account_id=account_id,
             )
             status_checked = await poll_order_status_once(
                 redis=redis,
@@ -519,6 +599,7 @@ async def run_loop(
                 subscriber=subscriber,
                 count=count,
                 block_ms=block_ms,
+                account_id=account_id,
                 pending=pending,
                 poll_interval_seconds=status_poll_interval_seconds,
                 now=loop.time(),
@@ -560,6 +641,7 @@ async def run(
     status_poll_interval_seconds: float = 5.0,
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
+    account_id: str = "",
 ) -> None:
     """Run the paper Execution Agent service until SIGINT/SIGTERM."""
 
@@ -573,6 +655,7 @@ async def run(
         block_ms=block_ms,
         group=group,
         consumer=consumer or group,
+        account_id=account_id,
     )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
@@ -612,6 +695,7 @@ __all__ = [
     "TERMINAL_ORDER_STATUSES",
     "AlpacaPaperBroker",
     "PendingOrder",
+    "Routing",
     "build_order_status_payload",
     "build_order_submitted_payload",
     "build_paper_order",
@@ -622,6 +706,7 @@ __all__ = [
     "process_order_status_event",
     "process_risk_event",
     "repoll_pending_once",
+    "route_for_account",
     "run",
     "run_loop",
 ]

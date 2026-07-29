@@ -25,6 +25,7 @@ def main() -> None:
             status_poll_interval_seconds=settings.status_poll_interval_seconds,
             group=settings.service_name,
             consumer=settings.instance_id,
+            account_id=settings.account_id,
         )
     )
 

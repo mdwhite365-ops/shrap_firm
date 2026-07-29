@@ -59,6 +59,11 @@ class FixtureConfig:
     ticker: str = "SPY"
     side: str = "buy"
     quantity: int = 1
+    # Broker account these orders route to (ADR-0017). Empty means unroutable:
+    # every Execution Agent skips the intent, so an armed fixture with no
+    # account exercises the pipeline as far as risk approval and stops there.
+    # That is the safe default for a fixture that carries no market view.
+    account_id: str = ""
     allowed_regime_labels: tuple[str, ...] = ("crisis-recovery", "late-cycle-melt-up")
     max_signals_per_day: int = 1
     confidence: float = 0.99  # above the Decision Maker stub threshold by design
@@ -129,6 +134,7 @@ async def fire_once(
         schema_version=SCHEMA_VERSION,
         payload={
             "strategy_id": STRATEGY_ID,
+            "account_id": config.account_id,
             "ticker": config.ticker.upper(),
             "side": config.side.lower(),
             "size_hint": config.quantity,
