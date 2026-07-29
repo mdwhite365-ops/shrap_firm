@@ -113,6 +113,9 @@ class MomentumSeed(NamedTuple):
     market_filter: bool = False
     """Stand the book down while the average name in the universe is falling."""
 
+    long_short: bool = False
+    """Short the bottom of the ranking as well as buying the top."""
+
     parent_strategy_id: str | None = None
     revision_reason: str | None = None
     derived_from_evaluation_id: str | None = None
@@ -224,6 +227,49 @@ MOMENTUM_SEEDS: tuple[MomentumSeed, ...] = (
             "result, and the reason the two strategies are held side by side."
         ),
     ),
+    MomentumSeed(
+        key="xs-momentum-126-21-10-longshort",
+        strategy_id="01KYR3P64C9Y144P3XVJZAR4GK",
+        name="Cross-sectional momentum (126/21, top 10) — long winners, short losers",
+        tickers=_MOMENTUM_TICKERS,
+        # Identical to the parent. The short leg is the only difference.
+        lookback=126,
+        skip=21,
+        top_n=10,
+        long_short=True,
+        parent_strategy_id="01KYNH9VKXVQXJ48T4MF306PHE",
+        derived_from_evaluation_id="01KYR38ADPNB2QD7DJX6NNZS9W",
+        revision_reason=(
+            "The rule ran HALF the effect. Jegadeesh-Titman is long the winners and "
+            "short the losers; this book was long-only, so it sat structurally ~100% "
+            "long equity and competed against a 100%-long benchmark on stock "
+            "selection alone. The per-fold information ratios show exactly that "
+            "shape: +0.97 correlation with fold RETURN once the crash is excluded, "
+            "beating the benchmark only in the three folds the market ran hard "
+            "(+1.090, +0.692, +1.073), dead flat in the crash (-0.004), and losing "
+            "in the two quiet years (-0.457, -0.241). A trend amplifier, not a "
+            "factor. Restoring the short leg is a return to the documented "
+            "construction rather than a new idea — the deviation was ours."
+        ),
+        thesis=(
+            "Cross-sectional momentum in its textbook two-sided form: long the top "
+            "decile by trailing six-month return excluding the most recent month, "
+            "short the bottom decile, dollar-neutral. The falsifiable claim is that "
+            "the long-only book's dependence on market direction — fold IR "
+            "correlating +0.97 with fold return — is an artefact of running one leg, "
+            "and that a two-sided book earns its information ratio from the SPREAD "
+            "between winners and losers rather than from being invested. It should "
+            "therefore beat the benchmark in more than three of six folds, "
+            "particularly the quiet years where the long-only version lost. "
+            "It also removes any need to detect a regime switch: when leadership "
+            "rolls over, names migrate from the long leg to the short leg on their "
+            "own. If the information ratio does not improve, the short leg costs "
+            "more in borrow and turnover than the loser-continuation effect pays, "
+            "which is a real and useful result. NOT TRADEABLE YET — the Strategy "
+            "Runner treats a negative weight as flat and never opens a short, so "
+            "this is a research question until that path exists."
+        ),
+    ),
 )
 
 # Falsifiers specific to a cross-sectional momentum book. The generic protocol
@@ -259,6 +305,7 @@ def _momentum_spec(seed: MomentumSeed) -> dict[str, Any]:
             # there is nothing to bound, which is the design property that keeps
             # this a revision rather than a parameter sweep.
             "market_filter": seed.market_filter,
+            "long_short": seed.long_short,
         },
         "param_bounds": {k: list(v) for k, v in MOMENTUM_PARAM_BOUNDS.items()},
     }
