@@ -417,3 +417,18 @@ async def test_assigning_a_missing_strategy_refuses() -> None:
     registry = _AssignRegistry(None)
     with pytest.raises(SystemExit, match="no strategy"):
         await assign_account(registry, "01NOPE", account_id="PA3ABCDEF")  # type: ignore[arg-type]
+
+
+def test_show_displays_the_assigned_account() -> None:
+    record = replace(_record(status=STATUS_PAPER), account_id="PA3ABCDEF")
+    out = render_show(record, [])
+    assert "account   : PA3ABCDEF" in out
+
+
+def test_show_says_an_unassigned_strategy_will_not_trade() -> None:
+    """A strategy at a trading stage with no account is silently inert — the
+    Runner logs it once a session and drops it. `show` must not leave that to
+    be inferred from a blank field."""
+
+    out = render_show(_record(status=STATUS_PAPER), [])
+    assert "unassigned" in out and "will NOT trade" in out

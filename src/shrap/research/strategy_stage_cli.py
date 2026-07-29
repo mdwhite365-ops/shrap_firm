@@ -123,10 +123,16 @@ class PublisherPort(Protocol):
 def render_show(record: StrategyRecord, history: Sequence[StrategyTransition]) -> str:
     """Current stage plus the full transition history, oldest first."""
 
+    # The account is shown even when unset, and named as the reason it will not
+    # trade. An assignment you cannot read back is not verifiable, and a strategy
+    # at a trading stage with no account is silently inert — the Runner logs it
+    # once a session and moves on.
+    account = record.account_id or "(unassigned — will NOT trade)"
     lines = [
         f"{record.strategy_id}  {record.name}",
         f"  archetype : {record.archetype}",
         f"  stage     : {record.status}",
+        f"  account   : {account}",
         f"  tickers   : {record.tickers}",
         "",
         f"Transitions: {len(history)}",
