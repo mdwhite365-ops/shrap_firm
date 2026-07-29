@@ -605,11 +605,10 @@ services:
       # whole book — wait for drawdown limits and an intraday-margin-deficit
       # model (ADR-0016) before raising it.
       STRATEGY_RUNNER_MAX_GROSS_EXPOSURE: "${STRATEGY_RUNNER_MAX_GROSS_EXPOSURE:-1.0}"
-      # The broker account this runner sizes against — Alpaca's account_number,
-      # matched against ops.account_snapshots.account_id. REQUIRED: unset means
-      # no book to size against, and the pass refuses rather than picking
-      # whichever account reported most recently (ADR-0017).
-      STRATEGY_RUNNER_ACCOUNT_ID: "${STRATEGY_RUNNER_ACCOUNT_ID:-}"
+      # No STRATEGY_RUNNER_ACCOUNT_ID: the runner is account-aware and reads
+      # each strategy's account from research.strategies (ADR-0017). One runner
+      # serves every account; it holds no broker credentials, so a single
+      # instance also keeps one consumer group on operations.market-phase.
       # Must equal PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER — the checker clamps
       # rather than vetoes, so a larger value here records an intent bigger than
       # the fill and the later exit would oversell. Raise both together.

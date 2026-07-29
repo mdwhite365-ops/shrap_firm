@@ -45,16 +45,19 @@ What this agent deliberately does **not** do:
 An entry converts the strategy's target weight into shares against the
 strategy's **slice** of a firm-wide exposure budget:
 
-    slice          = equity x max_gross_exposure / active strategies
+    slice          = account equity x max_gross_exposure / strategies in THAT account
     notional slot  = target_weight x slice
     shares         = slot / price, floored
 
 ### The exposure budget
 
-`max_gross_exposure` (default **1.0** — fully invested, unlevered) caps *total*
-intended exposure across every active strategy, and each strategy gets an equal
-slice. A strategy's weights are therefore fractions of its own allocation, never
-of the whole account.
+`max_gross_exposure` (default **1.0** — fully invested, unlevered) caps intended
+exposure **per account**, and the strategies in that account split it equally. A
+strategy's weights are fractions of its own allocation, never of the whole book.
+
+Under ADR-0017 there is normally one strategy per account, so it gets the whole
+account. The split still matters: it is what stops two strategies sharing an
+account from ordering two accounts' worth.
 
 This exists because the alternative was measured and was wrong: sizing every
 strategy against full equity meant **two strategies at full investment ordered
@@ -79,19 +82,26 @@ deficit (ADR-0016). Raising it is one config value, once those exist.
 
 Equity comes from `ops.account_snapshots`, which the Reconciliation Agent writes
 every pass — ADR-0003 keeps broker credentials inside broker-facing containers,
-and the runner is not one of them. Missing or stale equity (>30 min) **refuses
-the whole pass**: nothing is published, no state is written, and the market-phase
-event is left un-acked so the pass retries once a fresh snapshot lands. There is
-no fixed-quantity fallback, because trading an unknown account size is worse than
-trading late.
+and the runner is not one of them. Equity older than 30 minutes is not that
+account's current size, so it is refused. There is no fixed-quantity fallback:
+trading an unknown account size is worse than trading late.
 
-**The read is scoped to one account.** `STRATEGY_RUNNER_ACCOUNT_ID` is required
-and names the broker account this runner trades — Alpaca's `account_number`,
-matched against `ops.account_snapshots.account_id`. Under ADR-0017 each strategy
-has its own account, so an unscoped "newest snapshot" would return whichever
-account reported most recently: a plausible number from the wrong book, and
-nothing about the resulting orders would look wrong. An unset value refuses the
-pass rather than guessing.
+**The account comes from the strategy, not from config.** Each strategy record
+carries an `account_id` (ADR-0017), so the pass groups strategies by account and
+sizes each group against that account's equity. One runner serves every account:
+it holds no broker credentials, so a single instance keeps one consumer group on
+`operations.market-phase` rather than three racing for the same events.
+
+**Accounts are independent.** A missing or stale snapshot on one account defers
+only *its* strategies — the others still trade — and the phase event is left
+un-acked so the deferred ones get another chance this session. The per-session
+`(strategy_id, session_date)` guard makes that retry safe: strategies that
+already traded are stamped and will not re-emit.
+
+**A strategy with no account is dropped, not deferred.** No snapshot will ever
+arrive for it, so deferring would leave the phase event pending forever — a
+poison loop that would also block every later session. It is logged at ERROR and
+needs `shrap-strategy-stage assign-account`.
 
 Four consequences worth knowing before reading a log:
 
@@ -210,7 +220,8 @@ decision logic is a pure `inputs → (signals, state writes)` function
 |---|---|---|
 | Last intended target | PostgreSQL `research.strategy_runner_state` | One row per `(strategy_id, ticker)`; `last_session_date` is the per-session dedupe guard; `last_quantity` is the share count ordered, so the exit closes what was opened |
 | Consumer offset | Redis consumer group `strategy-runner` | Offsets persist across restarts (KI-006) |
-| Account equity | PostgreSQL `ops.account_snapshots` | **Read-only**, owned by the Reconciliation Agent. Never created or written here. Filtered on `account_id = STRATEGY_RUNNER_ACCOUNT_ID`, so rows from other accounts — and legacy rows with a NULL account — can never be read |
+| Account equity | PostgreSQL `ops.account_snapshots` | **Read-only**, owned by the Reconciliation Agent. Never created or written here. Filtered on the strategy's own `account_id`, so another account's rows — and legacy rows with a NULL account — can never be read |
+| Strategy → account | PostgreSQL `research.strategies.account_id` | Read-only here; set with `shrap-strategy-stage assign-account`. One strategy per account, enforced by a partial unique index |
 
 The runner stores only its *intended* target and ordered quantity, never
 positions or fills. `last_quantity` is intent: if the Pre-Trade Checker clamps an
@@ -238,12 +249,20 @@ guard.
    promoted strategies simply do not trade while it is down, which fails closed.
    On restart with `start_id="$"` it resumes from the next `open` event; it does
    not retroactively trade a session whose `open` it missed.
-4. **Equity unavailable.** If the Reconciliation Agent has not written a snapshot
-   in 30 minutes, the pass refuses: nothing published, no state written, phase
-   event left un-acked so the session resumes on its own once a snapshot lands.
-   This makes the Reconciliation Agent a hard dependency of trading — deliberate,
-   since it is also the only source of the account size every position is a
-   fraction of.
+4. **Equity unavailable, per account.** If an account has no snapshot inside 30
+   minutes, *its* strategies are deferred — nothing published, no state written
+   for them — while every other account trades normally. The phase event is left
+   un-acked so the deferred strategies resume on their own once a snapshot lands,
+   and the per-session guard stops the ones that already traded from re-emitting.
+   This makes the Reconciliation Agent a hard dependency of trading, deliberately,
+   since it is the only source of the account size every position is a fraction
+   of — but the dependency is now **per account**, so one lagging reconciler
+   cannot halt three independent books.
+5. **Strategy unassigned.** A strategy with no `account_id` has nowhere to send
+   orders and no snapshot will ever arrive for it, so it is logged at ERROR and
+   dropped — never deferred. Deferring would leave the phase event pending
+   forever and block every later session. Fix with
+   `shrap-strategy-stage assign-account`.
 
 ## Sprint scope
 
