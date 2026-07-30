@@ -263,3 +263,58 @@ def test_an_empty_corpus_renders_without_claiming_anything() -> None:
     out = render([], summarise([], sharpe_floor=1.0, ir_floor=0.5))
 
     assert "No strategies" in out
+
+
+# --- the JSONB shape asyncpg actually returns ---------------------------------
+
+
+def test_metrics_arrive_as_json_strings_not_dicts() -> None:
+    """asyncpg hands back jsonb as TEXT unless a codec is registered.
+
+    This is not hypothetical: the first run of `shrap-research-ledger` on the
+    Dell crashed with `AttributeError: 'str' object has no attribute 'get'` on
+    exactly this. The rest of the firm decodes with
+    `strategy_registry._json_loaded`; this module did not.
+    """
+
+    row = row_from_mapping(
+        {
+            "strategy_id": "01ABC",
+            "verdict": "hold-for-data",
+            "reason": "below-sharpe-floor",
+            "total_trades": 2507,
+            "aggregate_metrics": '{"sharpe": 0.782}',
+            "active_metrics": '{"information_ratio": 0.392}',
+            "consistency_metrics": '{"folds_with_active_edge": 3, "n_folds": 6}',
+        }
+    )
+
+    assert row.sharpe == 0.782
+    assert row.information_ratio == 0.392
+    assert row.folds == "3/6"
+
+
+def test_dicts_still_work_so_tests_and_drivers_can_pass_either() -> None:
+    row = row_from_mapping(
+        {"strategy_id": "01ABC", "verdict": "kill", "aggregate_metrics": {"sharpe": 0.5}}
+    )
+
+    assert row.sharpe == 0.5
+
+
+def test_a_malformed_metrics_blob_costs_that_row_its_numbers_not_the_report() -> None:
+    """A ledger is a reporting surface. One bad blob must not deny the reader
+    the whole corpus."""
+
+    row = row_from_mapping(
+        {"strategy_id": "01ABC", "verdict": "kill", "aggregate_metrics": "{not json"}
+    )
+
+    assert row.sharpe is None
+    assert row.strategy_id == "01ABC"
+
+
+def test_a_json_scalar_where_an_object_was_expected_is_ignored() -> None:
+    row = row_from_mapping({"strategy_id": "01ABC", "verdict": "kill", "active_metrics": "42"})
+
+    assert row.information_ratio is None
