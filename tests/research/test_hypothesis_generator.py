@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from shrap.research.hypothesis_generator.cli import _dsn, items_from_file
 from shrap.research.hypothesis_generator.expressible import (
     OUTCOME_MISSING_DATA,
     OUTCOME_MISSING_SCORER,
@@ -46,7 +47,7 @@ from shrap.research.hypothesis_generator.record import (
     FIXED_TOP_N,
     build_record,
 )
-from shrap.research.hypothesis_generator.store import InMemoryGapStore
+from shrap.research.hypothesis_generator.store import InMemoryGapStore, render_queue
 from shrap.research.hypothesis_generator.validate import (
     REASON_ALREADY_HELD,
     REASON_LOOKBACK_OUT_OF_BOUNDS,
@@ -586,3 +587,88 @@ def test_the_record_builder_refuses_a_rule_it_has_no_template_for() -> None:
 
     with pytest.raises(ValueError, match="no parameter template"):
         build_record(broken, _item())
+
+
+# --- the CLI's hand-fed path --------------------------------------------------
+
+
+def test_items_can_be_read_from_a_file_before_the_feed_exists(tmp_path: Any) -> None:
+    """Tech Watcher does not read q-fin yet, so the prompt has to be reviewable
+    against real abstracts without it."""
+
+    path = tmp_path / "papers.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "item_id": "arxiv:2401.00001",
+                    "source": "arxiv",
+                    "title": "Illiquidity and stock returns",
+                    "abstract": "We show that expected returns rise with illiquidity.",
+                    "url": "https://arxiv.org/abs/2401.00001",
+                    "published_at": "2024-01-02T00:00:00+00:00",
+                    "category": "q-fin.PM",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    items = items_from_file(path)
+
+    assert items[0].item_id == "arxiv:2401.00001"
+    assert items[0].published_at is not None
+    assert items[0].category == "q-fin.PM"
+
+
+def test_a_malformed_entry_is_a_hard_error_not_a_silent_skip(tmp_path: Any) -> None:
+    """Skipping a bad entry would let a typo shrink the run to nothing while it
+    still reported success."""
+
+    path = tmp_path / "papers.json"
+    path.write_text(json.dumps([{"item_id": "x", "title": "no abstract"}]), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="abstract"):
+        items_from_file(path)
+
+
+def test_the_dsn_is_refused_rather_than_guessed(monkeypatch: Any) -> None:
+    for name in (
+        "HYPOTHESIS_GENERATOR_POSTGRES_DSN",
+        "STRATEGY_EVALUATOR_POSTGRES_DSN",
+        "TECH_WATCHER_POSTGRES_DSN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(SystemExit, match="no Postgres DSN"):
+        _dsn(None)
+
+
+def test_an_empty_queue_says_so_rather_than_printing_nothing() -> None:
+    assert "No capability gaps recorded" in render_queue([])
+
+
+def test_the_queue_separates_what_to_build_from_what_to_buy() -> None:
+    ranked = rank_gaps(
+        [
+            CapabilityGap(
+                effect_name="amihud-illiquidity",
+                kind=OUTCOME_MISSING_SCORER,
+                missing=(),
+                sketch="mean absolute return over dollar volume",
+                citation=GapCitation("a", "t", None, "p"),
+            ),
+            CapabilityGap(
+                effect_name="book-to-market",
+                kind=OUTCOME_MISSING_DATA,
+                missing=("book value of equity",),
+                sketch="book equity over market equity",
+                citation=GapCitation("b", "t", None, "p"),
+            ),
+        ]
+    )
+
+    text = render_queue(ranked)
+
+    assert "2 effect(s) the engine cannot run, 1 of them buildable" in text
+    assert "needs: book value of equity" in text
