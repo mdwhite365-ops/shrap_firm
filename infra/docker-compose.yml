@@ -1266,6 +1266,56 @@ services:
     networks:
       - shrap_net
 
+  # -------------------------------------------------------------------------
+  # Hypothesis Generator TRIGGER - the always-on half. Same image and same
+  # pipeline as the tools service above; instead of one batch on demand it
+  # sweeps pending literature on an interval.
+  #
+  # Without it the funnel has a person in it: Tech Watcher fills
+  # research.literature_items hourly and nothing reads them until someone types
+  # a command (the state #156 shipped in, found 2026-07-30).
+  #
+  # ARMED by default, and the reason is a bound rather than a hope. A proposal's
+  # identity is (rule, factor) and an already-held identity is refused, so this
+  # can mint at most ONE lineage root per implemented effect, ever - registry
+  # pollution is capped by the size of the scorer library, not by how long it
+  # runs. What it writes is `hypothesis`, which trades nothing: the Evaluator
+  # still gates it, kills apply unattended, and a promote is withheld for Mike
+  # (ADR-0015).
+  #
+  # HYPOTHESIS_GENERATOR_DRY_RUN=true is the kill switch - the sweep still runs
+  # and still reports, and writes nothing.
+  # -------------------------------------------------------------------------
+  hypothesis-generator-trigger:
+    build:
+      context: ../
+      dockerfile: infra/strategy-evaluator.Dockerfile
+    container_name: shrap_hypothesis_generator_trigger
+    command: ["shrap-hypothesis-generator-trigger"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HYPOTHESIS_GENERATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      HYPOTHESIS_GENERATOR_REDIS_URL: "redis://redis:6379/0"
+      # Literature arrives at the speed of arXiv. Sweeping faster spends
+      # round-trips finding nothing.
+      HYPOTHESIS_GENERATOR_SWEEP_INTERVAL_SECONDS: "3600"
+      HYPOTHESIS_GENERATOR_MAX_ITEMS: "25"
+      HYPOTHESIS_GENERATOR_DRY_RUN: "${HYPOTHESIS_GENERATOR_DRY_RUN:-false}"
+      HYPOTHESIS_GENERATOR_LOG_LEVEL: "INFO"
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+      SHRAP_LLM_LOCAL_HEAVY_PROVIDER: "ollama"
+      SHRAP_LLM_LOCAL_HEAVY_MODEL: "${SHRAP_PROPOSER_MODEL:-gpt-oss:20b-cloud}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
   # Infrastructure Mapper (Month-2) - deterministic, run-on-demand (tools
   # profile, not started by default). Loads the hand-seeded world-changer graph
   # into research.graphs* and inspects graph state. Run pattern:
