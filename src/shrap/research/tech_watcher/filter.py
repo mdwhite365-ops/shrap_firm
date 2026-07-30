@@ -27,6 +27,7 @@ import structlog
 from shrap.llm.registry import TIER_LOCAL_CLASSIFICATION
 from shrap.research.tech_watcher.archetypes import ARCHETYPE_KEYS, archetype_filter_prompt_block
 from shrap.research.tech_watcher.sources import (
+    SOURCE_ARXIV_QFIN,
     SOURCE_DOE_NEWS,
     SOURCE_EDGAR,
     SOURCE_FED_REGISTER,
@@ -153,10 +154,26 @@ class CompletionClient(Protocol):
     ) -> Any: ...
 
 
+# Sources this filter must not score. `arxiv-qfin` feeds the Hypothesis
+# Generator and is judged by `literature_filter.py` under a different prompt
+# with a different question.
+#
+# The exclusion is load-bearing rather than tidy. This prompt's hard rules state
+# that an item "merely ABOUT a technology — a new method, model architecture,
+# benchmark, or simulation result — is NOT evidence", which is a description of
+# every quantitative-finance paper ever written. Without the exclusion the
+# q-fin leg would be ingested, marked filtered, rejected in full, and the
+# literature funnel would find nothing left to score — while every counter in
+# this module reported a healthy pass.
+EXCLUDED_SOURCES: frozenset[str] = frozenset({SOURCE_ARXIV_QFIN})
+
+_EXCLUDED_SOURCE_LIST = sorted(EXCLUDED_SOURCES)
+
 SELECT_UNFILTERED_SQL = """
 SELECT item_id, source, kind, title, summary
 FROM research.raw_source_items
 WHERE filtered_at IS NULL
+  AND NOT (source = ANY($2::text[]))
 ORDER BY fetched_at
 LIMIT $1
 """.strip()
@@ -182,6 +199,7 @@ SELECT item_id, source, kind, title, summary,
        COALESCE(filter_result->>'model', '') AS scored_model
 FROM research.raw_source_items
 WHERE filtered_at IS NOT NULL
+  AND NOT (source = ANY($6::text[]))
   AND (
       $4::boolean
       OR COALESCE((filter_result->>'prompt_version')::int, 0) < $1
@@ -269,7 +287,7 @@ async def filter_pass(
     """
 
     async with pool.acquire() as conn:
-        rows = await conn.fetch(SELECT_UNFILTERED_SQL, max_items)
+        rows = await conn.fetch(SELECT_UNFILTERED_SQL, max_items, _EXCLUDED_SOURCE_LIST)
     items = [_row_to_item(row) for row in rows]
     return await _score_items(pool, llm, items, tier)
 
@@ -452,6 +470,7 @@ async def refilter_pass(
             max_items,
             force,
             current_model or "",
+            _EXCLUDED_SOURCE_LIST,
         )
 
     prior = {

@@ -399,15 +399,32 @@ Every event carries the ADR-0006 envelope.
 
 ## Prerequisite cards, in order
 
-1. **Tech Watcher reads arXiv `q-fin`.** It already ingests arXiv for Framework
-   #1 world-changer signal; this adds the quantitative-finance section and a
-   filter for "describes a testable market effect". Writes
-   `research.literature_items` and emits `research.literature.ingested`. Small —
-   the ingestion path exists. **Still open.** Note that the world-changer filter
-   cannot be reused: its prompt explicitly rejects anything that is "merely
-   ABOUT a technology — a new method, model architecture, benchmark, or
-   simulation result", which is a description of every q-fin paper. Two filters
-   over one ingest, routed on category.
+1. ~~**Tech Watcher reads arXiv `q-fin`.**~~ **Shipped 2026-07-30**
+   (`literature_filter.py`, `SOURCE_ARXIV_QFIN`). Two filters over one ingest,
+   routed on source, and both halves turned out to matter:
+
+   - **The world-changer filter could not be reused.** Its prompt rejects
+     anything "merely ABOUT a technology — a new method, model architecture,
+     benchmark, or simulation result", which describes every q-fin paper.
+     Pointed at the section it would have rejected all of it and reported a
+     healthy pass. The two pools are now disjoint by source, and each filter
+     stamps its own prompt version — sharing one counter would make either
+     filter's revision look like a reason to re-score the other's items.
+   - **A second arXiv source, not a widened query.** cs.AI and cs.LG produce
+     several hundred papers a day against q-fin's few dozen, so one
+     newest-first query capped at `max_results` would let a busy day in machine
+     learning starve the finance leg. Separate instances, separate budgets,
+     separate cursors.
+   - **The source is part of the item id.** A paper cross-listed cs.LG ∩
+     q-fin.ST occupies one row per funnel rather than one row total. The two
+     funnels judge by different bars and a cross-listed paper is a legitimate
+     candidate for both; a single row would hand it to whichever leg fetched it
+     first.
+
+   Categories: `q-fin.PM`, `q-fin.ST`, `q-fin.TR`, `q-fin.GN`. The other five
+   are derivative pricing, numerical methods, risk measurement and
+   macroeconomics — none produces a claim this firm can implement as a ranking
+   over 50 equities, so ingesting them would spend filter calls to reject them.
 2. ~~**This spec's implementation.**~~ **Shipped 2026-07-30.** Built before card
    1 deliberately: the consumer's requirements are the contract, and the
    literature table is defined on this side of the seam so the producer fills a
@@ -445,8 +462,12 @@ believes, and it is the only one of the three that pays off with no new agent.
   accounts. Owner: Mike. Blocks: the proposer's duplicate rule.
 - **What counts as a "published" prior?** A peer-reviewed paper is clear. An
   arXiv preprint is the actual feed. A practitioner blog post is not, but a
-  great deal of real trading knowledge lives there. Owner: Mike. Blocks: the
-  Tech Watcher q-fin filter's acceptance threshold.
+  great deal of real trading knowledge lives there. Owner: Mike. **First cut
+  shipped, unruled:** the filter accepts an arXiv preprint on the same footing
+  as a journal paper, and takes a replication of a known effect on new data —
+  a magnitude is a claim about returns. It rejects surveys reporting no effect
+  of their own. Nothing but arXiv is ingested, so the blog question is not yet
+  live.
 - **Should rotation-archetype shorts require Mike's explicit per-proposal
   approval during sprint?** Currently no — they're allowed if the rapid-
   obsolescence flag is set by Bottleneck Scout. Blocks: trust progression on

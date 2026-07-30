@@ -828,6 +828,19 @@ services:
       TECH_WATCHER_MAX_RESULTS: "100"
       TECH_WATCHER_LLM_ENABLED: "${TECH_WATCHER_LLM_ENABLED:-true}"
       TECH_WATCHER_FILTER_MAX_ITEMS: "300"
+      # The Hypothesis Generator's feed (2026-07-30). A SECOND arXiv source
+      # with its own budget and its own filter — a single widened query would
+      # let a busy day in cs.LG (hundreds of papers) crowd q-fin (a few dozen)
+      # out of a newest-first fetch capped at MAX_RESULTS, and the leg would
+      # report a healthy pass while delivering nothing.
+      #
+      # Cost is bounded and small: ~100 items on the first pass, then ~40/day,
+      # through the same cheap classification tier the world-changer filter
+      # uses. Set QFIN_ENABLED=false to turn the leg off without touching the
+      # rest of the LLM pipeline.
+      TECH_WATCHER_QFIN_ENABLED: "${TECH_WATCHER_QFIN_ENABLED:-true}"
+      TECH_WATCHER_QFIN_CATEGORIES: "q-fin.PM,q-fin.ST,q-fin.TR,q-fin.GN"
+      TECH_WATCHER_LITERATURE_MAX_ITEMS: "100"
       TECH_WATCHER_SYNTHESIS_INTERVAL_SECONDS: "86400"
       TECH_WATCHER_MAX_PROPOSALS: "10"
       TECH_WATCHER_LOG_LEVEL: "INFO"

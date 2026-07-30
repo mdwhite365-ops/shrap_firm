@@ -26,10 +26,14 @@ from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher
 from shrap.llm import TierLLMClient, TierRegistry
+from shrap.research.hypothesis_generator.literature import PostgresLiteratureStore
 from shrap.research.tech_watcher.candidates import PostgresCandidateStore
 from shrap.research.tech_watcher.filter import filter_pass
+from shrap.research.tech_watcher.literature_filter import literature_pass
 from shrap.research.tech_watcher.sources import (
+    DEFAULT_QFIN_CATEGORIES,
     DOE_NEWS_FEED_URL,
+    SOURCE_ARXIV_QFIN,
     ArxivSource,
     DoeNewsroomSource,
     EdgarSource,
@@ -134,7 +138,8 @@ async def ingest_pass(
 class LLMStages:
     """The LLM-backed pipeline stages wired into the hourly loop.
 
-    ``run_filter`` scores unfiltered items (spec step 2); ``run_synthesis``
+    ``run_filter`` scores unfiltered items (spec step 2); ``run_literature``
+    scores the q-fin pool for the Hypothesis Generator; ``run_synthesis``
     runs the daily cluster/synthesize/validate batch (steps 3-7);
     ``synthesis_due`` reads the batch clock. Absent (None in run_loop) the
     loop is ingest-only — slice-A behavior, also the LLM kill switch.
@@ -143,6 +148,9 @@ class LLMStages:
     run_filter: Callable[[], Awaitable[object]]
     run_synthesis: Callable[[], Awaitable[object]]
     synthesis_due: Callable[[], Awaitable[bool]]
+    run_literature: Callable[[], Awaitable[object]] | None = None
+    """Optional so the q-fin leg can be turned off without disabling the LLM
+    stages entirely — the two funnels fail independently by design."""
 
 
 async def run_loop(
@@ -176,6 +184,12 @@ async def run_loop(
                 )
             except Exception:
                 log.exception("tech_watcher.filter_failed")
+            if llm_stages.run_literature is not None:
+                try:
+                    report = await llm_stages.run_literature()
+                    log.info("tech_watcher.literature_complete", report=str(report))
+                except Exception:
+                    log.exception("tech_watcher.literature_failed")
             try:
                 if await llm_stages.synthesis_due():
                     report = await llm_stages.run_synthesis()
@@ -194,6 +208,9 @@ async def run(
     sec_user_agent: str,
     edgar_forms: tuple[str, ...] = ("10-K", "10-Q", "8-K"),
     arxiv_categories: tuple[str, ...] = ("cs.AI", "cs.LG", "cond-mat", "q-bio.NC"),
+    qfin_enabled: bool = True,
+    qfin_categories: tuple[str, ...] = DEFAULT_QFIN_CATEGORIES,
+    literature_max_items: int = 100,
     gov_sources_enabled: bool = True,
     usaspending_agencies: tuple[str, ...] = ("Department of Energy", "Department of Defense"),
     usaspending_min_amount: float = 5_000_000.0,
@@ -220,6 +237,8 @@ async def run(
         postgres_dsn="***",
         edgar_forms=list(edgar_forms),
         arxiv_categories=list(arxiv_categories),
+        qfin_enabled=qfin_enabled,
+        qfin_categories=list(qfin_categories),
         gov_sources_enabled=gov_sources_enabled,
         usaspending_agencies=list(usaspending_agencies),
         fed_register_agencies=list(fed_register_agencies),
@@ -235,10 +254,24 @@ async def run(
     await store.ensure_schema()
     candidate_store = PostgresCandidateStore(pool)
     await candidate_store.ensure_schema()
+    literature_store = PostgresLiteratureStore(pool)
+    if qfin_enabled:
+        # The generator owns this table's DDL; Tech Watcher fills it. Called
+        # here so the q-fin leg cannot ingest into a table nobody created —
+        # `shrap-hypothesis-generate` may never have been run on this host.
+        await literature_store.ensure_schema()
     sources: list[Source] = [
         EdgarSource(user_agent=sec_user_agent, forms=edgar_forms, max_results=max_results),
         ArxivSource(categories=arxiv_categories, max_results=max_results),
     ]
+    if qfin_enabled:
+        sources.append(
+            ArxivSource(
+                categories=qfin_categories,
+                max_results=max_results,
+                name=SOURCE_ARXIV_QFIN,
+            )
+        )
     if gov_sources_enabled:
         sources.append(
             UsaSpendingSource(
@@ -272,10 +305,20 @@ async def run(
                     return True
                 return (datetime.now(UTC) - last).total_seconds() >= synthesis_interval_seconds
 
+            async def _run_literature() -> object:
+                return await literature_pass(
+                    pool,
+                    llm,
+                    literature_store,
+                    EventPublisher(cast(Any, redis)),
+                    max_items=literature_max_items,
+                )
+
             llm_stages = LLMStages(
                 run_filter=_run_filter,
                 run_synthesis=_run_synthesis,
                 synthesis_due=_synthesis_due,
+                run_literature=_run_literature if qfin_enabled else None,
             )
         try:
             await run_loop(

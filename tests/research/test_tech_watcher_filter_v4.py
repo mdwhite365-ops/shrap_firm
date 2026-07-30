@@ -332,6 +332,12 @@ async def test_selection_passes_force_and_current_model() -> None:
         20,
         False,
         "gpt-oss:20b-cloud",
+        # The q-fin pool is scored by `literature_filter.py` under its own
+        # prompt versioning. Without this exclusion every literature item —
+        # stamped prompt_version 1 — would satisfy `prompt_version < 4` and be
+        # re-scored under the world-changer prompt, which rejects the entire
+        # section by design.
+        ["arxiv-qfin"],
     )
 
 

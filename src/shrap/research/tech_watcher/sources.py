@@ -45,9 +45,24 @@ from urllib.parse import urlparse
 
 SOURCE_EDGAR = "sec-edgar"
 SOURCE_ARXIV = "arxiv"
+SOURCE_ARXIV_QFIN = "arxiv-qfin"
 SOURCE_USASPENDING = "usaspending"
 SOURCE_DOE_NEWS = "doe-newsroom"
 SOURCE_FED_REGISTER = "federal-register"
+
+# arXiv's quantitative-finance sections, for the Hypothesis Generator's feed.
+# Four of the nine, chosen for what the firm can act on:
+#
+#   q-fin.PM  Portfolio Management — cross-sectional selection, factor results
+#   q-fin.ST  Statistical Finance — empirical work on return predictability
+#   q-fin.TR  Trading and Market Microstructure — volume, liquidity, flow
+#   q-fin.GN  General Finance — anomalies that fit no other section
+#
+# Left out, deliberately: MF and PR are derivative pricing mathematics, CP is
+# numerical method work, RM is risk measurement, and EC is macroeconomics. None
+# of the four produces the kind of claim this firm can implement as a ranking
+# over 50 equities, so ingesting them would spend filter calls to reject them.
+DEFAULT_QFIN_CATEGORIES: tuple[str, ...] = ("q-fin.PM", "q-fin.ST", "q-fin.TR", "q-fin.GN")
 
 EDGAR_CURRENT_URL = "https://www.sec.gov/cgi-bin/browse-edgar"
 ARXIV_QUERY_URL = "https://export.arxiv.org/api/query"
@@ -189,15 +204,43 @@ class EdgarSource:
 
 
 class ArxivSource:
-    """arXiv API query over the spec's categories, newest first."""
+    """arXiv API query over a set of categories, newest first.
 
-    def __init__(self, categories: tuple[str, ...], max_results: int = 100) -> None:
+    Instantiated **twice** in the service, against disjoint category sets and
+    under different source names: once for Framework #1 world-changer signal
+    (cs.AI, cs.LG, cond-mat, q-bio.NC) and once for the quantitative-finance
+    sections that feed the Hypothesis Generator.
+
+    Two instances rather than one widened query, for a reason found by looking
+    at the volumes. cs.AI and cs.LG produce several hundred papers a day and
+    q-fin produces a few dozen; a single newest-first query capped at
+    ``max_results`` would let a busy day in machine learning crowd out the
+    finance section entirely, and the leg would report a healthy fetch while
+    delivering nothing to the funnel that needed it. Separate sources give each
+    its own budget and its own cursor.
+
+    **The source name is part of the item id.** A paper cross-listed in cs.LG
+    and q-fin.ST therefore occupies one row per source rather than one row
+    total. That is deliberate: the two funnels judge by different bars — the
+    world-changer filter asks whether an archetype is playing out in the world,
+    the literature filter asks whether a market effect is testable — and a
+    cross-listed paper is a legitimate candidate for both. One row would hand
+    the paper to whichever leg fetched it first.
+    """
+
+    def __init__(
+        self,
+        categories: tuple[str, ...],
+        max_results: int = 100,
+        name: str = SOURCE_ARXIV,
+    ) -> None:
         self._categories = categories
         self._max_results = max_results
+        self._name = name
 
     @property
     def name(self) -> str:
-        return SOURCE_ARXIV
+        return self._name
 
     async def fetch(self, http: HTTPClient, timeout: float = 30.0) -> list[RawSourceItem]:
         query = " OR ".join(f"cat:{c}" for c in self._categories)
@@ -232,8 +275,8 @@ class ArxivSource:
         primary_category = category_node.get("term") if category_node is not None else None
         published = _text(entry, "published")
         return RawSourceItem(
-            item_id=f"arxiv:{arxiv_id}",
-            source=SOURCE_ARXIV,
+            item_id=f"{self._name}:{arxiv_id}",
+            source=self._name,
             kind=primary_category,
             title=title,
             summary=_text(entry, "summary"),
