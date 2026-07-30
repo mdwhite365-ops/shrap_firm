@@ -24,6 +24,7 @@ from shrap.research.tech_watcher.literature_filter import (
     LITERATURE_PROMPT_VERSION,
     LITERATURE_SYSTEM_PROMPT,
     literature_pass,
+    literature_refilter_pass,
     parse_literature_response,
 )
 from shrap.research.tech_watcher.sources import (
@@ -422,3 +423,92 @@ async def test_a_run_of_failures_aborts_rather_than_burning_the_batch() -> None:
 
     assert llm.calls == 5
     assert report.verdicts == ()
+
+
+# --- re-filtering the backlog -------------------------------------------------
+
+
+def _scored_row(item_id: str, accepted: bool, version: int = 1) -> dict[str, Any]:
+    row = _row(item_id)
+    row["was_accepted"] = accepted
+    row["scored_version"] = version
+    row["scored_model"] = "gpt-oss:20b-cloud"
+    return row
+
+
+async def test_a_dry_run_counts_without_calling_the_model_or_writing() -> None:
+    pool = _FakePool([_scored_row("arxiv-qfin:1", True)])
+    llm = _FakeLLM()
+
+    report = await literature_refilter_pass(pool, llm, _FakeSink(), dry_run=True)  # type: ignore[arg-type]
+
+    assert report.scored == 1
+    assert report.verdicts == ()
+    assert pool.conn.executed == []
+    assert report.render().startswith("[dry-run]")
+
+
+async def test_the_refilter_reports_a_dropped_false_accept() -> None:
+    """The case it was written for. Filter v1 accepted a paper whose finding is
+    that the effect fails; v2 rejects it, and 100 items were already scored."""
+
+    pool = _FakePool([_scored_row("arxiv-qfin:1", True)])
+
+    report = await literature_refilter_pass(
+        pool,  # type: ignore[arg-type]
+        _FakeLLM(_verdict(False, "the paper reports these signals losing money")),
+        _FakeSink(),
+    )
+
+    assert len(report.dropped) == 1
+    assert report.rescued == ()
+    assert "DROPPED" in report.render()
+
+
+async def test_the_refilter_reports_unchanged_verdicts_too() -> None:
+    """A run that changed nothing must be distinguishable from a run that never
+    reached the model. Those need opposite fixes and the reasons are the only
+    thing that tells them apart (KI-007)."""
+
+    pool = _FakePool([_scored_row("arxiv-qfin:1", True)])
+
+    report = await literature_refilter_pass(pool, _FakeLLM(_verdict(True)), _FakeSink())  # type: ignore[arg-type]
+
+    assert report.flips == ()
+    assert len(report.verdicts) == 1
+    assert "kept" in report.render()
+
+
+async def test_selection_keys_on_prompt_version_and_model() -> None:
+    """The 2026-07-27 miss, one funnel over: a model swap under an unchanged
+    prompt selected nothing and the pass declined to test the change."""
+
+    pool = _FakePool([])
+
+    await literature_refilter_pass(
+        pool,  # type: ignore[arg-type]
+        _FakeLLM(),
+        _FakeSink(),
+        max_items=20,
+        current_model="kimi-k3:cloud",
+        force=True,
+        dry_run=True,
+    )
+
+    assert pool.conn.fetched == (
+        SOURCE_ARXIV_QFIN,
+        LITERATURE_PROMPT_VERSION,
+        20,
+        True,
+        "kimi-k3:cloud",
+    )
+
+
+async def test_a_rescued_paper_reaches_the_literature_table() -> None:
+    pool = _FakePool([_scored_row("arxiv-qfin:1", False)])
+    sink = _FakeSink()
+
+    report = await literature_refilter_pass(pool, _FakeLLM(_verdict(True)), sink)  # type: ignore[arg-type]
+
+    assert len(report.rescued) == 1
+    assert sink.recorded[0][0].item_id == "arxiv-qfin:1"

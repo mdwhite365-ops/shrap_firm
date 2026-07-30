@@ -398,8 +398,228 @@ __all__ = [
     "FILTER_KIND",
     "LITERATURE_PROMPT_VERSION",
     "LITERATURE_SYSTEM_PROMPT",
+    "LiteratureRefilterReport",
+    "LiteratureRefilterVerdict",
     "LiteratureReport",
     "LiteratureVerdict",
     "literature_pass",
+    "literature_refilter_pass",
     "parse_literature_response",
 ]
+
+
+# --- re-filtering the backlog -------------------------------------------------
+#
+# KI-007's lesson, applied one funnel over. A prompt fix only reaches items that
+# arrive after it ships; everything already scored keeps whatever verdict the
+# configuration of the day produced. For a feed of a few dozen papers a day that
+# means a fix effectively never lands on the backlog, and the corpus stays a
+# mixture of verdicts from prompts that no longer exist.
+#
+# It bit immediately: filter v2 (2026-07-30) fixed a false accept — a paper whose
+# finding is that the effect FAILS — with 100 items already scored under v1. The
+# only recovery was deleting the rows so ingest would re-fetch them, which throws
+# away the before/after comparison that says whether the fix did anything.
+
+SELECT_FOR_LITERATURE_REFILTER_SQL = """
+SELECT item_id, source, kind, title, summary, url, external_ts, payload,
+       COALESCE((filter_result->>'testable_effect')::boolean, false) AS was_accepted,
+       COALESCE((filter_result->>'prompt_version')::int, 0) AS scored_version,
+       COALESCE(filter_result->>'model', '') AS scored_model
+FROM research.raw_source_items
+WHERE source = $1
+  AND filtered_at IS NOT NULL
+  AND (
+      $4::boolean
+      OR COALESCE((filter_result->>'prompt_version')::int, 0) < $2
+      OR ($5::text <> '' AND COALESCE(filter_result->>'model', '') <> $5)
+  )
+ORDER BY external_ts DESC NULLS LAST, item_id
+LIMIT $3
+""".strip()
+
+
+@dataclass(frozen=True, slots=True)
+class LiteratureRefilterVerdict:
+    """One paper's before/after under a newer prompt."""
+
+    item_id: str
+    title: str
+    was_accepted: bool
+    now_accepted: bool
+    reason: str
+
+    @property
+    def changed(self) -> bool:
+        return self.was_accepted != self.now_accepted
+
+
+@dataclass(frozen=True, slots=True)
+class LiteratureRefilterReport:
+    """Outcome of a re-filter.
+
+    Reports **every** verdict, not only the ones that moved — the lesson the
+    world-changer re-filter learned. A run that changed nothing would otherwise
+    print "0 changes" and stop, which cannot distinguish "the new prompt never
+    reached the model" from "the model read it and disagreed anyway." Those need
+    opposite fixes and the reasons are the only thing telling them apart.
+    """
+
+    scored: int
+    prompt_version: int
+    verdicts: tuple[LiteratureRefilterVerdict, ...]
+    dry_run: bool
+
+    @property
+    def flips(self) -> tuple[LiteratureRefilterVerdict, ...]:
+        return tuple(v for v in self.verdicts if v.changed)
+
+    @property
+    def dropped(self) -> tuple[LiteratureRefilterVerdict, ...]:
+        """Previously-accepted papers the new prompt now rejects. For a filter
+        whose known failure is accepting too much, this is the interesting set."""
+
+        return tuple(v for v in self.flips if not v.now_accepted)
+
+    @property
+    def rescued(self) -> tuple[LiteratureRefilterVerdict, ...]:
+        return tuple(v for v in self.flips if v.now_accepted)
+
+    def render(self) -> str:
+        prefix = "[dry-run] " if self.dry_run else ""
+        lines = [
+            f"{prefix}literature re-filter under prompt v{self.prompt_version}: "
+            f"{self.scored} scored, {len(self.flips)} verdict change(s)",
+            f"  rescued: {len(self.rescued)}   dropped: {len(self.dropped)}   "
+            f"accepted after this pass: {sum(1 for v in self.verdicts if v.now_accepted)}",
+        ]
+        for verdict in self.verdicts:
+            if verdict.changed:
+                marker = "RESCUED" if verdict.now_accepted else "DROPPED"
+            else:
+                marker = "kept" if verdict.now_accepted else "-"
+            lines.append(f"  {marker:8} {verdict.title[:64]}\n           {verdict.reason[:150]}")
+        return "\n".join(lines)
+
+
+async def literature_refilter_pass(
+    pool: AsyncPool,
+    llm: CompletionClient,
+    sink: LiteratureSink,
+    *,
+    max_items: int = 300,
+    tier: str = TIER_LOCAL_CLASSIFICATION,
+    current_model: str | None = None,
+    force: bool = False,
+    dry_run: bool = False,
+) -> LiteratureRefilterReport:
+    """Re-score items whose verdict came from an older prompt *or* a different model.
+
+    A verdict's identity is the (prompt version, model) pair — the correction the
+    world-changer re-filter needed on 2026-07-27, when a model swap under an
+    unchanged prompt selected nothing and the pass silently declined to test the
+    change being made.
+
+    **A drop does not delete the literature row.** An item the new prompt rejects
+    keeps its `research.literature_items` row if the generator has already acted
+    on it, because deleting it would erase the record of what the firm read and
+    decided — and the strategy or capability gap it produced would then cite a
+    paper nothing remembers accepting. The raw item's verdict is corrected; the
+    history is not rewritten.
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            SELECT_FOR_LITERATURE_REFILTER_SQL,
+            SOURCE_ARXIV_QFIN,
+            LITERATURE_PROMPT_VERSION,
+            max_items,
+            force,
+            current_model or "",
+        )
+
+    if dry_run:
+        return LiteratureRefilterReport(
+            scored=len(rows),
+            prompt_version=LITERATURE_PROMPT_VERSION,
+            verdicts=(),
+            dry_run=True,
+        )
+
+    verdicts: list[LiteratureRefilterVerdict] = []
+    consecutive_failures = 0
+    for row in rows:
+        item_id = str(row["item_id"])
+        title = str(row["title"])
+        summary = None if row["summary"] is None else str(row["summary"])
+        try:
+            result = await llm.complete(
+                tier=tier,
+                prompt=_item_prompt(title, summary),
+                system=LITERATURE_SYSTEM_PROMPT,
+                json_mode=True,
+                think=False,
+            )
+        except Exception as e:
+            consecutive_failures += 1
+            log.warning(
+                "tech_watcher.literature_refilter_item_failed",
+                item_id=item_id,
+                error=str(e)[:300],
+            )
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                log.error("tech_watcher.literature_refilter_aborted", scored=len(verdicts))
+                break
+            continue
+        consecutive_failures = 0
+        verdict = parse_literature_response(item_id, result.content)
+        decided_at = datetime.now(UTC)
+
+        if verdict.accepted:
+            external_ts = row["external_ts"]
+            await sink.record(
+                LiteratureItem(
+                    item_id=item_id,
+                    source=str(row["source"]),
+                    title=title,
+                    abstract=summary or "",
+                    url=None if row["url"] is None else str(row["url"]),
+                    published_at=external_ts if isinstance(external_ts, datetime) else None,
+                    category=None if row["kind"] is None else str(row["kind"]),
+                    authors=_authors(row["payload"]),
+                ),
+                verdict.reason,
+            )
+
+        async with pool.acquire() as conn:
+            await conn.execute(
+                MARK_FILTERED_SQL,
+                item_id,
+                decided_at,
+                json.dumps(
+                    {
+                        "kind": FILTER_KIND,
+                        "testable_effect": verdict.accepted,
+                        "reason": verdict.reason,
+                        "model": result.model,
+                        "prompt_version": LITERATURE_PROMPT_VERSION,
+                    },
+                    separators=(",", ":"),
+                ),
+            )
+        verdicts.append(
+            LiteratureRefilterVerdict(
+                item_id=item_id,
+                title=title,
+                was_accepted=bool(row["was_accepted"]),
+                now_accepted=verdict.accepted,
+                reason=verdict.reason,
+            )
+        )
+
+    return LiteratureRefilterReport(
+        scored=len(verdicts),
+        prompt_version=LITERATURE_PROMPT_VERSION,
+        verdicts=tuple(verdicts),
+        dry_run=False,
+    )
