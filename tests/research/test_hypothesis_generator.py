@@ -41,7 +41,11 @@ from shrap.research.hypothesis_generator.literature import (
     OUTCOME_REFUSED,
     LiteratureItem,
 )
-from shrap.research.hypothesis_generator.proposer import parse_proposal
+from shrap.research.hypothesis_generator.proposer import (
+    PROPOSER_SYSTEM_PROMPT,
+    build_prompt,
+    parse_proposal,
+)
 from shrap.research.hypothesis_generator.record import (
     FIXED_LONG_SHORT,
     FIXED_TOP_N,
@@ -500,7 +504,7 @@ async def test_provenance_records_which_prompt_and_model_produced_this() -> None
 
     provenance = registry.registered[0].spec["provenance"]
     assert provenance["model"] == "qwen3:32b"
-    assert provenance["prompt_version"] == 1
+    assert provenance["prompt_version"] == 2
     assert provenance["literature_item_id"] == "arxiv:2401.00001"
     assert provenance["prior"]["year"] == 2006
 
@@ -672,3 +676,86 @@ def test_the_queue_separates_what_to_build_from_what_to_buy() -> None:
 
     assert "2 effect(s) the engine cannot run, 1 of them buildable" in text
     assert "needs: book value of equity" in text
+
+
+# --- prompt v2: the two bugs the first live run found --------------------------
+
+
+def test_the_prompt_forbids_refusing_an_effect_for_being_unimplementable() -> None:
+    """The bug that made the capability queue unreachable.
+
+    v1 opened by stating what the engine reads and then asked whether the item
+    described an effect "the firm's backtest engine could implement". On the
+    first live run the model refused all six accepted papers as
+    `not-a-market-effect` — for needing signed order flow, filing text, or
+    eigenvalue decomposition. Every one of those was a capability gap, which is
+    this agent's most valuable output, converted into a refusal.
+    """
+
+    assert "NEVER a reason to set" in PROPOSER_SYSTEM_PROMPT
+    assert "That decision is not yours" in PROPOSER_SYSTEM_PROMPT
+    assert "QUESTION ONE" in PROPOSER_SYSTEM_PROMPT
+    assert "QUESTION TWO" in PROPOSER_SYSTEM_PROMPT
+    # The engine's two series must not be stated before the effect judgment.
+    assert PROPOSER_SYSTEM_PROMPT.index("QUESTION ONE") < PROPOSER_SYSTEM_PROMPT.index(
+        "exactly two daily series"
+    )
+
+
+def test_the_prompt_judges_what_a_paper_finds_not_what_it_examines() -> None:
+    """`Retail Trader's Ruin: An Anatomy of Popular Signal Failure` cleared the
+    upstream filter because popular signals "are claimed to predict returns".
+    The paper's finding is that they do not."""
+
+    assert "FINDING is that the effect does NOT work" in PROPOSER_SYSTEM_PROMPT
+    assert "implement a refuted claim" in PROPOSER_SYSTEM_PROMPT
+
+
+def test_the_authors_are_supplied_rather_than_demanded_from_the_abstract() -> None:
+    """The other first-run bug: the proposer refuses without a citation, and the
+    feed's author metadata was being dropped at ingest. It refused a paper with
+    "No identifiable authors provided" against a prompt it was never given."""
+
+    item = LiteratureItem(
+        item_id="arxiv-qfin:1",
+        source="arxiv-qfin",
+        title="AI Premium",
+        abstract="We document an AI factor.",
+        authors=("Ada Lovelace", "Alan Turing"),
+    )
+
+    assert "Ada Lovelace, Alan Turing" in build_prompt(item)
+
+
+def test_a_long_author_list_is_truncated_rather_than_dumped() -> None:
+    item = LiteratureItem(
+        item_id="x",
+        source="arxiv-qfin",
+        title="t",
+        abstract="a",
+        authors=tuple(f"Author {i}" for i in range(20)),
+    )
+
+    hint = item.citation_hint
+
+    assert "et al." in hint
+    assert "Author 19" not in hint
+
+
+def test_an_item_with_no_authors_still_builds_a_prompt() -> None:
+    """Items ingested before authors were captured have none. That is a real
+    state, and the proposer refusing them for want of a citation is correct."""
+
+    item = LiteratureItem(item_id="x", source="s", title="t", abstract="a")
+
+    assert "authors:" not in build_prompt(item)
+
+
+def test_the_empty_queue_does_not_claim_everything_was_runnable() -> None:
+    """It said exactly that on the first live run, where the true cause was six
+    refusals and nothing reaching the capability check at all."""
+
+    text = render_queue([])
+
+    assert "no effect has reached the capability check" in text
+    assert "was runnable" not in text

@@ -15,11 +15,20 @@ exists. Archetype set corrected 2026-07-30 to include `technical-catalyst` per
 ADR-0013.
 
 **Tier drift, recorded not fixed.** The header below names `cloud-default`. The
-implementation defaults to `local-heavy`, because the deployment is local-only
-(ruling 2026-07-15) and `TierLLMClient` refuses any tier that resolves to a
-provider this deployment has not configured. `--tier` takes an override, so the
-spec's routing becomes reachable the day a cloud provider is configured rather
-than requiring a code change.
+implementation defaults to `local-heavy`, and the `hypothesis-generator` compose
+service binds that tier to `gpt-oss:20b-cloud` — the model already proving out
+on the q-fin filter. `cloud-default` on this deployment pointed at
+`kimi-k3:cloud`, which requires a paid Ollama subscription the account does not
+have and returns HTTP 403 (verified 2026-07-30). `SHRAP_PROPOSER_MODEL` ladders
+up without a code change, which is what the indirection is for.
+
+**The proposer's task is harder than the filter's** — structured extraction with
+a citation, a rule choice and an input list, against the filter's yes/no. A
+20b model may not be enough. Every proposal stamps its `model` and
+`prompt_version` into the spec's provenance and every refusal is logged with a
+reason, so model capacity and prompt quality stay separable after the fact:
+`unparseable-response` on papers that obviously have authors is the model,
+`already-held` and capability gaps is the chain working.
 **Date:** 2026-05-30
 **Author:** Mike White
 **Version:** 0.1 (draft)

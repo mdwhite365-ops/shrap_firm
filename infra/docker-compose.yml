@@ -883,7 +883,18 @@ services:
       SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
       SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_FILTER_MODEL:-gpt-oss:20b-cloud}"
       SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
-      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "${SHRAP_SYNTHESIS_MODEL:-kimi-k3:cloud}"
+      # Was kimi-k3:cloud. That model requires a paid Ollama subscription this
+      # account does not have and returns HTTP 403 (verified 2026-07-30 while
+      # pointing the Hypothesis Generator at the same tier). Synthesis runs
+      # inside `except Exception: log.exception("synthesis_failed")`, so a 403
+      # every night looked like a healthy service with a quiet funnel: items
+      # marked relevant, nothing ever clustered into a candidate.
+      #
+      # Default is now the model already working on the bulk filter. Synthesis
+      # IS where judgment is load-bearing, so laddering up is the right move
+      # the day the subscription exists - set SHRAP_SYNTHESIS_MODEL and
+      # restart, which is what this indirection is for.
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "${SHRAP_SYNTHESIS_MODEL:-gpt-oss:20b-cloud}"
     depends_on:
       redis:
         condition: service_healthy
@@ -1198,6 +1209,59 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Hypothesis Generator - the firm proposing its own strategies from the
+  # literature (technical-catalyst archetype, ADR-0013). Tools profile: one
+  # batch on demand, exits when done.
+  #
+  #   docker compose --profile tools run --rm hypothesis-generator \
+  #     shrap-hypothesis-generate --dry-run --limit 10
+  #   docker compose --profile tools run --rm hypothesis-generator \
+  #     shrap-hypothesis-generate --gaps
+  #
+  # It reuses strategy-evaluator.Dockerfile, and that is a requirement rather
+  # than convenience: the capability check reads FACTOR_SCORERS and the engine's
+  # parameter bounds to decide whether a published effect is runnable, which
+  # pulls in numpy. The tech-watcher image has no numpy, so running the
+  # generator there fails at import (2026-07-30) - see runbook 1d.
+  #
+  # A change under src/shrap/research/ therefore has THREE build targets:
+  # strategy-evaluator, strategy-evaluator-trigger, and this one.
+  # -------------------------------------------------------------------------
+  hypothesis-generator:
+    build:
+      context: ../
+      dockerfile: infra/strategy-evaluator.Dockerfile
+    container_name: shrap_hypothesis_generator
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      HYPOTHESIS_GENERATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      # Same routing as tech-watcher: ollama.com directly, bearer token from
+      # .env. The local daemon's cloud path authenticates with a host Ed25519
+      # key that dies with the container volume; a token is config.
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+      # The CLI defaults to --tier local-heavy, so local-heavy is bound here to
+      # a model that actually exists on this deployment. Without this the tier
+      # resolves to its registry default (mistral-small:24b on the local
+      # daemon), which is not pulled - the CLI would need a --tier flag on
+      # every invocation to work at all.
+      #
+      # gpt-oss:20b-cloud is the model already proving out on the q-fin filter.
+      # The proposer's task is harder (structured extraction with a citation),
+      # so laddering up is expected: set SHRAP_PROPOSER_MODEL and restart. Note
+      # kimi-k3:cloud requires a paid subscription this account does not have -
+      # it 403s (verified 2026-07-30).
+      SHRAP_LLM_LOCAL_HEAVY_PROVIDER: "ollama"
+      SHRAP_LLM_LOCAL_HEAVY_MODEL: "${SHRAP_PROPOSER_MODEL:-gpt-oss:20b-cloud}"
+    depends_on:
+      postgres:
         condition: service_healthy
     networks:
       - shrap_net

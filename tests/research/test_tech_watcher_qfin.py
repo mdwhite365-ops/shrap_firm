@@ -41,6 +41,8 @@ _FEED = """<?xml version="1.0" encoding="UTF-8"?>
     <title>Illiquidity and the cross-section of expected returns</title>
     <summary>We document that expected returns rise with illiquidity.</summary>
     <published>2024-01-02T00:00:00Z</published>
+    <author><name>Yakov Amihud</name></author>
+    <author><name>Haim Mendelson</name></author>
     <link href="http://arxiv.org/abs/2401.01234v1" rel="alternate"/>
     <arxiv:primary_category term="q-fin.PM"/>
   </entry>
@@ -137,11 +139,14 @@ def _row(item_id: str = "arxiv-qfin:2401.01234v1") -> dict[str, Any]:
         "summary": "We document that expected returns rise with illiquidity.",
         "url": "http://arxiv.org/abs/2401.01234v1",
         "external_ts": datetime(2024, 1, 2, tzinfo=UTC),
+        "payload": {"primary_category": "q-fin.PM", "authors": ["Yakov Amihud"]},
     }
 
 
 def _verdict(accepted: bool = True, reason: str = "illiquidity predicts returns") -> str:
-    return json.dumps({"testable_effect": accepted, "reason": reason})
+    return json.dumps(
+        {"testable_effect": accepted, "reason": reason, "paper_finds_it_works": accepted}
+    )
 
 
 # --- the second source --------------------------------------------------------
@@ -228,6 +233,7 @@ async def test_an_accepted_paper_reaches_the_literature_table_and_the_stream() -
     assert item.item_id == "arxiv-qfin:2401.01234v1"
     assert item.abstract.startswith("We document")
     assert item.category == "q-fin.PM"
+    assert item.authors == ("Yakov Amihud",)
     assert item.published_at == datetime(2024, 1, 2, tzinfo=UTC)
     assert reason == "illiquidity predicts returns"
     assert events.published[0]["stream"] == "research.literature.ingested"
@@ -312,7 +318,9 @@ def test_a_truthy_non_true_value_is_not_an_acceptance() -> None:
 
 
 def test_a_verdict_with_no_reason_still_says_something() -> None:
-    verdict = parse_literature_response("x", '{"testable_effect": true}')
+    verdict = parse_literature_response(
+        "x", '{"testable_effect": true, "paper_finds_it_works": true}'
+    )
 
     assert verdict.accepted
     assert verdict.reason == "no reason given"
@@ -322,3 +330,95 @@ def test_an_empty_pass_says_so_rather_than_rendering_blank() -> None:
     from shrap.research.tech_watcher.literature_filter import LiteratureReport
 
     assert "no unscored q-fin items" in LiteratureReport(verdicts=()).render()
+
+
+# --- filter v2: judge the finding, not the setup ------------------------------
+
+
+def test_a_paper_reporting_that_signals_fail_is_rejected() -> None:
+    """The v1 false accept, verbatim from the first live run. "Retail Trader's
+    Ruin: An Anatomy of Popular Signal Failure" was accepted because trend,
+    oscillator and volume signals "are claimed to predict future stock returns"
+    — a sentence the paper writes in order to refute."""
+
+    verdict = parse_literature_response(
+        "x",
+        json.dumps(
+            {
+                "testable_effect": True,
+                "reason": "trend, oscillator and volume signals are claimed to predict returns",
+                "paper_finds_it_works": False,
+            }
+        ),
+    )
+
+    assert not verdict.accepted
+    assert "does not report the effect working" in verdict.reason
+
+
+def test_a_confirming_paper_still_passes() -> None:
+    verdict = parse_literature_response(
+        "x", json.dumps({"testable_effect": True, "reason": "r", "paper_finds_it_works": True})
+    )
+
+    assert verdict.accepted
+
+
+def test_a_missing_finding_field_counts_as_a_rejection() -> None:
+    """Bias to drop. A silent accept puts a refuted claim into the proposer; a
+    silent reject shows up as an empty funnel with the reasons still
+    queryable."""
+
+    verdict = parse_literature_response("x", json.dumps({"testable_effect": True, "reason": "r"}))
+
+    assert not verdict.accepted
+
+
+def test_the_prompt_names_the_failure_it_was_written_against() -> None:
+    assert "JUDGE WHAT THE PAPER CONCLUDES, NOT WHAT IT EXAMINES" in LITERATURE_SYSTEM_PROMPT
+    assert "result sentence, not its setup" in LITERATURE_SYSTEM_PROMPT
+    assert LITERATURE_PROMPT_VERSION == 2
+
+
+# --- one bad call must not cost the batch -------------------------------------
+
+
+class _FlakyLLM:
+    """Fails on the nth call, succeeds otherwise."""
+
+    def __init__(self, fail_on: set[int], total: int) -> None:
+        self.fail_on = fail_on
+        self.calls = 0
+        self.total = total
+
+    async def complete(self, **kwargs: Any) -> _LLMResult:
+        self.calls += 1
+        if self.calls in self.fail_on:
+            raise TimeoutError("ollama timed out")
+        return _LLMResult(_verdict())
+
+
+async def test_a_single_failure_skips_one_item_and_continues() -> None:
+    """The item stays unmarked and retries next pass, so skipping loses
+    nothing. Aborting would lose every item behind it for an hour."""
+
+    rows = [_row(f"arxiv-qfin:{i}") for i in range(4)]
+    llm = _FlakyLLM(fail_on={2}, total=4)
+
+    report = await literature_pass(_FakePool(rows), llm, _FakeSink())  # type: ignore[arg-type]
+
+    assert llm.calls == 4
+    assert len(report.verdicts) == 3
+
+
+async def test_a_run_of_failures_aborts_rather_than_burning_the_batch() -> None:
+    """Five in a row is a dead endpoint or a bad key, not noise. Grinding
+    through ninety-five more calls buries the cause in warnings."""
+
+    rows = [_row(f"arxiv-qfin:{i}") for i in range(30)]
+    llm = _FlakyLLM(fail_on=set(range(1, 30)), total=30)
+
+    report = await literature_pass(_FakePool(rows), llm, _FakeSink())  # type: ignore[arg-type]
+
+    assert llm.calls == 5
+    assert report.verdicts == ()

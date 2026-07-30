@@ -169,7 +169,11 @@ def render_queue(gaps: Sequence[RankedGap]) -> str:
     """The build queue, most-cited first."""
 
     if not gaps:
-        return "No capability gaps recorded — every effect read so far was runnable."
+        # Deliberately does not claim everything was runnable. It said exactly
+        # that on the first live run, where the true cause was six refusals and
+        # zero effects reaching the capability check at all — a reassuring
+        # sentence about a stage nothing had entered.
+        return "No capability gaps recorded — no effect has reached the capability check yet."
     buildable = [g for g in gaps if g.kind == "missing-scorer"]
     lines = [
         f"CAPABILITY GAPS — {len(gaps)} effect(s) the engine cannot run, "

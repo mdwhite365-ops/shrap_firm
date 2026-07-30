@@ -48,9 +48,15 @@ log = structlog.get_logger(__name__)
 # world-changer filter's version (`FILTER_PROMPT_VERSION`): they score disjoint
 # pools under unrelated prompts, and a shared counter would make one filter's
 # revision look like a reason to re-score the other's items.
-LITERATURE_PROMPT_VERSION = 1
+LITERATURE_PROMPT_VERSION = 2
 
 FILTER_KIND = "literature"
+
+# Consecutive model failures before the pass gives up. One timeout is noise and
+# the item retries next pass; five in a row is a dead endpoint, a bad key, or a
+# model that no longer exists, and grinding through ninety-five more calls to
+# discover that buries the cause.
+MAX_CONSECUTIVE_FAILURES = 5
 
 PRODUCED_BY = "tech-watcher"
 SCHEMA_VERSION = "1.0.0"
@@ -75,28 +81,39 @@ LITERATURE_SYSTEM_PROMPT = (
     "- market-design, regulation and policy commentary\n"
     "- surveys and replications that report no effect of their own\n"
     "\n"
-    "Two calibration notes. A paper testing a KNOWN effect on new data still "
-    "counts — a replication that reports the effect's magnitude is a claim about "
-    "returns. And a machine-learning paper counts only if the claim is about a "
-    "predictor rather than about the model: 'firms with high X outperform' is in, "
-    "'our network beats the benchmark on this dataset' is out.\n"
+    "JUDGE WHAT THE PAPER CONCLUDES, NOT WHAT IT EXAMINES. This is the one way "
+    "this filter is known to fail. A paper whose finding is that an effect does "
+    "NOT work — that popular signals fail, that an anomaly has decayed, that a "
+    "published result does not replicate — is evidence AGAINST an effect, and "
+    "must be rejected. Read the abstract's result sentence, not its setup. If "
+    "the abstract sets up signals and then reports they lose money, that is a "
+    "rejection however many predictors it names.\n"
     "\n"
-    "You are NOT judging whether the effect is real, whether it still works, or "
-    "whether it can be implemented. Something downstream tests all three. You are "
-    "deciding only whether there is a claim worth testing.\n"
+    "Two calibration notes. A paper testing a KNOWN effect on new data still "
+    "counts — a replication that CONFIRMS an effect and reports its magnitude is "
+    "a claim about returns. And a machine-learning paper counts only if the claim "
+    "is about a predictor rather than about the model: 'firms with high X "
+    "outperform' is in, 'our network beats the benchmark on this dataset' is "
+    "out.\n"
+    "\n"
+    "You are NOT judging whether the effect is real, whether it still works "
+    "today, or whether anyone can implement it. Something downstream tests all "
+    "three. You are deciding only whether this paper ASSERTS an effect worth "
+    "testing.\n"
     "\n"
     "Most papers are rejected. When genuinely unsure, reject.\n"
     "\n"
     "Respond with ONLY a JSON object: "
     '{"testable_effect": true|false, "reason": "<one sentence naming the claimed '
-    'predictor and what it predicts, or why it does not qualify>"}'
+    'predictor and what it predicts, or why it does not qualify>", '
+    '"paper_finds_it_works": true|false}'
 )
 
 # Only the q-fin leg. `filter.py` holds the mirror of this exclusion, and the two
 # must stay in step: an item in neither pool is never scored at all, and an item
 # in both is scored twice under prompts that disagree by design.
 SELECT_UNFILTERED_LITERATURE_SQL = """
-SELECT item_id, source, kind, title, summary, url, external_ts
+SELECT item_id, source, kind, title, summary, url, external_ts, payload
 FROM research.raw_source_items
 WHERE filtered_at IS NULL
   AND source = $1
@@ -194,6 +211,28 @@ class LiteratureReport:
         return "\n".join(lines)
 
 
+def _authors(payload: Any) -> tuple[str, ...]:
+    """Author names off the ingested payload, defensively.
+
+    asyncpg hands jsonb back as TEXT unless a codec is registered — the shape
+    no test fixture produces and every production row does (PR #152). Items
+    ingested before authors were captured simply have none, which is a real
+    state: the proposer then has nothing to cite and refuses, correctly.
+    """
+
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (TypeError, ValueError):
+            return ()
+    if not isinstance(payload, Mapping):
+        return ()
+    names = payload.get("authors")
+    if not isinstance(names, list):
+        return ()
+    return tuple(" ".join(str(n).split()) for n in names if str(n).strip())
+
+
 def _item_prompt(title: str, summary: str | None) -> str:
     return f"Title: {title}\nAbstract: {(summary or '')[:4000] or '(no abstract)'}"
 
@@ -214,9 +253,30 @@ def parse_literature_response(item_id: str, content: str) -> LiteratureVerdict:
         return LiteratureVerdict(item_id, False, "non-object filter response")
     reason = data.get("reason")
     text = " ".join(str(reason).split())[:500] if isinstance(reason, str) else ""
+    claims_effect = data.get("testable_effect") is True
+    # A SECOND boolean rather than one, because the one failure this filter is
+    # known to have is reading an abstract's setup instead of its result. v1
+    # accepted "Retail Trader's Ruin: An Anatomy of Popular Signal Failure" on
+    # the grounds that trend, oscillator and volume signals "are claimed to
+    # predict future stock returns" — which the paper says in order to refute.
+    #
+    # Folding this into `testable_effect` would leave the model free to answer
+    # about the setup and be right. Made explicit, it has to assert that the
+    # paper FINDS the effect works, which is a different sentence to read.
+    #
+    # Missing counts as false. A silent accept puts a refuted claim into the
+    # proposer; a silent reject shows up immediately as an empty funnel with
+    # the reasons still queryable. The funnel's standing bias is to drop.
+    finds_it_works = data.get("paper_finds_it_works") is True
+    if claims_effect and not finds_it_works:
+        return LiteratureVerdict(
+            item_id=item_id,
+            accepted=False,
+            reason=f"paper does not report the effect working — {text or 'no reason given'}",
+        )
     return LiteratureVerdict(
         item_id=item_id,
-        accepted=data.get("testable_effect") is True,
+        accepted=claims_effect,
         reason=text or "no reason given",
     )
 
@@ -243,17 +303,42 @@ async def literature_pass(
         rows = await conn.fetch(SELECT_UNFILTERED_LITERATURE_SQL, SOURCE_ARXIV_QFIN, max_items)
 
     verdicts: list[LiteratureVerdict] = []
+    consecutive_failures = 0
     for row in rows:
         item_id = str(row["item_id"])
         title = str(row["title"])
         summary = None if row["summary"] is None else str(row["summary"])
-        result = await llm.complete(
-            tier=tier,
-            prompt=_item_prompt(title, summary),
-            system=LITERATURE_SYSTEM_PROMPT,
-            json_mode=True,
-            think=False,
-        )
+        try:
+            result = await llm.complete(
+                tier=tier,
+                prompt=_item_prompt(title, summary),
+                system=LITERATURE_SYSTEM_PROMPT,
+                json_mode=True,
+                think=False,
+            )
+        except Exception as e:
+            # One timeout should not cost the rest of the batch an hour. The
+            # item stays unmarked and is picked up next pass, so skipping loses
+            # nothing; aborting the batch loses every item behind it.
+            consecutive_failures += 1
+            log.warning(
+                "tech_watcher.literature_item_failed",
+                item_id=item_id,
+                error=str(e)[:300],
+                consecutive=consecutive_failures,
+            )
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                # A run of them is systemic — a dead endpoint, a bad key, a
+                # model that no longer exists. Continuing would burn the batch
+                # against a wall and bury the cause in a wall of warnings.
+                log.error(
+                    "tech_watcher.literature_aborted",
+                    scored=len(verdicts),
+                    consecutive=consecutive_failures,
+                )
+                break
+            continue
+        consecutive_failures = 0
         verdict = parse_literature_response(item_id, result.content)
         decided_at = datetime.now(UTC)
 
@@ -268,6 +353,7 @@ async def literature_pass(
                     url=None if row["url"] is None else str(row["url"]),
                     published_at=external_ts if isinstance(external_ts, datetime) else None,
                     category=None if row["kind"] is None else str(row["kind"]),
+                    authors=_authors(row["payload"]),
                 ),
                 verdict.reason,
             )
