@@ -36,6 +36,7 @@ firm would have two answers about its own history.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -246,9 +247,9 @@ def row_from_mapping(raw: Mapping[str, Any]) -> LedgerRow:
     summary starts lying.
     """
 
-    aggregate = raw.get("aggregate_metrics") or {}
-    active = raw.get("active_metrics") or {}
-    consistency = raw.get("consistency_metrics") or {}
+    aggregate = _json_mapping(raw.get("aggregate_metrics"))
+    active = _json_mapping(raw.get("active_metrics"))
+    consistency = _json_mapping(raw.get("consistency_metrics"))
     return LedgerRow(
         strategy_id=str(raw["strategy_id"]),
         name=str(raw.get("name") or ""),
@@ -266,6 +267,32 @@ def row_from_mapping(raw: Mapping[str, Any]) -> LedgerRow:
         created_at=raw.get("created_at"),
         card_path=_optional_str(raw.get("card_path")),
     )
+
+
+def _json_mapping(value: Any) -> Mapping[str, Any]:
+    """Decode a JSONB column, which asyncpg hands back as a **string**.
+
+    Without a codec registered, asyncpg returns jsonb as text. The rest of the
+    firm handles this with `strategy_registry._json_loaded`; this module did
+    not, and shipped a ledger that crashed on the first real row with
+    ``AttributeError: 'str' object has no attribute 'get'``.
+
+    Anything undecodable becomes an empty mapping rather than raising. A ledger
+    is a reporting surface: one malformed metrics blob should cost that row its
+    numbers, not deny the reader the whole corpus.
+    """
+
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    if isinstance(value, Mapping):
+        return value
+    return {}
 
 
 def _optional_float(value: Any) -> float | None:
