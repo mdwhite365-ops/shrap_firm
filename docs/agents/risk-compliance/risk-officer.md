@@ -8,10 +8,61 @@ to draft human-readable escalation language (Slack/email body for Mike); that dr
 cannot influence the decision itself. See `docs/infrastructure/llm-routing.md` and
 `docs/infrastructure/llm-registry.md`.
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
-**Status:** Draft
-**Date:** 2026-05-29
+**Status:** **Implemented** — portfolio layer, kill-switch infrastructure, and continuous
+monitoring shipped 2026-07-29. Enforcement is flag-gated OFF until the Reconciliation Agent
+has run a pass with the new positions fetch (`PRE_TRADE_CHECKER_PORTFOLIO_LIMITS_ENFORCEMENT`).
+**Date:** 2026-05-29 (drafted), 2026-07-29 (implemented)
 **Author:** Mike White
-**Version:** 0.1 (draft)
+**Version:** 0.2
+**Limits:** `docs/risk/policy.md` — authoritative, v0.1 first cuts pending Mike's ruling
+
+## Implementation note (2026-07-29)
+
+The Risk Officer is **the process that was running as the Pre-Trade Checker**, whose own
+spec called it "the Month 1 wire-only Risk Officer stub". The portfolio layer lives in
+`src/shrap/risk_compliance/risk_officer/`; the deterministic per-order rules stay in
+`pre_trade.py`, `tier3_membership.py` and `rate_limit.py`. The stream contract did not
+change, so the Decision Maker, Execution Agent and Audit Logger were not touched.
+
+What prompted it: on 2026-07-29 the firm's first strategy evaluation reported a **53.88%
+maximum drawdown**, and nothing in the running system would have noticed. The only
+automatic control on the order path was a 100-share per-order cap; the only kill switch
+was an environment variable a human had to set.
+
+**Shipped**
+
+- Hard invariants, ticker eligibility, velocity — already present, unchanged
+- Per-ticker cap, gross/net caps, correlation-cluster caps (steps 4–6)
+- Scale-down rather than reject (step 8)
+- Per-stage flat sizing (step 3, see the Kelly note below)
+- Kill switches: `manual`, `daily_loss`, `strategy:<id>`; Redis state, Postgres history
+- Continuous monitoring: daily-loss and strategy-drawdown limits, auto-tripping switches
+- `risk.alert`, `risk.kill_switch.set` / `.clear`
+- `risk.decisions` and `risk.kill_switches` tables
+- Regime-scaled caps from `intel.regime.sizing-modifier`
+- `ops.position_snapshots` — the firm's first record of what it actually holds
+
+**Not shipped, and why**
+
+- **Kelly-fractional sizing.** The spec requires `Kelly fraction x posterior edge x regime
+  fit`. There is no Bayesian Updater in this firm — no spec implementation, no service, no
+  table — so the posterior does not exist, and the spec itself forbids substituting
+  backtest Sharpe. Open question 4's documented fallback (flat fraction at the lowest
+  tier) is what ships. The Kelly slot is present in `sizing.py` and explicitly `None`.
+- **Regime-change orderly exit.** Caps tighten with regime, which zeroes new entries in a
+  hostile regime. The `regime_kill` flagging described below needs a `regime_kill` field
+  on strategy records, which does not exist yet.
+- **Second-factor override.** Left flag-only, its documented current state. Every set and
+  clear is now audited, which was not true before.
+
+**Two behaviours added that the spec does not describe**, both because the spec's rules as
+written would trap the book:
+
+1. **A breached limit blocks increases, not decreases.** When the regime tightens caps,
+   existing positions go over-limit through no action of the strategy's. Vetoing on
+   "projected exceeds cap" would refuse the very sells that restore compliance.
+2. **Sizing never scales an exit.** Scaling a 10-share close to 2, then 0, leaves a
+   position the strategy asked to close and cannot.
 
 ## Purpose
 
@@ -48,9 +99,9 @@ What this agent cannot do:
 
 - **Schedule:** Continuous. Plus a 5-minute heartbeat that re-checks all open positions
   against current limits — limits may tighten when regime changes.
-- **Event:** Subscribes to `trading.decision.intent` (pre-trade check), `execution.fill`
-  (post-fill exposure update), `research.regime.changed` (re-evaluate caps),
-  `bayesian.posterior.updated` (re-evaluate Kelly fraction), `ops.health.degraded`
+- **Event:** Subscribes to `trading.decision.intent` (pre-trade check), `execution.order.filled`
+  (post-fill exposure update), `intel.regime.changed` (re-evaluate caps),
+  `bayesian.posterior.updated` (re-evaluate Kelly fraction), `ops.health-degraded`
   (data integrity issues force precautionary halts).
 - **On-demand:** Mike-issued `risk.kill_switch.set` / `risk.kill_switch.clear`.
 
@@ -71,11 +122,13 @@ sizing-policy ADR.
 | Source | Type | Description |
 |---|---|---|
 | Redis: `trading.decision.intent` | Event | Order intents requiring approval |
-| Redis: `execution.fill` | Event | Fill confirmations updating live exposure |
-| Redis: `research.regime.tick` | Event | Current regime label and confidence |
+| Redis: `execution.order.filled` | Event | Fill confirmations updating live exposure |
+| Redis: `intel.regime.tick` | Event | Current regime label and confidence |
 | Redis: `bayesian.posterior.updated` | Event | Posterior edge estimate per strategy |
-| Redis: `ops.health.*` | Event | Data freshness, exchange connectivity, reconciliation breaks |
-| PostgreSQL: `trading.positions`, `trading.fills` | Query | Position truth |
+| Redis: `ops.health-*` | Event | Data freshness, exchange connectivity, reconciliation breaks |
+| PostgreSQL: `ops.position_snapshots` | Query | Position truth (Reconciliation Agent writes it) |
+| PostgreSQL: `ops.account_snapshots` | Query | NAV and the equity curve |
+| PostgreSQL: `market_data.daily_bars` | Query | Prices, and history for correlation clustering |
 | Repo: `docs/risk/policy.md` | File read | Authoritative limit policy — versioned, requires Mike-approved PR to change |
 
 ## Processing
@@ -117,7 +170,7 @@ sizing-policy ADR.
 
 ### Regime-change response
 
-On `research.regime.changed`: re-evaluate all open positions. Strategies whose new regime
+On `intel.regime.changed`: re-evaluate all open positions. Strategies whose new regime
 is in their `regime_kill` list are flagged for orderly exit. The Risk Officer does not
 itself send exits — it tightens sizing on those strategies to zero new entries and
 emits an alert that the Decision Maker / strategy logic should close out.

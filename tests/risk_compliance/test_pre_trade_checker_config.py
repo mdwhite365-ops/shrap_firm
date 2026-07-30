@@ -45,6 +45,18 @@ def test_settings_redacted_output_is_log_safe() -> None:
         "block_ms": 5000,
         "retry_delay_seconds": 1.0,
         "log_level": "INFO",
+        "portfolio_limits_enforcement": False,
+        "monitor_interval_seconds": 300.0,
+        "portfolio_limits": {
+            "max_ticker_weight": 0.20,
+            "max_gross_exposure": 1.00,
+            "max_net_exposure": 1.00,
+            "max_cluster_weight": 0.15,
+            "max_daily_loss": 0.02,
+            "max_strategy_drawdown": 0.25,
+            "correlation_threshold": 0.80,
+            "min_cluster_history": 40,
+        },
     }
 
 

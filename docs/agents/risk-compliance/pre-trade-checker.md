@@ -7,6 +7,13 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 **Date:** 2026-06-08
 **Author:** Mike White
 
+> **Superseded 2026-07-29.** This service is now the **Risk Officer**. The portfolio-risk
+> layer described in `docs/agents/risk-compliance/risk-officer.md` was added to this same
+> process, keeping the stream contract, the consumer group and the container. Everything
+> below still describes the deterministic per-order rules accurately — they were not
+> changed — but this document no longer describes the whole agent. Read the Risk Officer
+> spec first, and `docs/risk/policy.md` for the limits.
+
 ## Purpose
 
 The Pre-Trade Checker is the Month 1 wire-only Risk Officer stub. It is a long-running risk gate that consumes `trading.decision.intent` events from Redis Streams, invokes the existing pure-function `PreTradeChecker`, and publishes either `risk.intent.approved` or `risk.intent.vetoed`.

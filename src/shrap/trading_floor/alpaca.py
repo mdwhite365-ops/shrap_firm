@@ -126,6 +126,28 @@ class AlpacaPaperClient:
                 raise ValueError("Alpaca orders response must contain JSON objects")
         return orders
 
+    async def list_positions(self, http_client: AsyncHttpClient) -> list[dict[str, Any]]:
+        """List all open positions for the account.
+
+        Alpaca returns every open position in one unpaginated response, so
+        there is no limit or cursor to thread through. An empty array is a flat
+        account — a legitimate answer, and distinguishable from a failed call
+        only because a failure raises.
+        """
+
+        response = await http_client.get(
+            f"{self._api_base()}/positions",
+            headers=self.auth_headers(),
+        )
+        response.raise_for_status()
+        positions = response.json()
+        if not isinstance(positions, list):
+            raise ValueError("Alpaca positions response must be a JSON array")
+        for position in positions:
+            if not isinstance(position, dict):
+                raise ValueError("Alpaca positions response must contain JSON objects")
+        return positions
+
     async def submit_order(
         self,
         http_client: AsyncHttpClient,
