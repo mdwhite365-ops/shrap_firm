@@ -524,11 +524,16 @@ class PostgresStrategyRegistry:
     async def attempts(self, strategy_id: str) -> int:
         """How many strategies this idea has burned, including the original.
 
-        The multiple-testing denominator. A lineage on attempt 20 that finally
-        clears an information ratio of 0.5 has not found edge — it has found the
-        best of twenty draws, and the gate cannot know that without this number.
-        Reported rather than enforced: what the gate should DO about a long
-        lineage is a calibration, and calibrations are Mike's.
+        Reporting only. **Not the multiple-testing denominator** — that lives
+        in ``strategy_evaluator.store.PostgresEvaluatorReader.count_draws``,
+        which counts lineage members that actually sampled the hypothesis.
+
+        The difference (Mike's ruling, 2026-07-30): a revision killed on
+        `insufficient-trades` or a dead anchor is a row in the lineage but not a
+        draw — the plumbing failed before the question was asked. Charging the
+        survivor for it would penalise a data problem rather than a search.
+        Killed attempts that DID run still count: a killed draw is still a draw,
+        and exempting them would make a larger search cheaper.
         """
 
         return len(await self.lineage(strategy_id))
