@@ -9,12 +9,22 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 **Date:** 2026-07-19
 **Author:** Mike White
 
-> **Seed-deployment routing:** same ruling as the Tech Watcher (2026-07-15/17)
-> — the firm runs local-only until cloud API billing exists, so in the
-> deployed seed both tiers env-route to Ollama on the Dell. The escalation
-> path is wired but lands on the same local model until the compose env
-> changes. Known tradeoff: material-event summaries will be mushier; nothing
-> downstream trades on them yet.
+> **Deployment routing (2026-07-30):** cloud. Mike's ruling supersedes the
+> local-only ruling of 2026-07-15 for both Intelligence agents — the 9B local
+> model was not good enough for materiality judgement. Both tiers env-route to
+> `https://ollama.com` on `gpt-oss:20b-cloud`, bearer token from `.env`. Tier
+> aliases remain the contract (ADR-0009).
+>
+> **The escalation path still lands on the same model** — now a better one, but
+> the same one, so escalating a material item cannot change the answer. That was
+> a disclosed tradeoff at seed and remains open as KI-021;
+> `SHRAP_INTEL_ESCALATION_MODEL` closes it in one `.env` edit once a stronger
+> model's usage tier is confirmed inside the subscription.
+>
+> **Cost note:** Ollama bills GPU-time against session and weekly caps. This
+> agent has `score_max_items = 300` and has never scored an item (the HTTP 400
+> of #165), so its first healthy pass works a real backlog against a shared cap
+> that the research funnel also draws on. Bound it for that first run.
 
 ## Purpose
 
