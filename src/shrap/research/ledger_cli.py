@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
+from shrap.research.guidance import derive
 from shrap.research.ledger import (
     LedgerRow,
     render,
@@ -48,6 +50,8 @@ SELECT
     s.strategy_id,
     s.name,
     s.status,
+    s.spec,
+    s.tickers,
     s.created_at AS registered_at,
     t.attempts,
     n.verdict, n.reason, n.protocol_version, n.total_trades,
@@ -74,10 +78,41 @@ class Pool(Protocol):
     def acquire(self) -> AcquireContext: ...
 
 
-async def read_ledger(pool: Pool) -> list[LedgerRow]:
+async def read_ledger(pool: Pool) -> tuple[list[LedgerRow], list[dict[str, Any]]]:
+    """Return the flattened rows and the raw ones.
+
+    Guidance reads a strategy's SPEC — the rule, the params, the universe — which
+    the flattened LedgerRow deliberately does not carry. Two shapes from one
+    query rather than two queries, so the ledger and the guidance can never
+    describe different corpora.
+    """
+
     async with pool.acquire() as conn:
         rows = await conn.fetch(LEDGER_SQL)
-    return [row_from_mapping(row) for row in rows]
+    flattened = [row_from_mapping(row) for row in rows]
+    raw = [
+        {
+            "strategy_id": r["strategy_id"],
+            "name": r["name"],
+            "spec": _decoded(r.get("spec")),
+            "tickers": _decoded(r.get("tickers")),
+            "information_ratio": f.information_ratio,
+            "tested": f.engine_ran and not f.is_structural,
+        }
+        for r, f in zip(rows, flattened, strict=True)
+    ]
+    return flattened, raw
+
+
+def _decoded(value: Any) -> Any:
+    """jsonb arrives as text; the ledger learned this the hard way (PR #152)."""
+
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+    return value or {}
 
 
 def _dsn(explicit: str | None) -> str:
@@ -99,11 +134,14 @@ async def _run(args: argparse.Namespace) -> str:
 
     pool = await create_asyncpg_pool(_dsn(args.dsn))
     try:
-        rows = await read_ledger(pool)
+        rows, raw = await read_ledger(pool)
     finally:
         await pool.close()
     summary = summarise(rows, sharpe_floor=args.sharpe_floor, ir_floor=args.ir_floor)
-    return render(rows, summary)
+    out = render(rows, summary)
+    if args.guidance:
+        out += "\n\nWHAT TO TRY NEXT\n" + derive(raw).render()
+    return out
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -115,6 +153,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--dsn", default=None, help="Postgres DSN (default: env)")
+    parser.add_argument(
+        "--guidance",
+        action="store_true",
+        help="Also derive what the corpus says to try next (informs proposals, never gates)",
+    )
     parser.add_argument(
         "--sharpe-floor",
         type=float,
