@@ -1,4 +1,4 @@
-"""Seeds for the four documented factor effects.
+"""Seeds for the documented factor effects.
 
 Separate from ``technical_strategies.py`` deliberately: these are a *family* of
 independent hypotheses, and keeping them in their own module makes it hard to
@@ -8,6 +8,11 @@ is attempt 1 and none inherits another's multiple-testing penalty (PR #148).
 That property is the point. Four unrelated effects tested once each is four
 honest experiments; four variants of one effect is a search over one hypothesis,
 and the gate treats those differently on purpose.
+
+``network-peripherality`` is the first seed here the firm chose for itself: it
+reached the registry as a `missing-scorer` capability gap, cited to an arXiv
+paper the q-fin leg ingested, rather than from Mike picking a result out of the
+canon (2026-07-30).
 
 Every seed states, before the run, what would falsify it. The kill criteria are
 not boilerplate — each names the specific way that specific effect is known to
@@ -24,6 +29,7 @@ from shrap.research.strategy_evaluator.factors import (
     DEFAULT_FACTOR_LOOKBACKS,
     FACTOR_HIGH_PROXIMITY,
     FACTOR_LOW_VOLATILITY,
+    FACTOR_NETWORK_PERIPHERALITY,
     FACTOR_PARAM_BOUNDS,
     FACTOR_TIME_SERIES,
     FACTOR_VOLUME_SHOCK,
@@ -204,6 +210,50 @@ FACTOR_SEEDS: tuple[FactorSeed, ...] = (
             "twelve-month formation on daily bars produces too few position changes to "
             "clear the trade-count gate honestly, in which case the result is about "
             "sample size rather than about the effect",
+            *COMMON_KILL_CRITERIA,
+        ),
+    ),
+    FactorSeed(
+        key="network-peripherality-252-10",
+        strategy_id="01KYT494HAY1ZKBWPXB312F56F",
+        name="Correlation-network peripherality (252d, top 10 least connected)",
+        factor=FACTOR_NETWORK_PERIPHERALITY,
+        thesis=(
+            "Assets on the PERIPHERY of a denoised correlation network earn higher "
+            "risk-adjusted returns than those at its core. The mechanism is a "
+            "diversification story: a name weakly connected to everything else is one few "
+            "portfolios need to hold, and being unwanted is compensated. "
+            "This is the first strategy the firm proposed to itself. It came from "
+            "arXiv 2607.10297, ingested by Tech Watcher's q-fin leg on 2026-07-30, "
+            "accepted by the literature filter, and recorded by the Hypothesis Generator "
+            "as a `missing-scorer` capability gap — the effect was real, cited, and "
+            "computable from closes, and nobody had written the function. Every prior "
+            "seed in this module was chosen by Mike from the canon. "
+            "It is also the first effect the firm has tested that is RELATIONAL. Every "
+            "other strategy on record scores a name from its own history; this one cannot "
+            "be computed for a single stock at all. That matters beyond this result: a "
+            "correlated failure across a corpus of self-referential signals would be "
+            "indistinguishable from a defect in how the firm reads one name's history, "
+            "and this is the first signal that would not share it. "
+            "No world-changer anchor: the thesis is entirely about market structure."
+        ),
+        kill_criteria=(
+            "peripherality is low beta wearing a network's name. The market mode is "
+            "removed by regression before correlations are taken precisely to prevent "
+            "this, but if its fold information ratios correlate above ~0.9 with the "
+            "low-volatility strategy's, the removal did not work and the firm has one "
+            "effect under two names",
+            "the periphery is a small-cap or illiquid pocket rather than a structural "
+            "position — check what it actually held before believing it, the same way "
+            "the low-volatility seed must be checked for being a utilities bet",
+            "peripherality does not persist from the formation window into the holding "
+            "window. The whole effect rests on correlation structure being stable enough "
+            "to rank on, and correlations are famously least stable exactly when they "
+            "matter most",
+            "the residual correlations are estimation noise. 252 observations across 50 "
+            "names is roughly 5x more data than parameters, which is ample for mean "
+            "correlations and thin in absolute terms — if the ranking is unstable "
+            "week-to-week, it is sampling error being traded",
             *COMMON_KILL_CRITERIA,
         ),
     ),

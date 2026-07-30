@@ -95,6 +95,24 @@ class PanelWindow:
     def closes(self, ticker: str) -> tuple[float, ...]:
         return self._panel.history(ticker, self._panel.closes, self._index)
 
+    def aligned_closes(self, ticker: str) -> tuple[float, ...]:
+        """The grid-aligned prefix: one entry per panel date, ``nan`` where absent.
+
+        The counterpart to :meth:`closes`, which compresses a name's history to
+        the bars it actually has. Compression is right for a per-name signal —
+        a rule wanting 126 bars asks for 126 bars and stays ignorant of listing
+        dates — and wrong for anything comparing two names across time, because
+        two compressed series of equal length need not cover the same dates.
+
+        A cross-sectional correlation computed on compressed series would pair
+        one name's Tuesday with another's Thursday and report the result as a
+        relationship. This returns the grid, so a caller can require that both
+        names actually traded on every date it uses.
+        """
+
+        series = self._panel.closes.get(ticker)
+        return () if series is None else series[: self._index + 1]
+
     def volumes(self, ticker: str) -> tuple[float, ...]:
         return self._panel.history(ticker, self._panel.volumes, self._index)
 
