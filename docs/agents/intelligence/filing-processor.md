@@ -72,7 +72,45 @@ carry accountability for it.
   subscription: each pass reads `research.raw_source_items` (owned by the
   Tech Watcher) for new rows since the Filing Processor's own cursor.
 - **On-demand:** Mike-initiated backfill over an accession-number or date
-  range (CLI, same container).
+  range (`shrap-filing-processor-backfill`, CLI, same container).
+- **On-demand:** Mike-initiated *discovery* over a filing-date range
+  (`shrap-filing-processor-discover`, CLI, same container). Added 2026-07-30.
+
+  The two are not variants of each other, and the difference is a horizon.
+  Backfill re-drives fetch → score → publish over rows already in
+  `research.raw_source_items`, so it can only ever reach 8-Ks the Tech Watcher
+  ingested — the `getcurrent` feed publishes what EDGAR is releasing *now*, so
+  nothing filed before the Tech Watcher was deployed, or during any window in
+  which it was down, exists to be backfilled. Discovery asks EDGAR directly,
+  via `data.sec.gov/submissions/CIK##########.json` (with the older-filing
+  shards behind `filings.files` fetched only when the requested window reaches
+  them), and queues what it finds as pending rows (`fetched_at IS NULL`).
+
+  **Discovery writes rows and stops.** The live `fetch_pass` and `score_pass`
+  drain the queue on their own cadence, under their own EDGAR throttle and LLM
+  budget, so a backfilled filing is read by exactly the same path as a live
+  one — the only arrangement under which the two populations are comparable.
+  It publishes no events itself; the `intelligence.signal` events arrive later,
+  from the service, when the filings are actually scored.
+
+  Symbols outside the Tier 3 roster resolve through SEC `company_tickers.json`
+  (fetched only when the roster leaves something unresolved), so a range can be
+  named by ticker without editing `FILING_PROCESSOR_ROSTER`. Symbols that
+  resolve nowhere are reported by name, not silently dropped: 8 of the 50
+  launch names are ETFs with no registrant CIK of their own — and no 8-Ks
+  either, so partial resolution is the normal case rather than an error.
+
+  Like the backfill it records under its own cursor feed and never moves the
+  live poll position, and it is idempotent (`ON CONFLICT (accession) DO
+  NOTHING`), so re-running over an overlapping range inserts nothing and says
+  so.
+
+  **Limitation it reports rather than hides:** the SEC renumbered 8-K item
+  codes in August 2004. Filings before that declare single-digit items ("1",
+  "5"), which this agent's `\d\.\d{2}` item-code regex does not match — they
+  fetch and then mark scored with zero verdicts. The submissions payload
+  declares its item codes, so the run summary counts them before anything is
+  queued.
 
 ## Cross-references
 
