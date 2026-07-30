@@ -1011,6 +1011,15 @@ services:
   # Reads the Tech Watcher's table but never writes it; own poll cursor.
   # Cadence follows the market phase (operations.market-phase). Both LLM tiers
   # env-route to Ollama in the seed (Mike's local-only ruling 2026-07-15).
+  #
+  # Two on-demand CLIs live in this same container (no separate image):
+  #   docker compose exec filing-processor \
+  #     shrap-filing-processor-discover --since 2024-01-01 --dry-run
+  #   docker compose exec filing-processor \
+  #     shrap-filing-processor-backfill --since 2024-01-01
+  # discover asks EDGAR's submissions API directly and queues pending rows,
+  # reaching filings older than the Tech Watcher's feed ever carried; backfill
+  # drives fetch/score over rows already discovered. Run discover first.
   # -------------------------------------------------------------------------
   filing-processor:
     build:
