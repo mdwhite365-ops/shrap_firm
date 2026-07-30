@@ -145,6 +145,54 @@ service is the one that will be forgotten, because the tools service is the one
 you type commands at. If a verdict looks *identical* to another strategy's,
 suspect the image before suspecting the data.
 
+## 1d. An agent image only has the dependencies its agent needs
+
+The two failures above are "the new code is not running." This one is the
+opposite and reads nothing like them: the new code **is** running, and the
+container crash-loops before its first log line.
+
+Agent images install a subset of the runtime dependencies.
+`tech-watcher.Dockerfile` installs redis, httpx, structlog, pydantic,
+pydantic-settings and asyncpg. `strategy-evaluator.Dockerfile` adds numpy and
+pandas, because the stats core needs them and nothing else does. That boundary
+is invisible in the source, absolute at runtime, and **cannot be caught by
+`pytest` or `mypy --strict`** — the dev environment has everything.
+
+Hit on 2026-07-30 by PR #157, which gave Tech Watcher one line:
+
+```python
+from shrap.research.hypothesis_generator.literature import PostgresLiteratureStore
+```
+
+`literature.py` imports stdlib only. But the package's `__init__.py`
+re-exported `HypothesisGenerator` for convenience, and **a submodule import
+runs the package `__init__` first** — so that line pulled in the strategy
+evaluator, then numpy, and `tech-watcher` died on `ModuleNotFoundError`. 368
+modules imported where 39 were needed.
+
+The traceback names the innocent module. `grep`ping the logs for the feature
+shows the import line repeating on every restart, which reads like the feature
+failing rather than the container never starting.
+
+**The rule:** a convenience re-export in an `__init__` is an invisible
+dependency edge from every consumer of every submodule to every module the
+package touches. Import the submodule you want, and keep package roots empty
+where two different images consume different parts of one package.
+
+**Checking it costs one command**, and it is worth running before deploying any
+cross-package import into an agent container:
+
+```bash
+python -c "
+import sys; before=set(sys.modules)
+import shrap.research.hypothesis_generator.literature
+new=set(sys.modules)-before
+print(sorted({m.split('.')[0] for m in new} & {'numpy','pandas'}), len(new))"
+```
+
+`tests/research/test_import_weight.py` pins the boundary for the modules that
+cross it. Adding a new cross-image import means adding a case there.
+
 ## 2. Do not override the container user
 
 Tools containers run as `USER shrap` (uid **10001**), and bind-mounted output
