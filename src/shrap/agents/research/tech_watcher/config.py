@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     sec_user_agent: str = _DEFAULT_SEC_USER_AGENT
     edgar_forms: str = "10-K,10-Q,8-K"
     arxiv_categories: str = "cs.AI,cs.LG,cond-mat,q-bio.NC"
+    # The Hypothesis Generator's feed. Separate from `arxiv_categories` because
+    # the two are separate source instances with separate budgets and separate
+    # filters — see `ArxivSource`.
+    qfin_enabled: bool = True
+    qfin_categories: str = "q-fin.PM,q-fin.ST,q-fin.TR,q-fin.GN"
+    literature_max_items: int = 100
     gov_sources_enabled: bool = True
     usaspending_agencies: str = "Department of Energy,Department of Defense"
     usaspending_min_amount: float = 5_000_000.0
@@ -60,6 +66,9 @@ class Settings(BaseSettings):
     def arxiv_categories_tuple(self) -> tuple[str, ...]:
         return tuple(c.strip() for c in self.arxiv_categories.split(",") if c.strip())
 
+    def qfin_categories_tuple(self) -> tuple[str, ...]:
+        return tuple(c.strip() for c in self.qfin_categories.split(",") if c.strip())
+
     def usaspending_agencies_tuple(self) -> tuple[str, ...]:
         return tuple(a.strip() for a in self.usaspending_agencies.split(",") if a.strip())
 
@@ -77,6 +86,9 @@ class Settings(BaseSettings):
             "sec_user_agent": self.sec_user_agent,
             "edgar_forms": self.edgar_forms,
             "arxiv_categories": self.arxiv_categories,
+            "qfin_enabled": self.qfin_enabled,
+            "qfin_categories": self.qfin_categories,
+            "literature_max_items": self.literature_max_items,
             "gov_sources_enabled": self.gov_sources_enabled,
             "usaspending_agencies": self.usaspending_agencies,
             "usaspending_min_amount": self.usaspending_min_amount,
