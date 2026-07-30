@@ -235,13 +235,13 @@ def test_a_universe_with_no_scorable_name_holds_nothing() -> None:
 # --- the seeds ----------------------------------------------------------------
 
 
-def test_all_four_seeds_are_lineage_roots() -> None:
+def test_every_seed_is_a_lineage_root() -> None:
     """The property that makes this a family of experiments rather than a
     search. Each is attempt 1, so none inherits another's promote penalty."""
 
     from shrap.research.strategy_seed.factor_strategies import FACTOR_SEEDS, factor_record
 
-    assert len(FACTOR_SEEDS) == 4
+    assert len(FACTOR_SEEDS) == 5
     for seed in FACTOR_SEEDS:
         record = factor_record(seed)
         assert record.parent_strategy_id is None
@@ -259,6 +259,7 @@ def test_every_seed_names_how_its_own_effect_dies() -> None:
         "high-proximity-252-10": "momentum in disguise",
         "volume-shock-50-10": "IEX feed",
         "time-series-252": "market-timing overlay",
+        "network-peripherality-252-10": "low beta wearing a network's name",
     }
     for seed in FACTOR_SEEDS:
         joined = " ".join(seed.kill_criteria)

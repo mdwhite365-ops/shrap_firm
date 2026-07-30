@@ -28,7 +28,7 @@ from shrap.research.dimensions import (
     survey,
 )
 from shrap.research.guidance import derive
-from shrap.research.strategy_evaluator.factors import FACTOR_SCORERS
+from shrap.research.strategy_evaluator.factors import ALL_FACTORS
 from shrap.research.strategy_evaluator.pipeline import (
     _CROSS_SECTIONAL_RULES,
     RULE_CROSS_SECTIONAL_FACTOR,
@@ -84,8 +84,12 @@ def test_the_rule_table_matches_the_engines_own_rule_set() -> None:
     assert set(RULE_IMPLEMENTATIONS) == {RULE_REFERENCE_TREND, *_CROSS_SECTIONAL_RULES}
 
 
-def test_the_enumerable_factor_values_come_from_the_scorer_table() -> None:
-    assert ENUMERABLE_VALUES["factor"] == frozenset(FACTOR_SCORERS)
+def test_the_enumerable_factor_values_come_from_the_scorer_tables() -> None:
+    """Both of them. A cross-sectional factor is no less implemented for taking
+    a different signature."""
+
+    assert ENUMERABLE_VALUES["factor"] == ALL_FACTORS
+    assert "network-peripherality" in ALL_FACTORS
 
 
 # --- reading the corpus -------------------------------------------------------

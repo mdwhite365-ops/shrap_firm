@@ -39,7 +39,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from shrap.research.strategy_evaluator.factors import FACTOR_SCORERS
+from shrap.research.strategy_evaluator.factors import ALL_FACTORS
 from shrap.research.strategy_evaluator.pipeline import (
     RULE_CROSS_SECTIONAL_FACTOR,
     RULE_CROSS_SECTIONAL_MOMENTUM,
@@ -69,7 +69,7 @@ EXPRESSIBLE_RULES: frozenset[str] = frozenset(
 # that would ignore it.
 FACTOR_BEARING_RULES: frozenset[str] = frozenset({RULE_CROSS_SECTIONAL_FACTOR})
 
-IMPLEMENTED_FACTORS: frozenset[str] = frozenset(FACTOR_SCORERS)
+IMPLEMENTED_FACTORS: frozenset[str] = ALL_FACTORS
 
 # One line each, shown to the model so it can tell whether a paper's effect IS
 # one of these or merely resembles one. Wording matters: these are the claims,
@@ -79,6 +79,10 @@ FACTOR_DESCRIPTIONS: Mapping[str, str] = {
     "high-proximity": "rank by current close as a fraction of the highest close in the window",
     "volume-shock": "rank by latest volume against the name's own trailing average volume",
     "time-series": "each name's own trailing return, absolute — hold every name above zero",
+    "network-peripherality": (
+        "rank by how weakly a name's market-adjusted returns correlate with the rest of "
+        "the universe, hold the least connected"
+    ),
 }
 
 # Near-misses that unambiguously mean one of the available series. Every entry is

@@ -60,7 +60,7 @@ from shrap.research.strategy_evaluator.cross_sectional import (
     CrossSectionalTrendStrategy,
 )
 from shrap.research.strategy_evaluator.factors import (
-    FACTOR_SCORERS,
+    ALL_FACTORS,
     CrossSectionalFactorStrategy,
 )
 from shrap.research.strategy_evaluator.pipeline import (
@@ -91,7 +91,7 @@ RULE_IMPLEMENTATIONS: Mapping[str, type] = {
 # has nobody tried" is answerable rather than open-ended. Derived from the
 # scorer table, so implementing a factor adds it here.
 ENUMERABLE_VALUES: Mapping[str, frozenset[str]] = {
-    "factor": frozenset(FACTOR_SCORERS),
+    "factor": ALL_FACTORS,
     "rule": frozenset(RULE_IMPLEMENTATIONS),
 }
 
