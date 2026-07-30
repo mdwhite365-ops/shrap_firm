@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -237,9 +238,54 @@ async def test_client_get_news_parses_and_builds_url() -> None:
     assert len(items) == 1
     assert items[0].item_id == "24843171"
     url, headers = http.calls[0]
-    assert "symbols=AAPL,NVDA" in url  # symbols sorted
-    assert "sort=asc" in url
+    # Parsed, not substring-matched. The previous version asserted
+    # `"symbols=AAPL,NVDA" in url`, which is a claim about the bytes rather
+    # than about what the server decodes — and it is why this test passed for
+    # the entire life of a service that never once got a 200 back.
+    query = parse_qs(urlparse(url).query)
+    assert query["symbols"] == ["AAPL,NVDA"]  # symbols sorted
+    assert query["sort"] == ["asc"]
     assert headers["APCA-API-KEY-ID"] == "k"
+
+
+async def test_the_start_timestamp_survives_url_encoding() -> None:
+    """The bug that cost the News Analyzer its entire deployed life.
+
+    An RFC-3339 timestamp's UTC offset is `+00:00`, and a raw `+` in a query
+    string decodes to a SPACE. Alpaca received
+    "2026-07-27T19:51:42.797151 00:00" and answered 400 to every request the
+    service ever made, while each pass logged a healthy "score_complete: 0"
+    (found 2026-07-30).
+    """
+
+    from shrap.intelligence.market_data import AlpacaMarketDataSettings
+
+    settings = AlpacaMarketDataSettings(api_key="k", secret_key="s")  # type: ignore[arg-type]
+    http = FakeNewsHTTP([ALPACA_NEWS_BODY])
+    start = "2026-07-27T19:51:42.797151+00:00"
+
+    await AlpacaNewsClient(settings).get_news(http, symbols=["NVDA"], start=start)  # type: ignore[arg-type]
+
+    url, _ = http.calls[0]
+    assert "%2B00%3A00" in url
+    assert parse_qs(urlparse(url).query)["start"] == [start]
+
+
+async def test_a_page_token_survives_url_encoding() -> None:
+    """Alpaca's page tokens are base64-ish. A `+` in one would decode to a
+    space and end pagination mid-backfill, with no error to see."""
+
+    from shrap.intelligence.market_data import AlpacaMarketDataSettings
+
+    settings = AlpacaMarketDataSettings(api_key="k", secret_key="s")  # type: ignore[arg-type]
+    token = "abc+def/ghi=="
+    first = dict(ALPACA_NEWS_BODY, next_page_token=token)
+    http = FakeNewsHTTP([first, dict(ALPACA_NEWS_BODY, next_page_token=None)])
+
+    await AlpacaNewsClient(settings).get_news(http, symbols=["NVDA"], start="2026-07-19T00:00:00Z")  # type: ignore[arg-type]
+
+    second_url, _ = http.calls[1]
+    assert parse_qs(urlparse(second_url).query)["page_token"] == [token]
 
 
 # --- store ---------------------------------------------------------------------

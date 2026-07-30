@@ -29,6 +29,7 @@ Thresholds calibrated on this data do not transfer 1:1 to SIP. See
 from __future__ import annotations
 
 from datetime import date
+from urllib.parse import urlencode
 
 from shrap.intelligence.market_data import AlpacaMarketDataSettings
 from shrap.market_data.store import DailyBarRow
@@ -96,14 +97,25 @@ class AlpacaDailyBarsClient:
             return rows
         page_token: str | None = None
         while True:
-            url = (
-                f"{self._base()}/v2/stocks/bars"
-                f"?symbols={symbol}&timeframe=1Day"
-                f"&start={start_day}&end={end_day}"
-                f"&limit={limit}&adjustment={self._adjustment}&feed={self._feed}&sort=asc"
-            )
+            # urlencode rather than interpolation, for `page_token` above
+            # all: Alpaca's tokens are base64-ish and a raw `+` in a query
+            # string decodes to a space, which would end pagination mid-
+            # backfill with no error to see. The dates here are safe as
+            # written; the news client's timestamps were not, and that bug
+            # cost that service its entire deployed life (2026-07-30).
+            params: dict[str, str] = {
+                "symbols": symbol,
+                "timeframe": "1Day",
+                "start": str(start_day),
+                "end": str(end_day),
+                "limit": str(limit),
+                "adjustment": self._adjustment,
+                "feed": self._feed,
+                "sort": "asc",
+            }
             if page_token:
-                url += f"&page_token={page_token}"
+                params["page_token"] = page_token
+            url = f"{self._base()}/v2/stocks/bars?{urlencode(params)}"
             response = await http_client.get(url, headers=self._auth_headers())
             response.raise_for_status()
             body = response.json()

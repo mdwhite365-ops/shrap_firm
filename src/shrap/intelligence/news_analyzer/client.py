@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlencode
 
 from shrap.intelligence.market_data import AlpacaMarketDataSettings
 from shrap.trading_floor.alpaca import AsyncHttpClient
@@ -119,13 +120,28 @@ class AlpacaNewsClient:
             return items
         page_token: str | None = None
         while True:
-            url = (
-                f"{self._base()}{NEWS_PATH}"
-                f"?symbols={symbol_param}&start={start}&limit={limit}"
-                f"&sort=asc&include_content=false&exclude_contentless=false"
-            )
+            # urlencode, not interpolation. `start` is an RFC-3339 timestamp
+            # whose UTC offset is `+00:00`, and a raw `+` in a query string
+            # decodes to a SPACE — so Alpaca received
+            # "2026-07-27T19:51:42.797151 00:00" and answered 400 to every
+            # request this service ever made (found 2026-07-30, after the
+            # service had run for its entire deployed life returning zero
+            # items while logging a healthy "score_complete: 0" each pass).
+            #
+            # `page_token` needs it too: Alpaca's tokens are base64-ish and a
+            # `+` in one would break pagination silently, mid-backfill, with
+            # no error to see.
+            params: dict[str, str] = {
+                "symbols": symbol_param,
+                "start": start,
+                "limit": str(limit),
+                "sort": "asc",
+                "include_content": "false",
+                "exclude_contentless": "false",
+            }
             if page_token:
-                url += f"&page_token={page_token}"
+                params["page_token"] = page_token
+            url = f"{self._base()}{NEWS_PATH}?{urlencode(params)}"
             response = await http_client.get(url, headers=self._auth_headers())
             response.raise_for_status()
             body = response.json()
