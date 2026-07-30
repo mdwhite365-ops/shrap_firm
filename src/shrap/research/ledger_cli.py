@@ -17,6 +17,8 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
+from shrap.research.dimensions import render as dimension_survey
+from shrap.research.dimensions import survey
 from shrap.research.guidance import derive
 from shrap.research.ledger import (
     LedgerRow,
@@ -141,6 +143,9 @@ async def _run(args: argparse.Namespace) -> str:
     out = render(rows, summary)
     if args.guidance:
         out += "\n\nWHAT TO TRY NEXT\n" + derive(raw).render()
+    if args.dimensions:
+        specs = [r.get("spec") for r in raw if r.get("spec") is not None]
+        out += "\n\nAXES\n" + dimension_survey(survey(specs))
     return out
 
 
@@ -157,6 +162,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--guidance",
         action="store_true",
         help="Also derive what the corpus says to try next (informs proposals, never gates)",
+    )
+    parser.add_argument(
+        "--dimensions",
+        action="store_true",
+        help=(
+            "Also survey every axis the engine accepts against what the corpus has "
+            "chosen — read off the strategy dataclasses, not a hand-written list"
+        ),
     )
     parser.add_argument(
         "--sharpe-floor",

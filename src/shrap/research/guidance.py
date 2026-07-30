@@ -23,11 +23,21 @@ conclusions, and a guidance layer that stated them with confidence would be
 worse than none — it would narrow the search on noise. Every observation carries
 the count behind it, and thin evidence is labelled thin.
 
-**The dimension list is authored, not discovered.** :data:`DIMENSIONS` is a
-hand-written account of the axes a strategy can vary along. That is a real
-limitation: the firm cannot notice an untried dimension nobody thought to name.
-Recorded here rather than left implicit — it is the ceiling on how surprising
-this module's suggestions can be.
+**The dimension list used to be authored. It is not any more** (Mike,
+2026-07-30: *"lets fix the authored list"*). :mod:`shrap.research.dimensions`
+reads the axes off the strategy dataclasses themselves, so adding a rule or a
+parameter makes it discoverable with no edit here.
+
+The old list is worth remembering for what it left out: it had no
+``long_short`` — the one axis whose variation the firm has already measured and
+been surprised by, when adding a short leg moved a strategy from Sharpe +0.782
+to -0.079. A hand-written account of the dimensions that omits the dimension the
+firm learned the most from is a fair summary of why hand-written accounts fail.
+
+A real limit remains, now stated precisely rather than as a general caveat: an
+axis the *engine* cannot express — bar frequency, asset class — appears nowhere
+in the code and so cannot be discovered from it. That residue is what
+``research.capability_gaps`` collects from the literature instead.
 """
 
 from __future__ import annotations
@@ -36,20 +46,23 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from shrap.research.dimensions import (
+    FINDING_HELD_CONSTANT,
+    FINDING_IGNORED,
+    FINDING_NEVER_SET,
+    FINDING_UNUSED_VALUE,
+    survey,
+)
+
 # Below this many *edge* findings, the corpus cannot support a claim that a
 # dimension is exhausted. Four is not a statistical threshold — it is the point
 # at which "everything we tried here failed" stops being a coin-flip story.
 MIN_FINDINGS_FOR_EXHAUSTED = 4
 
-# The axes a strategy can vary along. Authored — see the module docstring.
-# Each entry maps a dimension to how it is read off a strategy's spec.
-DIMENSIONS: tuple[str, ...] = (
-    "rule-family",
-    "signal-input",
-    "horizon",
-    "universe",
-    "bar-frequency",
-)
+# How many discovered axes to name in one observation. Not a threshold on
+# anything — a rendered line listing fourteen parameters is a line nobody reads,
+# and the full survey is available from `dimensions.render()`.
+MAX_AXES_NAMED = 4
 
 # Signal inputs, derived from which panel series a rule actually consults. The
 # firm has never had a strategy that reads anything but closes and volumes,
@@ -77,6 +90,11 @@ class StrategyShape:
     """The engine ran and produced a finding about edge."""
 
     beat_benchmark: bool
+    spec: Mapping[str, Any] | None = None
+    """The raw spec, kept so the axis survey can read parameters this class does
+    not model. ``shape_of`` deliberately projects a spec down to a handful of
+    named fields; the survey's whole point is to notice the fields nobody
+    thought to name, so it needs the thing before the projection."""
 
 
 def shape_of(raw: Mapping[str, Any]) -> StrategyShape:
@@ -101,6 +119,7 @@ def shape_of(raw: Mapping[str, Any]) -> StrategyShape:
         n_tickers=len(longs) if isinstance(longs, list) else 0,
         tested=bool(raw.get("tested")),
         beat_benchmark=bool(ir is not None and float(ir) > 0.0),
+        spec=spec if isinstance(spec, Mapping) else None,
     )
 
 
@@ -222,12 +241,78 @@ def _untried(shapes: Sequence[StrategyShape]) -> list[Observation]:
                 findings=len(tested),
             )
         )
+    out.extend(_discovered(tested))
     return out
+
+
+def _discovered(tested: Sequence[StrategyShape]) -> list[Observation]:
+    """Axes read off the engine's own code, not off a list written here.
+
+    Three of the four survey findings are guidance about what to try. The
+    fourth, ``ignored-by-the-engine``, is a defect: a spec setting a parameter
+    no rule accepts describes a strategy the engine did not run. It is reported
+    among the warnings rather than here, because it is not a suggestion.
+    """
+
+    specs = [s.spec for s in tested if s.spec is not None]
+    if not specs:
+        return []
+    findings = survey(specs)
+    out: list[Observation] = []
+
+    never_set = [f.axis for f in findings if f.kind == FINDING_NEVER_SET]
+    if never_set:
+        out.append(
+            Observation(
+                f"the engine accepts {len(never_set)} parameter(s) no strategy has "
+                f"ever set: {_named(never_set)} — every run took the default",
+                findings=len(tested),
+            )
+        )
+
+    constant = [f.axis for f in findings if f.kind == FINDING_HELD_CONSTANT]
+    if constant:
+        out.append(
+            Observation(
+                f"{_named(constant)} {'is' if len(constant) == 1 else 'are'} set the "
+                "same way by every strategy that sets them — available to vary, "
+                "never varied",
+                findings=len(tested),
+            )
+        )
+
+    for finding in findings:
+        if finding.kind == FINDING_UNUSED_VALUE:
+            out.append(Observation(f"`{finding.axis}`: {finding.detail}", findings=len(tested)))
+    return out
+
+
+def _named(axes: Sequence[str]) -> str:
+    shown = ", ".join(f"`{a}`" for a in axes[:MAX_AXES_NAMED])
+    extra = len(axes) - MAX_AXES_NAMED
+    return f"{shown} and {extra} more" if extra > 0 else shown
 
 
 def _warnings(shapes: Sequence[StrategyShape]) -> list[Observation]:
     tested = [s for s in shapes if s.tested]
     out: list[Observation] = []
+
+    # Checked before the two-strategy floor below, deliberately. The rest of
+    # this function reports correlated-failure risk, which needs several
+    # results to mean anything; this reports a spec the engine did not run as
+    # written, which is wrong on its own the first time it happens.
+    specs = [s.spec for s in tested if s.spec is not None]
+    for finding in survey(specs) if specs else []:
+        if finding.kind == FINDING_IGNORED:
+            out.append(
+                Observation(
+                    f"a spec sets `{finding.axis}`, which no rule accepts — the "
+                    "engine drops it, so that strategy is not the strategy its "
+                    "spec describes",
+                    findings=len(tested),
+                )
+            )
+
     if len(tested) < 2:
         return out
 
@@ -267,7 +352,7 @@ def derive(rows: Sequence[Mapping[str, Any]]) -> Guidance:
 
 
 __all__ = [
-    "DIMENSIONS",
+    "MAX_AXES_NAMED",
     "MIN_FINDINGS_FOR_EXHAUSTED",
     "SIGNAL_PRICE",
     "SIGNAL_VOLUME",
