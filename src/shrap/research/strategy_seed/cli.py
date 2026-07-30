@@ -33,6 +33,11 @@ from typing import Protocol
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.research.strategy_registry import PostgresStrategyRegistry, StrategyRecord
+from shrap.research.strategy_seed.factor_strategies import (
+    FACTOR_SEEDS,
+    FACTOR_SEEDS_BY_KEY,
+    factor_record,
+)
 from shrap.research.strategy_seed.first_strategy import first_strategy_record
 from shrap.research.strategy_seed.probe_strategies import (
     PROBE_SEEDS,
@@ -287,6 +292,44 @@ def render_reversal_catalogue() -> str:
     return "\n".join(lines)
 
 
+async def load_factor(registry: RegistryPort, key: str) -> str:
+    """Insert one documented-factor seed at ``hypothesis``, idempotently."""
+
+    seed = FACTOR_SEEDS_BY_KEY.get(key)
+    if seed is None:
+        available = ", ".join(sorted(FACTOR_SEEDS_BY_KEY))
+        raise SystemExit(f"refused: unknown factor seed {key!r}; available: {available}")
+    record = factor_record(seed)
+    existing = await registry.get_by_spec_hash(record.spec_hash)
+    if existing is not None:
+        return (
+            f"already present: {existing.strategy_id} ({existing.name}) "
+            f"status={existing.status} — skipped (no duplicate)"
+        )
+    inserted = await registry.register(
+        record,
+        reason=f"Mike-seed: documented factor effect ({seed.factor})",
+        actor=SEED_ACTOR,
+        trigger_kind=SEED_TRIGGER_KIND,
+    )
+    if not inserted:
+        return f"already present: {record.strategy_id} — skipped (strategy_id conflict)"
+    return (
+        f"loaded: {record.strategy_id} ({record.name}) at status={record.status}; "
+        f"evaluate with `shrap-strategy-evaluate --strategy-id {record.strategy_id} "
+        f"--dry-run`\nNOTE: lineage root, so attempt 1 — no multiple-testing penalty."
+    )
+
+
+def render_factor_catalogue() -> str:
+    """List the available factor seeds without touching the database."""
+
+    lines = [f"Documented-factor seeds: {len(FACTOR_SEEDS)}"]
+    for s in FACTOR_SEEDS:
+        lines.append(f"  {s.key}  {s.strategy_id}  {s.name}")
+    return "\n".join(lines)
+
+
 def render_momentum_catalogue() -> str:
     """List the available cross-sectional seeds without touching the database."""
 
@@ -324,6 +367,8 @@ async def _run(args: argparse.Namespace) -> str:
         return render_technical_catalogue()
     if args.action == "list-momentum":
         return render_momentum_catalogue()
+    if args.action == "list-factor":
+        return render_factor_catalogue()
     if args.action == "list-reversal":
         return render_reversal_catalogue()
     pool = await create_asyncpg_pool(args.dsn)
@@ -339,6 +384,8 @@ async def _run(args: argparse.Namespace) -> str:
             return await load_technical(registry, args.key)
         if args.action == "load-momentum":
             return await load_momentum(registry, args.key)
+        if args.action == "load-factor":
+            return await load_factor(registry, args.key)
         if args.action == "load-reversal":
             return await load_reversal(registry, args.key)
         # list
@@ -386,6 +433,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     momentum.add_argument("key", choices=sorted(MOMENTUM_SEEDS_BY_KEY), help="Momentum seed key")
     sub.add_parser("list-momentum", help="Show available momentum seeds (no database access)")
+
+    factor = sub.add_parser("load-factor", help="Insert a documented-factor seed (idempotent)")
+    factor.add_argument("key", choices=sorted(FACTOR_SEEDS_BY_KEY), help="Factor seed key")
+    sub.add_parser("list-factor", help="Show available factor seeds (no database access)")
 
     reversal = sub.add_parser(
         "load-reversal", help="Insert a short-horizon reversal seed (idempotent)"
