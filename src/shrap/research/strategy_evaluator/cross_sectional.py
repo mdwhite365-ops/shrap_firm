@@ -26,7 +26,7 @@ implies. The gate should eventually count independent *episodes* rather than raw
 weight changes. Until it does, read a cross-sectional trade count as an upper
 bound on statistical power, never as the power itself.
 
-Two rules live here:
+Three rules live here:
 
 - :class:`CrossSectionalTrendStrategy` — the reference crossover applied to every
   ticker, equal-weighted across whichever names are invested. A direct
@@ -35,6 +35,13 @@ Two rules live here:
 - :class:`CrossSectionalMomentumStrategy` — rank the universe on trailing return,
   hold the top N equal-weighted. This is the one with a real prior behind it
   rather than a rule invented to have something to run.
+- :class:`CrossSectionalReversalStrategy` — the same ranking sorted the other
+  way at a five-day horizon. Momentum skips its most recent month precisely
+  because reversal lives there; this rule trades what momentum steps around.
+
+The last two are deliberately near-identical in construction — same formation
+return, same parameter names, same dollar-neutral option — so that a comparison
+between them measures the two effects rather than two implementations.
 """
 
 from __future__ import annotations
@@ -47,11 +54,18 @@ from shrap.research.strategy_evaluator.strategy import PanelWindow
 
 CROSS_SECTIONAL_TREND_NAME = "cross-sectional-ma-crossover"
 CROSS_SECTIONAL_MOMENTUM_NAME = "cross-sectional-momentum"
+CROSS_SECTIONAL_REVERSAL_NAME = "cross-sectional-reversal"
 
 DEFAULT_GROSS_EXPOSURE = 1.0
 DEFAULT_LOOKBACK = 126
 DEFAULT_SKIP = 21
 DEFAULT_TOP_N = 10
+
+# Short-horizon reversal defaults. Five sessions is the horizon the documented
+# effect lives at (Lehmann 1990; Lo & MacKinlay 1990) and one skipped bar keeps
+# the rule off the close where bid-ask bounce is largest. Neither was searched.
+DEFAULT_REVERSAL_LOOKBACK = 5
+DEFAULT_REVERSAL_SKIP = 1
 
 # Validated by the pipeline's `_validate_param_bounds` against the record's
 # declared `param_bounds`, same contract as the reference rule.
@@ -64,6 +78,17 @@ TREND_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
 MOMENTUM_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "lookback": (21.0, 504.0),
     "skip": (0.0, 63.0),
+    "top_n": (1.0, 50.0),
+    "gross_exposure": (0.0, 1.0),
+}
+
+# Deliberately disjoint from MOMENTUM_PARAM_BOUNDS on `lookback`: momentum
+# starts at 21 sessions, reversal stops at 21. The two rules trade opposite
+# effects and the horizon is what separates them, so a spec that could express
+# either is a spec that has stopped saying which one it is.
+REVERSAL_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "lookback": (2.0, 21.0),
+    "skip": (0.0, 5.0),
     "top_n": (1.0, 50.0),
     "gross_exposure": (0.0, 1.0),
 }
@@ -321,8 +346,147 @@ class CrossSectionalMomentumStrategy:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CrossSectionalReversalStrategy:
+    """Buy the recent losers, sell the recent winners — the short-horizon mirror.
+
+    Momentum's own docstring above already names this effect: it skips the most
+    recent month *because* "short-horizon reversal is a well-documented effect
+    that runs opposite to momentum". This rule trades the thing momentum steps
+    around, at the horizon momentum deliberately avoids.
+
+    The prior is Lehmann (1990) and Lo & MacKinlay (1990) — short-term
+    contrarian profits in the cross-section of equity returns. Same standing as
+    Jegadeesh-Titman behind the momentum rule: a documented, falsifiable,
+    decades-old result, implemented as written rather than invented here.
+
+    **Why this specific gap, and not a bear-market hedge.** The measured fold
+    table of the momentum strategy (2026-07-29):
+
+        2021  +70.41%   IR +1.090   beat
+        2022  -33.76%   IR -0.004   LEVEL with the benchmark
+        2023   +9.05%   IR -0.457   lost
+        2024  +68.84%   IR +0.692   beat
+        2025  +69.95%   IR +1.073   beat
+        2026   +6.58%   IR -0.241   lost
+
+    Momentum did not fail in the crash. Relative to simply owning the names it
+    was dead level there (-0.004). It failed in the two **quiet, modestly
+    positive** years, where it churned 455 and 330 trades to lag a basket that
+    sat still. A bear-market strategy would hedge a risk that has not cost
+    anything; this targets the two folds that actually did.
+
+    That is a falsifiable claim and the point of the card: this rule must earn
+    its keep **in 2023 and 2026 specifically**. An aggregate that looks fine
+    while losing those two folds is a failure of the hypothesis, whatever the
+    headline number says.
+
+    **Symmetric with momentum by construction.** Same formation-return
+    machinery, same parameter names, same dollar-neutral long/short option, same
+    bounds contract. The only difference is the sort direction and the horizon
+    defaults. Anything else would make the comparison between the two rules
+    confounded by implementation rather than by the effect.
+
+    ``skip=1`` rather than 0: the most recent close is where bid-ask bounce
+    lives, and buying yesterday's worst close is the classic way to harvest a
+    spread that does not exist at fill time. Skipping one bar is the standard
+    defence, not a tuned value.
+    """
+
+    lookback: int = DEFAULT_REVERSAL_LOOKBACK
+    skip: int = DEFAULT_REVERSAL_SKIP
+    top_n: int = DEFAULT_TOP_N
+    gross_exposure: float = DEFAULT_GROSS_EXPOSURE
+    long_short: bool = False
+    """Short the recent winners as well as buying the recent losers.
+
+    Same reasoning as the momentum rule's own flag: a long-only contrarian book
+    is still structurally long equity and competes against a 100%-long benchmark
+    on selection alone. Holding both ends measures the reversal effect itself
+    rather than the market plus a tilt.
+    """
+
+    def __post_init__(self) -> None:
+        if self.lookback < 2:
+            raise ValueError("lookback must span at least two bars")
+        if self.skip < 0:
+            raise ValueError("skip must not be negative")
+        if self.skip >= self.lookback:
+            raise ValueError("skip must be shorter than lookback, or nothing is ranked")
+        if self.top_n < 1:
+            raise ValueError("top_n must be at least 1")
+        if not 0.0 <= self.gross_exposure <= 1.0:
+            raise ValueError("gross_exposure must lie in [0, 1]")
+
+    @property
+    def name(self) -> str:
+        return CROSS_SECTIONAL_REVERSAL_NAME
+
+    @property
+    def warmup(self) -> int:
+        return self.lookback + 1
+
+    def _formation_return(self, window: PanelWindow, ticker: str) -> float | None:
+        """Identical to the momentum rule's, deliberately.
+
+        The two strategies must measure the same quantity and disagree only
+        about what to do with it. A separate implementation here would let the
+        comparison drift on an accounting difference rather than on the effect.
+        """
+
+        closes = window.closes(ticker)
+        if len(closes) < self.lookback + 1:
+            return None
+        end = len(closes) - self.skip
+        start = end - (self.lookback - self.skip)
+        if start < 0 or end <= start:
+            return None
+        first, last = closes[start], closes[end - 1]
+        if first <= 0.0:
+            return None
+        return last / first - 1.0
+
+    def target_weights(self, window: PanelWindow) -> Mapping[str, float]:
+        scored: list[tuple[float, str]] = []
+        for ticker in window.tickers:
+            r = self._formation_return(window, ticker)
+            if r is not None:
+                scored.append((r, ticker))
+        if not scored:
+            return dict.fromkeys(window.tickers, 0.0)
+        # ASCENDING — the one line that separates this rule from momentum.
+        # Ticker breaks ties so the ordering cannot depend on dict iteration.
+        scored.sort(key=lambda pair: (pair[0], pair[1]))
+        if self.long_short:
+            n = len(scored)
+            k = min(self.top_n, n // 2)
+            # Long the losers (negative formation return), short the winners
+            # (positive). Mirrors the momentum rule's sign requirement: a leg is
+            # only taken where the effect it trades is actually present.
+            longs = [t for r, t in scored[:k] if r < 0.0]
+            shorts = [t for r, t in scored[n - k :] if r > 0.0]
+            return _long_short_weights(window.tickers, longs, shorts, self.gross_exposure)
+        # Long-only: buy the fallers. A name that ROSE is not a reversal
+        # candidate, so a universe where nothing fell holds nothing — the same
+        # discipline that keeps the momentum rule out of a market with no
+        # winners.
+        selected = [t for r, t in scored[: self.top_n] if r < 0.0]
+        return _equal_weights(window.tickers, selected, self.gross_exposure)
+
+    @classmethod
+    def from_spec(cls, params: Mapping[str, Any]) -> CrossSectionalReversalStrategy:
+        return cls(
+            lookback=int(params.get("lookback", DEFAULT_REVERSAL_LOOKBACK)),
+            skip=int(params.get("skip", DEFAULT_REVERSAL_SKIP)),
+            top_n=int(params.get("top_n", DEFAULT_TOP_N)),
+            gross_exposure=float(params.get("gross_exposure", DEFAULT_GROSS_EXPOSURE)),
+            long_short=bool(params.get("long_short", False)),
+        )
+
+
 __all__ = [
     "CROSS_SECTIONAL_MOMENTUM_NAME",
+    "CROSS_SECTIONAL_REVERSAL_NAME",
     "CROSS_SECTIONAL_TREND_NAME",
     "DEFAULT_GROSS_EXPOSURE",
     "DEFAULT_LOOKBACK",
