@@ -315,6 +315,15 @@ services:
   # substrate health, publishes ops.health-* events on Redis Streams,
   # alerts via Discord (routine) / ntfy.sh (urgent). See
   # docs/agents/operations/health-monitor.md.
+  #
+  # Also runs the output-freshness sweep every five minutes: a read-only pass
+  # over the five tables that must grow for the firm to be doing anything
+  # (shrap.operations.staleness). An empty or frozen table publishes
+  # operations.health-anomaly. It reads Postgres directly rather than trusting
+  # any agent's self-report — three producers reported healthy passes while
+  # writing nothing, which is what this exists to catch. Set
+  # HEALTH_MONITOR_FRESHNESS_ENABLED=false to turn the sweep off without
+  # touching the substrate checks.
   # -------------------------------------------------------------------------
   health-monitor:
     build:
@@ -327,10 +336,15 @@ services:
     environment:
       HEALTH_MONITOR_REDIS_URL: "redis://redis:6379/0"
       HEALTH_MONITOR_PROM_URL: "http://prometheus:9090"
+      HEALTH_MONITOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      HEALTH_MONITOR_FRESHNESS_ENABLED: "${HEALTH_MONITOR_FRESHNESS_ENABLED:-true}"
+      HEALTH_MONITOR_FRESHNESS_INTERVAL_SECONDS: "300"
     depends_on:
       redis:
         condition: service_healthy
       prometheus:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     networks:
       - shrap_net

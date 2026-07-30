@@ -37,6 +37,62 @@ What this agent cannot do:
 - It cannot prove the firm is healthy. Absence of alerts is not proof of health. A
   separate synthetic-probe layer (deferred) would be needed for stronger guarantees.
 
+## Implementation status (2026-07-30)
+
+Two passes run, on the two cadences this spec has always described.
+
+**Substrate pass, every 30s.** Six Prometheus checks — redis, postgres, qdrant,
+docker, node, tailscale (the last a declared stub: no exporter is wired, and it
+says so in its own evidence rather than reporting a fake green). Transitions
+publish `ops.health-degraded` / `ops.health-recovered` and alert via Discord,
+escalating to ntfy at priority 5 when two or more substrate checks are degraded
+at once.
+
+**Output-freshness pass, every 300s.** The half §Processing step 4 asked for and
+nothing had built. It reads five tables directly and asks whether output
+appeared, because the failure it exists to catch is the one where a service's
+self-report is *accurate* and useless: the News Analyzer answered HTTP 400 on
+every request for its entire deployed life while logging a healthy pass each
+time, and `intelligence.news_items` sat at zero rows. Two producers failed the
+same way in the same session.
+
+| Table | Column | Producer | Max age | Why that number |
+|---|---|---|---|---|
+| `research.raw_source_items` | `fetched_at` | tech-watcher | 6h | Hourly ingest across five sources; 6h is six passes in which all five returned nothing. |
+| `intelligence.news_items` | `fetched_at` | news-analyzer | 24h | Hourly when idle, 10m when active, over nine heavily-covered symbols; 24h clears a thin weekend. |
+| `intelligence.filings` | `discovered_at` | filing-processor | 5d | Four-name roster, business-day 8-Ks; clears a holiday Friday plus a weekend. |
+| `market_data.ohlcv_1d` | `updated_at` | regime-classifier | 1h | The classifier re-upserts the last stored day every 300s, so this is pass liveness, not bar availability — unaffected by weekends. |
+| `research.evaluations` | `created_at` | strategy-evaluator-trigger | 7d | 24h re-eval sweep, but only when something is eligible; 7d says the firm has judged nothing for a week. |
+
+**An empty table is the loudest signal, not the quietest.** `no-rows` classifies
+`down`; a table with rows older than its threshold classifies `degraded`. A
+producer that has never written anything was never going to start on its own.
+
+Both feed the same transition state machine, so a table hovering at its
+threshold cannot alert twice. Confirmed freshness transitions additionally
+publish **`operations.health-anomaly`** — the stream `docs/02-architecture.md`
+§Observability and ADR-0006 name for this agent, which until now had no producer
+here — carrying the target, the reading, and the threshold's own rationale.
+Freshness never sets `system_wide`: five dead producers is serious and routinely
+alerted, but priority-5 exists for the substrate being gone, and an alarm that
+always screams gets muted.
+
+**The thresholds are unruled first cuts.** Each is set longer than the longest
+legitimate quiet period its producer has, so firing means broken rather than
+weekend — but that is a judgement, and for `intelligence.filings` and
+`research.evaluations` a quiet period is genuinely legitimate. Owner: Mike.
+
+**On first deployment it will report whatever is actually empty.** That is the
+intended behaviour and not noise; the alternative is a monitor that starts by
+agreeing with the state it was built to distrust. `HEALTH_MONITOR_FRESHNESS_ENABLED=false`
+turns the pass off without touching the substrate checks.
+
+**Still unbuilt from this spec:** `ops.health_history` persistence, the
+Alertmanager webhook trigger, the on-demand `ops.health.check` sweep, and Redis
+-backed dwell timers (transition state is process-local and rebuilt from one
+tick after a restart). Stream names in code are hyphenated — `ops.health-tick`,
+not `ops.health.tick` — and the code is the truth here.
+
 ## Trigger
 
 - **Schedule:** Every 30 seconds for a fast pulse of critical services (Redis, Postgres,
