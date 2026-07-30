@@ -7,8 +7,19 @@ reasoning matters and judgment is load-bearing). Migration target: `local-heavy`
 infra-graph plays once shadow evaluation passes. See
 `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
-**Status:** Draft — **archetype set corrected 2026-07-30** to include
-`technical-catalyst` per ADR-0013. Still unimplemented.
+**Status:** `technical-catalyst` **implemented 2026-07-30** —
+`src/shrap/research/hypothesis_generator/`, CLI `shrap-hypothesis-generate`.
+`infra-graph-play` and `bottleneck-rotation` remain unimplemented: both are
+anchored archetypes and neither Infrastructure Mapper nor Bottleneck Scout
+exists. Archetype set corrected 2026-07-30 to include `technical-catalyst` per
+ADR-0013.
+
+**Tier drift, recorded not fixed.** The header below names `cloud-default`. The
+implementation defaults to `local-heavy`, because the deployment is local-only
+(ruling 2026-07-15) and `TierLLMClient` refuses any tier that resolves to a
+provider this deployment has not configured. `--tier` takes an override, so the
+spec's routing becomes reachable the day a cloud provider is configured rather
+than requiring a code change.
 **Date:** 2026-05-30
 **Author:** Mike White
 **Version:** 0.1 (draft)
@@ -118,13 +129,27 @@ could quietly corrupt the promote decision.
 ## Trigger
 
 - **Schedule:** One batch per trading day at 19:00 ET. Default cap: **3
-  infra-graph proposals + 2 bottleneck-rotation proposals + 2
-  technical-catalyst proposals per night**. The technical-catalyst cap is the
-  smallest of the three deliberately: its supply is bounded by how fast the
-  literature actually produces testable claims, and a cap larger than that
-  supply is an instruction to invent, which is what must not happen.
+  infra-graph proposals + 2 bottleneck-rotation proposals per night**.
   Throttling is enforced inside the agent; the LLM is never given an open-ended
   "generate as many as you can" prompt.
+
+  **`technical-catalyst` has no numeric cap, and the reason it does not is
+  stronger than a number** (2026-07-30, Mike: *"id rather not put them in one at
+  a time when there could 1000s to try"*). The original cap of 2/night was
+  reasoned from supply — a cap larger than the literature's output is an
+  instruction to invent. The implementation gets that property structurally
+  instead. A proposal's identity is `(rule, factor)` with parameters
+  deliberately excluded, and an identity the firm already holds is refused, so
+  **the proposer can mint at most one lineage root per implemented effect,
+  ever.** It cannot flood the Evaluator, cannot spend a lineage's promote budget
+  on a search, and cannot be tuned to permit more. The throttle is the shape of
+  the registry rather than a counter.
+
+  The consequence, stated plainly because it is the operating reality rather
+  than a caveat: with four factors implemented and all four already seeded, the
+  proposer's expected output today is **zero strategies and a queue of
+  capability gaps**. That is the correct behaviour and the useful one — see
+  Processing below.
 - **Event:** Subscribes to:
   - `research.infra.graph.updated` (a Mike-promoted graph gained or lost a
     layer) → up to 2 targeted infra-graph proposals on the changed layer.
@@ -140,8 +165,59 @@ could quietly corrupt the promote decision.
   world-changer ID, bottleneck ID, or graph node. No open-ended Mike-initiated
   brainstorm — every on-demand request must name an anchor.
 
-Daily and event-driven outputs share a global per-day cap of **10 hypotheses
-total** across all triggers, to prevent the Evaluator queue from being flooded.
+Daily and event-driven outputs from the two **anchored** archetypes share a
+global per-day cap of **10 hypotheses total**, to prevent the Evaluator queue
+from being flooded. `technical-catalyst` is outside that count for the
+structural reason above.
+
+## Processing — `technical-catalyst` (as implemented)
+
+The anchored archetypes follow the generic pipeline further down. This one is
+different enough to state separately, because its anchor is a document rather
+than a graph node.
+
+Each literature item ends in exactly one of three places:
+
+| Outcome | Meaning | Where it goes |
+|---|---|---|
+| `proposed` | cited, runnable, not already held | `research.strategies` at `hypothesis`, always a lineage root |
+| `capability-gap` | cited and real, but the engine cannot run it | `research.capability_gaps` |
+| `refused` | no citation, not an effect, already held, out of bounds | recorded on the item with its reason; **never retried** |
+
+**The capability gap is the point.** `PanelWindow` exposes closes and volumes;
+`FACTOR_SCORERS` implements four effects on top of them. A proposer reading a
+thousand papers therefore cannot produce a thousand strategies — it produces a
+handful, plus a ranked, cited list of the scorers it would need built to produce
+the rest. Two kinds, kept apart because they cost differently:
+
+- `missing-scorer` — computable from close and volume, nobody wrote the
+  function. An afternoon of work. This is the queue worth working.
+- `missing-data` — needs fundamentals, shares outstanding, intraday bars,
+  options, short interest. A feed to acquire. The count of these is the honest
+  argument for buying data.
+
+Ranked by how many **distinct** papers cited each gap, so the build order comes
+from the field rather than from whoever is at the keyboard.
+
+**Three things are stapled on regardless of what the model returns**, each
+because of a specific past failure:
+
+1. **Construction is fixed.** `top_n`, `gross_exposure` and `long_short` are not
+   in the model's schema. Held identical, a comparison between two proposals
+   measures the two effects; free to vary, it measures two implementations.
+2. **The deviation always names the long-only 50-name universe.** The firm's
+   momentum strategy dropped the short leg of Jegadeesh-Titman and nothing
+   recorded that it had, so a one-sided book read for months as evidence about
+   momentum rather than about the deviation.
+3. **The protocol kill criteria are appended.** The proposer supplies how *its*
+   effect dies; the three ways any strategy fails the firm's protocol are not a
+   proposer's to omit.
+
+**`distinct_from` is a claim, and nothing yet verifies it.** It is recorded in
+the spec's `provenance` block marked unverified. The verification is prerequisite
+card 3 — fold-information-ratio correlation between strategies — and until that
+ships, a proposer's assertion that its effect is novel is exactly as good as its
+assertion of anything else.
 
 ## Cross-references
 
@@ -246,6 +322,8 @@ Department, §Strategy lifecycle.
 | Redis stream: `research.hypothesis.skipped` | Event | Anchor missing / thesis-at-risk / universe-empty cases |
 | Redis stream: `universe.gap.detected` | Event | Sent when an anchor's layer has zero overlap with `universe.active` |
 | PostgreSQL: `research.strategies` | Insert | Full proposal record, status=`hypothesis`, anchor IDs, LLM call audit fields |
+| PostgreSQL: `research.capability_gaps` | Upsert | One row per effect the engine cannot run, with every paper that cited it. Citations are a JSON object keyed by item id, so re-running the pass counts nothing twice |
+| PostgreSQL: `research.literature_items` | Update | The item's outcome and reason, so a re-run skips settled work and "what did we read and not act on" stays queryable |
 | Qdrant: `strategy_corpus` | Upsert | Embedding of proposal description, rules, and anchor |
 | Repo: `docs/strategies/proposed/<id>.md` | File write | Auto-generated proposal card on a sandboxed branch. Never auto-merged. Implementation Agent may **not** modify trading or risk policy here without Mike's explicit approval. |
 
@@ -323,10 +401,20 @@ Every event carries the ADR-0006 envelope.
 
 1. **Tech Watcher reads arXiv `q-fin`.** It already ingests arXiv for Framework
    #1 world-changer signal; this adds the quantitative-finance section and a
-   filter for "describes a testable market effect". Emits
-   `research.literature.ingested`. Small — the ingestion path exists.
-2. **This spec's implementation.** The proposer itself: literature item in,
-   constrained spec out, refuse without a citation.
+   filter for "describes a testable market effect". Writes
+   `research.literature_items` and emits `research.literature.ingested`. Small —
+   the ingestion path exists. **Still open.** Note that the world-changer filter
+   cannot be reused: its prompt explicitly rejects anything that is "merely
+   ABOUT a technology — a new method, model architecture, benchmark, or
+   simulation result", which is a description of every q-fin paper. Two filters
+   over one ingest, routed on category.
+2. ~~**This spec's implementation.**~~ **Shipped 2026-07-30.** Built before card
+   1 deliberately: the consumer's requirements are the contract, and the
+   literature table is defined on this side of the seam so the producer fills a
+   known shape instead of guessing one. Until card 1 ships, the CLI's
+   `--from-file` runs the whole proposer against a hand-assembled list of
+   abstracts, which is how the prompt gets reviewed before anything depends on
+   it.
 3. **A duplicate check the Evaluator can enforce.** `distinct_from` is a claim
    by the proposer, and a claim nothing verifies is decoration. The natural
    check is the fold-information-ratio correlation already named as a kill
@@ -339,8 +427,17 @@ believes, and it is the only one of the three that pays off with no new agent.
 
 ## Open questions
 
-- **Per-day cap of 10:** Default guess. Blocks: Evaluator capacity planning.
-  Owner: Mike, after first two weeks of operation.
+- **Per-day cap of 10:** Default guess, and now scoped to the two anchored
+  archetypes only — `technical-catalyst` is bounded structurally instead (see
+  Trigger). Blocks: Evaluator capacity planning. Owner: Mike, after first two
+  weeks of operation.
+- **Is the identity key `(rule, factor)` too coarse?** It is what makes the
+  proposer unfloodable, and it is also what makes it nearly silent: with all
+  four factors seeded, every price-based paper now refuses as `already-held`. A
+  looser key would let the firm test more; it would also let a search be
+  registered as a set of fresh ideas. Recorded as the deliberate trade rather
+  than tuned. Owner: Mike. Blocks: nothing today — widening the scorer library
+  raises throughput without touching the key, and that is the intended path.
 - **Should a `technical-catalyst` proposal be allowed to cite a prior the firm
   has already implemented?** Arguably yes — a second implementation of the same
   paper with a recorded `deviation` is a legitimate experiment about the

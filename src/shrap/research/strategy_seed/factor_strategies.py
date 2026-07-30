@@ -44,7 +44,14 @@ CODE_REF = "src/shrap/research/strategy_seed/factor_strategies.py"
 
 # Protocol-level falsifiers shared by every factor seed. Each seed adds its own
 # effect-specific ones on top.
-_COMMON_KILL_CRITERIA: tuple[str, ...] = (
+#
+# Public (renamed from `_COMMON_KILL_CRITERIA`, 2026-07-30) because the
+# Hypothesis Generator staples the same three onto every proposal it writes.
+# These are the ways ANY strategy fails the firm's evaluation protocol rather
+# than ways a particular effect fails, so they are not a proposer's to omit —
+# and a second copy of the text would drift from this one the first time the
+# protocol changed.
+COMMON_KILL_CRITERIA: tuple[str, ...] = (
     "it does not beat equal-weight buy-and-hold of the same universe — an "
     "information ratio at or below zero means the selection destroyed value "
     "against simply owning the names",
@@ -102,7 +109,7 @@ FACTOR_SEEDS: tuple[FactorSeed, ...] = (
             "the selected names are a sector bet rather than a volatility bet. Utilities "
             "and staples dominate low-vol screens, so a result here may be one sector "
             "wearing a factor's name — check what it actually held before believing it",
-            *_COMMON_KILL_CRITERIA,
+            *COMMON_KILL_CRITERIA,
         ),
     ),
     FactorSeed(
@@ -130,7 +137,7 @@ FACTOR_SEEDS: tuple[FactorSeed, ...] = (
             "second effect, it has found the same one measured differently",
             "the effect is concentrated in small, illiquid names and does not survive the "
             "launch universe's liquidity, which is 50 large-cap names",
-            *_COMMON_KILL_CRITERIA,
+            *COMMON_KILL_CRITERIA,
         ),
     ),
     FactorSeed(
@@ -162,7 +169,7 @@ FACTOR_SEEDS: tuple[FactorSeed, ...] = (
             "the effect reverses within the holding period, which is the documented "
             "failure mode for attention-driven premia: the visibility fades and the price "
             "gives it back",
-            *_COMMON_KILL_CRITERIA,
+            *COMMON_KILL_CRITERIA,
         ),
     ),
     FactorSeed(
@@ -197,7 +204,7 @@ FACTOR_SEEDS: tuple[FactorSeed, ...] = (
             "twelve-month formation on daily bars produces too few position changes to "
             "clear the trade-count gate honestly, in which case the result is about "
             "sample size rather than about the effect",
-            *_COMMON_KILL_CRITERIA,
+            *COMMON_KILL_CRITERIA,
         ),
     ),
 )
@@ -268,6 +275,7 @@ def factor_record(seed: FactorSeed) -> StrategyRecord:
 
 __all__ = [
     "CODE_REF",
+    "COMMON_KILL_CRITERIA",
     "FACTOR_SEEDS",
     "FACTOR_SEEDS_BY_KEY",
     "FactorSeed",
