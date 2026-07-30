@@ -26,6 +26,7 @@ from shrap.research.ledger import (
     row_from_mapping,
     summarise,
 )
+from shrap.research.persistence import analyse
 from shrap.research.strategy_evaluator.engine import (
     DEFAULT_INFORMATION_RATIO_FLOOR,
     DEFAULT_SHARPE_FLOOR,
@@ -143,6 +144,8 @@ async def _run(args: argparse.Namespace) -> str:
     out = render(rows, summary)
     if args.guidance:
         out += "\n\nWHAT TO TRY NEXT\n" + derive(raw).render()
+    if args.persistence:
+        out += "\n\n" + analyse(raw, live_floor=args.ir_floor).render()
     if args.dimensions:
         specs = [r.get("spec") for r in raw if r.get("spec") is not None]
         out += "\n\nAXES\n" + dimension_survey(survey(specs))
@@ -162,6 +165,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--guidance",
         action="store_true",
         help="Also derive what the corpus says to try next (informs proposals, never gates)",
+    )
+    parser.add_argument(
+        "--persistence",
+        action="store_true",
+        help=(
+            "Also report calibration evidence: what each candidate IR floor would "
+            "have promoted, and whether the metric predicts itself. Evidence for a "
+            "ruling — it moves no gate"
+        ),
     )
     parser.add_argument(
         "--dimensions",
