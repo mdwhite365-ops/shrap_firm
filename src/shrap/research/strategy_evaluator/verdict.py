@@ -34,6 +34,7 @@ live" stay distinguishable in the persisted evaluation row.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 VERDICT_KILL = "kill"
@@ -52,6 +53,53 @@ REASON_BELOW_INFORMATION_RATIO_FLOOR = "below-information-ratio-floor"
 REASON_PROMOTE = "promote-criteria-met"
 # A revision measured worse than the strategy it was revised from.
 REASON_WORSE_THAN_PARENT = "worse-than-parent"
+# Cleared the base information-ratio floor, but not the higher one its lineage
+# has earned by burning attempts.
+REASON_BELOW_ADJUSTED_IR_FLOOR = "below-multiple-testing-adjusted-floor"
+
+
+def required_information_ratio(floor: float, attempts: int) -> float:
+    """The information ratio this attempt must clear, given how many came before.
+
+    ``StrategyRegistry.attempts`` has counted this since PR #141 and nothing has
+    ever read it. Its own docstring says why: *"A lineage on attempt 20 that
+    finally clears an information ratio of 0.5 has not found edge — it has found
+    the best of twenty draws, and the gate cannot know that without this
+    number."* This is the gate reading it.
+
+    The shape is the expected maximum of ``n`` draws from the null, which grows
+    like ``sqrt(2 ln n)``. Normalised so that a first attempt is unpenalised:
+
+        required = floor * sqrt(1 + ln(attempts))
+
+    which gives, at a base floor of 0.5:
+
+        attempts   1     2     3     5     10    20
+        required   0.50  0.65  0.72  0.81  0.91  1.00
+
+    **Why the information ratio and not the Sharpe floor.** Sharpe measures the
+    market plus the strategy; on a window where the benchmark itself returned
+    0.772 a long-only equity rule inherits most of its Sharpe from beta, and
+    inflating that floor would penalise a lineage for the market's behaviour.
+    The information ratio is the part that is actually the strategy's, so it is
+    the part a search has to pay for.
+
+    **Attempts are per lineage, not per firm.** Twenty unrelated strategies
+    tested once each is twenty honest experiments; one idea revised twenty times
+    is a search over one hypothesis. `lineage_root_id` is what separates them,
+    and the root is resolved from the parent row inside the registration
+    transaction so a proposer cannot reset its own denominator.
+
+    **This is a calibration and Mike owns it.** The curve above is a defensible
+    default, not a derived constant — the true correction depends on how
+    correlated the attempts are, and revisions of one strategy are highly
+    correlated, which makes ``sqrt(2 ln n)`` conservative. Erring conservative is
+    the right direction for a promote gate.
+    """
+
+    if attempts <= 1:
+        return floor
+    return floor * math.sqrt(1.0 + math.log(attempts))
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +122,7 @@ def map_verdict(
     information_ratio: float | None = None,
     information_ratio_floor: float = 0.0,
     parent_information_ratio: float | None = None,
+    attempts: int = 1,
 ) -> Verdict:
     """Map measured metrics to a verdict. Pure; deterministic; no tuning.
 
@@ -123,11 +172,20 @@ def map_verdict(
     # Beat the benchmark, but not by enough to distinguish skill from luck.
     if information_ratio is not None and information_ratio < information_ratio_floor:
         return Verdict(VERDICT_HOLD, REASON_BELOW_INFORMATION_RATIO_FLOOR)
+    # ...and not by enough to distinguish skill from the best of several tries.
+    # Held rather than killed: unlike `worse-than-parent`, this strategy has not
+    # been shown to be bad. It has been shown to be insufficiently distinguished
+    # from luck GIVEN how many attempts preceded it, and more out-of-sample data
+    # is exactly what would settle that.
+    adjusted_floor = required_information_ratio(information_ratio_floor, attempts)
+    if information_ratio is not None and information_ratio < adjusted_floor:
+        return Verdict(VERDICT_HOLD, REASON_BELOW_ADJUSTED_IR_FLOOR)
     return Verdict(VERDICT_PROMOTE, REASON_PROMOTE)
 
 
 __all__ = [
     "REASON_ANCHOR_NOT_LIVE",
+    "REASON_BELOW_ADJUSTED_IR_FLOOR",
     "REASON_BELOW_INFORMATION_RATIO_FLOOR",
     "REASON_BELOW_SHARPE_FLOOR",
     "REASON_FAILS_FRICTION_STRESS",
@@ -142,4 +200,5 @@ __all__ = [
     "VERDICT_PROMOTE",
     "Verdict",
     "map_verdict",
+    "required_information_ratio",
 ]
