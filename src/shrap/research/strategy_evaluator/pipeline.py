@@ -247,11 +247,18 @@ def _default_strategy_factory(record: StrategyRecord, tickers: list[str]) -> Str
     return ReferenceTrendStrategy.from_spec(tickers[0], params)
 
 
+# `cross-sectional-factor` was missing here until 2026-07-30, found while
+# building the axis survey. Its only consumer is the "known rules are ..." text
+# in the unknown-rule error above, so the effect was a misleading message: a
+# typo'd factor spec was told the engine knows four rules when it knows five,
+# and `cross-sectional-factor` — the rule behind six of the firm's strategies —
+# was the one it did not name.
 _CROSS_SECTIONAL_RULES: frozenset[str] = frozenset(
     {
         RULE_CROSS_SECTIONAL_TREND,
         RULE_CROSS_SECTIONAL_MOMENTUM,
         RULE_CROSS_SECTIONAL_REVERSAL,
+        RULE_CROSS_SECTIONAL_FACTOR,
     }
 )
 
