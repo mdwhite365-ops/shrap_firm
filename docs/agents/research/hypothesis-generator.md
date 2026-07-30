@@ -7,7 +7,8 @@ reasoning matters and judgment is load-bearing). Migration target: `local-heavy`
 infra-graph plays once shadow evaluation passes. See
 `docs/infrastructure/llm-routing.md` and `docs/infrastructure/llm-registry.md`.
 _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the contract. Current model for each tier lives in the registry._
-**Status:** Draft
+**Status:** Draft — **archetype set corrected 2026-07-30** to include
+`technical-catalyst` per ADR-0013. Still unimplemented.
 **Date:** 2026-05-30
 **Author:** Mike White
 **Version:** 0.1 (draft)
@@ -38,13 +39,90 @@ What this agent cannot do, stated clearly:
 - It cannot pick its own universe. The investable tickers are whatever the
   Universe Curator currently has in the active set.
 
-The two hypothesis archetypes the agent generates are intentionally the only
-two — adding archetypes requires a Mike ADR.
+The hypothesis archetypes the agent generates are a closed set — adding one
+requires a Mike ADR.
+
+### The three archetypes (corrected 2026-07-30)
+
+This spec was written when there were two. **ADR-0013 added a third,
+`technical-catalyst`, and named the Hypothesis Generator as the component that
+proposes it** (ADR-0013 §"A new hypothesis archetype", and its acceptance
+criteria: *"Hypothesis Generator built, with `technical-catalyst` in its
+archetype set"*). The spec was never updated to match, so for the archetype
+behind **every strategy the firm has actually evaluated** there has been no
+proposer at all. Every one of them was written by hand.
+
+That is drift in the direction the operating principles do not cover: the ADR
+moved and the spec did not follow. Recorded here rather than fixed silently.
+
+| Archetype | Anchor | Proposed from |
+|---|---|---|
+| `infra-graph-play` | required — a Mike-promoted world-changer node | Infrastructure Mapper graph |
+| `bottleneck-rotation` | required — a validated binding bottleneck | Bottleneck Scout |
+| `technical-catalyst` | **none, by design** | a published, falsifiable market effect |
+
+### Why `technical-catalyst` needs a different source, not a different prompt
+
+The other two archetypes are disciplined by their anchor: a proposal has to name
+a real node on a real graph, and that requirement is what stops the LLM
+freelancing. `technical-catalyst` carries no anchor by design (ADR-0013 §1) — so
+if it were generated the same way, the discipline would be gone and the agent
+would be back to "ask an LLM for a trading strategy", which is the failure this
+whole spec exists to prevent.
+
+Worse, the obvious substitute is actively harmful. An LLM asked for price-based
+strategies will produce **parameter variations** — a 120-day lookback, a top-12
+instead of top-10 — and the Evaluator's multiple-testing gate (PR #148)
+correctly raises the promote bar for each successive attempt on one lineage. An
+agent that generated variants would spend the firm's promote budget on a search
+it was never going to win.
+
+**So the anchor for `technical-catalyst` is the literature.** A proposal must
+cite a specific published effect, and the effect is what plays the role the
+world-changer node plays for Framework #1: an external, checkable claim the
+strategy is an implementation of.
+
+This is not a new ingestion problem. Tech Watcher already ingests arXiv; it is
+pointed at tech and world-changer signal for Framework #1 and does not read
+**q-fin**, the quantitative-finance section, which is a continuous feed of
+exactly these claims. Extending that ingestion is the prerequisite card, and it
+is small.
+
+The proposer's job is then narrow and checkable: turn a documented effect into a
+spec, state what would falsify it, and refuse if it cannot name the source. That
+is a constrained transformation rather than an invention, which is the same
+shape as the other two archetypes and the reason this one can be trusted at all.
+
+### What a `technical-catalyst` proposal must carry
+
+In addition to the common required fields below:
+
+- `prior`: citation of the published effect — author, year, and the claim in one
+  sentence. **Refuse without it.** A price-based strategy with no cited prior is
+  the freelancing this agent exists to prevent.
+- `deviation`: how the implementation differs from the source construction, or
+  the literal string `none`. This field exists because of a real failure: the
+  firm's momentum strategy dropped the short leg of Jegadeesh-Titman and nothing
+  recorded that it had, so a one-sided book was read as evidence about momentum
+  rather than about the deviation.
+- `distinct_from`: the strategy IDs of existing strategies this is claimed not
+  to duplicate, with the reason. A proposer cannot be trusted to notice it has
+  re-derived an effect the firm already holds; naming the comparison makes the
+  claim falsifiable by the Evaluator rather than assumed.
+
+**Every `technical-catalyst` proposal is a lineage root** unless it explicitly
+names a `parent_strategy_id`. Proposing a variant as a root would launder a
+search past the multiple-testing gate, and that is the one way this archetype
+could quietly corrupt the promote decision.
 
 ## Trigger
 
 - **Schedule:** One batch per trading day at 19:00 ET. Default cap: **3
-  infra-graph proposals + 2 bottleneck-rotation proposals per night**.
+  infra-graph proposals + 2 bottleneck-rotation proposals + 2
+  technical-catalyst proposals per night**. The technical-catalyst cap is the
+  smallest of the three deliberately: its supply is bounded by how fast the
+  literature actually produces testable claims, and a cap larger than that
+  supply is an instruction to invent, which is what must not happen.
   Throttling is enforced inside the agent; the LLM is never given an open-ended
   "generate as many as you can" prompt.
 - **Event:** Subscribes to:
@@ -54,6 +132,10 @@ two — adding archetypes requires a Mike ADR.
     binding) → up to 2 targeted bottleneck-rotation proposals.
   - `research.world-changer.promoted` (Mike promoted a new world-changer) →
     one infra-graph "seed" proposal on its most data-rich layer.
+  - `research.literature.ingested` (Tech Watcher accepted a q-fin item
+    describing a testable market effect) → up to one technical-catalyst
+    proposal citing it. **This stream does not exist yet** — it is the
+    prerequisite card named above.
 - **On-demand:** Mike-initiated `research.hypothesis.request` with a specific
   world-changer ID, bottleneck ID, or graph node. No open-ended Mike-initiated
   brainstorm — every on-demand request must name an anchor.
@@ -111,7 +193,8 @@ Department, §Strategy lifecycle.
    explicitly and forbids deviation: "you are writing a strategy on
    layer Y of world-changer X's graph; you may not reference a different
    world-changer or layer." Required fields per proposal:
-   - `archetype`: `infra-graph-play` or `bottleneck-rotation` (only these).
+   - `archetype`: `infra-graph-play`, `bottleneck-rotation`, or
+     `technical-catalyst` (only these — ADR-0013).
    - `anchor`: `{world_changer_id, graph_id, layer_id}` or
      `{bottleneck_id, replacement_layer_id}`.
    - `thesis`: one-paragraph statement linking the anchor to the trade.
@@ -229,12 +312,44 @@ Every event carries the ADR-0006 envelope.
 - Automatic parameter sweeps within a proposal — that is the Evaluator's job.
 - Cross-asset hypotheses — universe is equities-only for the sprint.
 - Options strategies — deferred to post-launch.
-- Any archetype other than the two named above.
+- Any archetype other than the three named above.
+- **Generating `technical-catalyst` proposals without a cited prior.** The
+  literature is this archetype's anchor; without it the agent is freelancing.
+- **Parameter variation of an existing strategy.** A different lookback is not a
+  new hypothesis, it is attempt N of an old one, and it belongs in a revision
+  with a `parent_strategy_id` — not in a proposal.
+
+## Prerequisite cards, in order
+
+1. **Tech Watcher reads arXiv `q-fin`.** It already ingests arXiv for Framework
+   #1 world-changer signal; this adds the quantitative-finance section and a
+   filter for "describes a testable market effect". Emits
+   `research.literature.ingested`. Small — the ingestion path exists.
+2. **This spec's implementation.** The proposer itself: literature item in,
+   constrained spec out, refuse without a citation.
+3. **A duplicate check the Evaluator can enforce.** `distinct_from` is a claim
+   by the proposer, and a claim nothing verifies is decoration. The natural
+   check is the fold-information-ratio correlation already named as a kill
+   criterion on the reversal and 52-week-high seeds — two strategies whose fold
+   IRs correlate above ~0.9 are one effect, whatever their specs say.
+
+Card 3 is worth doing even if 1 and 2 are deferred: it is the measurement that
+tells the firm whether the strategies it already holds are as diverse as it
+believes, and it is the only one of the three that pays off with no new agent.
 
 ## Open questions
 
 - **Per-day cap of 10:** Default guess. Blocks: Evaluator capacity planning.
   Owner: Mike, after first two weeks of operation.
+- **Should a `technical-catalyst` proposal be allowed to cite a prior the firm
+  has already implemented?** Arguably yes — a second implementation of the same
+  paper with a recorded `deviation` is a legitimate experiment about the
+  deviation. Arguably no — it is how one effect quietly occupies three of three
+  accounts. Owner: Mike. Blocks: the proposer's duplicate rule.
+- **What counts as a "published" prior?** A peer-reviewed paper is clear. An
+  arXiv preprint is the actual feed. A practitioner blog post is not, but a
+  great deal of real trading knowledge lives there. Owner: Mike. Blocks: the
+  Tech Watcher q-fin filter's acceptance threshold.
 - **Should rotation-archetype shorts require Mike's explicit per-proposal
   approval during sprint?** Currently no — they're allowed if the rapid-
   obsolescence flag is set by Bottleneck Scout. Blocks: trust progression on
