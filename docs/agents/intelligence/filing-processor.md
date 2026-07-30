@@ -9,12 +9,21 @@ _Per ADR-0009 and `docs/infrastructure/llm-registry.md`, tier aliases are the co
 **Date:** 2026-07-22
 **Author:** Mike White
 
-> **Seed-deployment routing:** same ruling as the Tech Watcher and News
-> Analyzer (2026-07-15/17) — the firm runs local-only until cloud API billing
-> exists, so in the deployed seed both tiers env-route to Ollama on the Dell.
-> The escalation path is wired but lands on the same local model until the
-> compose env changes. Known tradeoff: material-event summaries will be
-> mushier; nothing downstream trades on them yet.
+> **Deployment routing (2026-07-30):** cloud, moving together with the News
+> Analyzer. Mike's ruling supersedes the local-only ruling of 2026-07-15 — the
+> 9B local model was not good enough for materiality judgement. Both tiers
+> env-route to `https://ollama.com` on `gpt-oss:20b-cloud`, bearer token from
+> `.env`. Tier aliases remain the contract (ADR-0009).
+>
+> **The escalation path still lands on the same model** — better, but the same,
+> so escalating a material item cannot change the answer. Disclosed at seed,
+> open as KI-021, closed by `SHRAP_INTEL_ESCALATION_MODEL` once a stronger
+> model's usage tier is confirmed inside the subscription.
+>
+> **Cost note:** the discovery backfill queues work that this agent then scores
+> on a metered endpoint. 105 filings is roughly 200–400 calls once escalation is
+> counted, drawn against the same cap as the research funnel — which is why
+> `shrap-filing-processor-discover` has `--dry-run` and a date range.
 
 ## Purpose
 

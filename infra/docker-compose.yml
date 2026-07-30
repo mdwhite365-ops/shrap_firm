@@ -227,6 +227,14 @@ services:
     # config, and would vanish silently if the volume were ever recreated.
     # The Tech Watcher therefore talks straight to https://ollama.com instead
     # (see its SHRAP_LLM_OLLAMA_URL), where auth is a declarative env var.
+    #
+    # As of 2026-07-30 NO agent routes here: the Intelligence pair moved to
+    # ollama.com with the rest of the box. It is kept running deliberately, as
+    # the fallback the cloud path names — setting SHRAP_TW_OLLAMA_URL to
+    # http://ollama:11434 sends every LLM agent back to the local daemon in one
+    # env edit, which is the only lever available if the cloud usage cap is
+    # exhausted mid-week. It holds the GPU reservation and ~6.6GB of model for
+    # that purpose; retiring it is a separate decision, not a side effect.
     volumes:
       - ollama_models:/root/.ollama
     ports:
@@ -999,12 +1007,18 @@ services:
       NEWS_ANALYZER_ACTIVE_INTERVAL_SECONDS: "600"
       NEWS_ANALYZER_IDLE_INTERVAL_SECONDS: "3600"
       NEWS_ANALYZER_LOG_LEVEL: "INFO"
-      # Local-only LLM routing (Mike's ruling 2026-07-15): both tiers this
-      # agent uses are env-routed to the Dell's Ollama. Deployment routing,
-      # not a registry change — see docs/infrastructure/llm-registry.md.
-      SHRAP_LLM_OLLAMA_URL: "http://ollama:11434"
+      # Cloud LLM routing (Mike's ruling 2026-07-30), superseding the local-only
+      # ruling of 2026-07-15 for the Intelligence agents: the 9B local model was
+      # not good enough for materiality judgement. Same direct-to-ollama.com path
+      # the Tech Watcher takes — bearer token from .env rather than Ed25519
+      # container state. Deployment routing, not a registry change; the tier
+      # aliases remain the contract (ADR-0009).
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_INTEL_BULK_MODEL:-gpt-oss:20b-cloud}"
       SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
-      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "qwen3.5:9b-q4_K_M"
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "${SHRAP_INTEL_ESCALATION_MODEL:-gpt-oss:20b-cloud}"
     depends_on:
       redis:
         condition: service_healthy
@@ -1055,12 +1069,20 @@ services:
       FILING_PROCESSOR_ACTIVE_INTERVAL_SECONDS: "600"
       FILING_PROCESSOR_IDLE_INTERVAL_SECONDS: "3600"
       FILING_PROCESSOR_LOG_LEVEL: "INFO"
-      # Local-only LLM routing (Mike's ruling 2026-07-15): both tiers this
-      # agent uses are env-routed to the Dell's Ollama. Deployment routing,
-      # not a registry change — see docs/infrastructure/llm-registry.md.
-      SHRAP_LLM_OLLAMA_URL: "http://ollama:11434"
+      # Cloud LLM routing (Mike's ruling 2026-07-30) — see the News Analyzer
+      # block above; the two Intelligence agents move together, as their specs
+      # already pair them ("both on the same clock, deliberately").
+      #
+      # Both knobs are single env vars on purpose: pointing escalation at a
+      # genuinely stronger model (e.g. SHRAP_INTEL_ESCALATION_MODEL=kimi-k2.5)
+      # is a one-line .env edit and a recreate — no rebuild — once that model's
+      # usage tier is confirmed inside the subscription.
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_INTEL_BULK_MODEL:-gpt-oss:20b-cloud}"
       SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
-      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "qwen3.5:9b-q4_K_M"
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "${SHRAP_INTEL_ESCALATION_MODEL:-gpt-oss:20b-cloud}"
     depends_on:
       redis:
         condition: service_healthy

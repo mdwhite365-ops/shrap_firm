@@ -28,13 +28,42 @@ Changing the latter without breaking the former is the whole point.
 | `local-heavy` | `mistral-small:24b-instruct-q4_K_M` (Ollama) | Local (Ryzen, via `ryzen.tasks` stream) | 32k tokens (approx; depends on Ollama config) | Marginal (electricity) | Heavier local inference offloaded to Ryzen substrate | Agents that publish to `ryzen.tasks` (consumer set TBD per agent spec) |
 | `no-llm` | N/A | — | — | None | Deterministic logic only | Risk Officer; Strategy Evaluator core stats; Health Monitor |
 
-> **Deployment routing amendment (2026-07-27) — Tech Watcher only.** The
-> local-only ruling of 2026-07-15 is superseded *for this agent*: its
-> `local-classification` and `cloud-default` tiers now resolve to Ollama Cloud
-> models, and that container alone points at `https://ollama.com` instead of
-> the local daemon. The tier aliases remain the contract. The Intelligence
-> agents (News Analyzer, Filing Processor) stay fully local; routing them is a
-> separate cost decision.
+> **Deployment routing amendment (2026-07-30) — box-wide.** The local-only
+> ruling of 2026-07-15 is now fully superseded. Every LLM-using agent points at
+> `https://ollama.com`: Tech Watcher, Hypothesis Generator (+ trigger) and
+> Infrastructure Mapper since 2026-07-27, and the two Intelligence agents (News
+> Analyzer, Filing Processor) as of this amendment. **Mike's reason: the 9B
+> local model was not good enough for materiality judgement.** The tier aliases
+> remain the contract; this is deployment routing only.
+>
+> No agent routes to the local daemon any more. It stays running as the named
+> fallback — `SHRAP_TW_OLLAMA_URL=http://ollama:11434` returns every agent to it
+> in one env edit — which is the only lever available if the cloud usage cap is
+> exhausted mid-week. Retiring the container is a separate decision.
+>
+> **The cost model this changes.** Ollama bills GPU-time against 5-hour session
+> and weekly caps, not per token, so the risk is not a surprise invoice but
+> **cap contention**: the two highest-volume consumers in the firm now compete
+> for the same allowance as the research funnel. The News Analyzer is the one to
+> watch — `score_max_items` is 300, it has never scored a single item (the HTTP
+> 400 of #165), and its first healthy pass will therefore work a real backlog.
+> Bound `NEWS_ANALYZER_SCORE_MAX_ITEMS` for that first run and measure before
+> restoring it. If the cap is exhausted the funnel stalls too, and the
+> Intelligence agents will have been the cause.
+>
+> **Escalation is currently a no-op everywhere, and has been since the cloud
+> move.** Both Intelligence agents resolve `local-classification` and
+> `cloud-default` to the same model, so escalating a material item re-asks the
+> identical model the identical question. Their specs disclose this as an
+> accepted seed tradeoff; the Tech Watcher fell into the same state
+> undisclosed when synthesis reverted from `kimi-k3:cloud` (paid subscription)
+> to `gpt-oss:20b-cloud`, which is why the ladder described below is aspirational
+> rather than deployed. Tracked as KI-021. `SHRAP_INTEL_ESCALATION_MODEL`
+> exists so that closing it is a one-line `.env` edit and a recreate — no
+> rebuild — once a stronger model's usage tier is confirmed inside the
+> subscription. **An `OLLAMA_API_KEY` in `.env` does not establish that**: the
+> key authenticates, the subscription decides which usage tiers are callable,
+> and conflating the two is exactly what got `kimi-k3:cloud` reverted.
 >
 > **Why direct rather than through the local daemon.** The daemon *can* serve
 > cloud models, but it does not authenticate them with a bearer token — it
@@ -59,8 +88,11 @@ Changing the latter without breaking the former is the whole point.
 > items plus ~140/day and takes `gpt-oss:20b-cloud` (*Low Usage*); its 128K
 > window is already ~90x the filter's ~1400-token prompt, so a 1M-context
 > model would be paid for and unused. Synthesis runs a handful of times a day
-> where judgment is load-bearing, and takes `kimi-k3:cloud` (*Extra High
-> Usage*). Putting a flagship reasoning model on the bulk filter would be
+> where judgment is load-bearing, and was specified as `kimi-k3:cloud` (*Extra
+> High Usage*) — **but is deployed as `gpt-oss:20b-cloud`**, reverted because
+> that model needs a paid subscription the firm did not have. The two-model
+> ladder in this paragraph therefore describes an intent, not the running
+> system. Putting a flagship reasoning model on the bulk filter would be
 > paying top rates for a call that deliberately runs `think=False`.
 > `SHRAP_FILTER_MODEL` / `SHRAP_SYNTHESIS_MODEL` override both from `.env`, so
 > laddering up (e.g. to `gpt-oss:120b-cloud`, *Medium Usage*) or falling back

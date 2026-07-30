@@ -616,3 +616,55 @@ migration" instead of a traceback. The second is cheaper and makes the failure
 legible; the first is correct. Neither is worth a card until it recurs — but the
 Pre-Trade Checker row above is the one to watch, because its failure mode is a
 veto rather than a retry.
+
+## KI-021 — Escalation to a "stronger" tier calls the same model
+
+**Status:** Open. Present since the seed; became firm-wide on 2026-07-27 and
+survived the box-wide cloud move of 2026-07-30.
+
+Three agents implement a two-tier pattern: score everything on a cheap bulk
+tier, then re-ask a stronger tier about anything that scored material. The
+News Analyzer and Filing Processor escalate at `materiality >= 2`; the Tech
+Watcher filters on one tier and synthesises on another.
+
+In every deployed case both tiers resolve to **the same model**:
+
+| Agent | bulk tier → model | escalation tier → model |
+|---|---|---|
+| News Analyzer | `local-classification` → `gpt-oss:20b-cloud` | `cloud-default` → `gpt-oss:20b-cloud` |
+| Filing Processor | `local-classification` → `gpt-oss:20b-cloud` | `cloud-default` → `gpt-oss:20b-cloud` |
+| Tech Watcher | `local-classification` → `gpt-oss:20b-cloud` | `cloud-default` → `gpt-oss:20b-cloud` |
+
+So escalation cannot change an answer except by sampling noise, while costing a
+second inference on a metered endpoint and a second verdict-history row that
+looks like independent confirmation and is not. **That last part is the real
+damage**: `intelligence.news_verdict_history` and `filing_verdict_history` now
+contain pairs of rows that read as "the cheap model said X and the strong model
+agreed," which is evidence of nothing. Any future calibration over those tables
+must treat an escalated pair as one observation, not two.
+
+**How each got here, because the two are not the same:**
+
+- The Intelligence pair **disclosed it**. Both specs say the escalation path
+  "is wired but lands on the same local model until the compose env changes,"
+  accepted at seed time under the local-only ruling.
+- The Tech Watcher **did not**. `docs/infrastructure/llm-registry.md` described
+  synthesis on `kimi-k3:cloud` while compose had already reverted it to
+  `gpt-oss:20b-cloud` — that model needs a paid Ollama subscription the firm
+  did not have. The doc was corrected on 2026-07-30; the collapse remains.
+
+**The fix is one env var, gated on a fact nobody has checked.**
+`SHRAP_INTEL_ESCALATION_MODEL` (Intelligence) and `SHRAP_SYNTHESIS_MODEL` (Tech
+Watcher) each point escalation at a different model with an `.env` edit and a
+recreate — no rebuild. What is missing is confirmation that a stronger model's
+**usage tier** is inside the current subscription. `kimi-k2.5`, `kimi-k3` and
+`gpt-oss:120b` are all in the public cloud catalogue; the catalogue does not
+publish usage tiers, and an `OLLAMA_API_KEY` being present proves only that
+requests authenticate, not that they are permitted. Conflating those two is
+precisely what got `kimi-k3:cloud` reverted the first time.
+
+**Until then, prefer honesty to theatre.** Either close the gap or disable
+escalation, because paying twice for one opinion and recording it as two is
+worse than a single scored pass. Disabling is a spec change to both Intelligence
+agents (drift updates the spec, not the code), which is why it is a card and not
+a config tweak.
