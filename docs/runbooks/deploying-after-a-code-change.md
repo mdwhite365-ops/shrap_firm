@@ -127,11 +127,13 @@ not error — it produces confident, well-formed, **wrong** verdicts:
 Both rows persisted. `latest_information_ratio` reads the newest row for the
 parent comparison, so a wrong verdict propagates into the *next* strategy's.
 
-**After any research-code change, rebuild both:**
+**After any research-code change, rebuild all three.** `hypothesis-generator`
+joined the same Dockerfile on 2026-07-30 — it needs numpy for the capability
+check, so it cannot live in the tech-watcher image (see §1d):
 
 ```bash
 cd /mnt/Archive/shrap/shrap_firm/infra
-sudo docker compose --profile tools build strategy-evaluator
+sudo docker compose --profile tools build strategy-evaluator hypothesis-generator
 sudo docker compose up -d --build --force-recreate strategy-evaluator-trigger
 ```
 
