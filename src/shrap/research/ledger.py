@@ -53,6 +53,8 @@ STRUCTURAL_REASONS: frozenset[str] = frozenset(
     }
 )
 
+UNEVALUATED = "unevaluated"
+
 # Reasons that are genuine findings about the strategy itself.
 EDGE_REASONS: frozenset[str] = frozenset(
     {
@@ -88,9 +90,26 @@ class LedgerRow:
     card_path: str | None
 
     @property
-    def is_structural(self) -> bool:
-        """Died of a setup defect rather than a finding about its edge."""
+    def is_unevaluated(self) -> bool:
+        """Proposed and not yet tested. Not a death — a queue entry.
 
+        The first production run counted these as "died of setup defects",
+        which read as nine failures when three had failed and six were waiting.
+        A ledger that inflates the failure count is worse than none: it argues
+        for loosening a gate that nothing has actually been measured against.
+        """
+
+        return self.verdict == UNEVALUATED
+
+    @property
+    def is_structural(self) -> bool:
+        """Died of a setup defect rather than a finding about its edge.
+
+        An evaluation that never ran is neither — see :attr:`is_unevaluated`.
+        """
+
+        if self.is_unevaluated:
+            return False
         return self.reason in STRUCTURAL_REASONS or not self.engine_ran
 
     @property
@@ -108,6 +127,9 @@ class LedgerSummary:
     """What the corpus says, as opposed to what any one row says."""
 
     total: int
+    queued: int
+    """Proposed, not yet tested. Excluded from every failure count."""
+
     evaluated: int
     """Rows where the engine actually ran. The rest never reached a backtest."""
 
@@ -134,6 +156,7 @@ class LedgerSummary:
     def lines(self) -> list[str]:
         out = [
             f"strategies      {self.total}",
+            f"queued          {self.queued}",
             f"engine ran      {self.evaluated}",
             f"  edge findings {self.edge_deaths}",
             f"  structural    {self.structural_deaths}",
@@ -150,12 +173,19 @@ class LedgerSummary:
 def summarise(rows: Sequence[LedgerRow], *, sharpe_floor: float, ir_floor: float) -> LedgerSummary:
     """Aggregate the corpus. Pure; no I/O."""
 
+    # Only real outcomes are counted. An unevaluated row has an empty reason,
+    # and on the first production run that empty string won "most common
+    # outcome" with 6 of 12 — the histogram reporting the absence of a result
+    # as the leading result.
     counts: dict[str, int] = {}
     for row in rows:
+        if row.is_unevaluated:
+            continue
         counts[row.reason] = counts.get(row.reason, 0) + 1
     evaluated = [r for r in rows if r.engine_ran]
     return LedgerSummary(
         total=len(rows),
+        queued=sum(1 for r in rows if r.is_unevaluated),
         evaluated=len(evaluated),
         structural_deaths=sum(1 for r in rows if r.is_structural),
         edge_deaths=sum(1 for r in rows if r.engine_ran and r.reason in EDGE_REASONS),
@@ -195,9 +225,12 @@ def observations(summary: LedgerSummary) -> list[str]:
         )
         return out
 
-    if summary.structural_deaths and summary.structural_deaths >= summary.evaluated:
+    tested = summary.total - summary.queued
+    if summary.queued:
+        out.append(f"{summary.queued} of {summary.total} are queued and have not been tested")
+    if summary.structural_deaths and tested and summary.structural_deaths >= summary.edge_deaths:
         out.append(
-            f"{summary.structural_deaths} of {summary.total} died of setup defects "
+            f"{summary.structural_deaths} of the {tested} tested died of setup defects "
             "rather than of anything measured about their edge"
         )
 
@@ -205,8 +238,8 @@ def observations(summary: LedgerSummary) -> list[str]:
         out.append("no strategy has yet been tested on its edge; the corpus is all plumbing")
     else:
         out.append(
-            f"{summary.learned_about_edge} of {summary.total} evaluations actually "
-            "tested a strategy's edge"
+            f"{summary.learned_about_edge} of the {tested} evaluations run so far "
+            "actually tested a strategy's edge"
         )
 
     if summary.promoted == 0 and summary.evaluated:
@@ -323,14 +356,20 @@ def render(rows: Sequence[LedgerRow], summary: LedgerSummary) -> str:
     if not rows:
         return "No strategies in research.strategies."
 
+    # 60, not 32. On the first production run the three momentum strategies all
+    # truncated to "Cross-sectional momentum (126/21" and were indistinguishable
+    # — which is exactly the family where telling them apart matters, since a
+    # revision and its parent differ only in the suffix.
+    width = 60
     header = (
-        f"{'STRATEGY':<34} {'VERDICT':<13} {'IR':>7} {'SHARPE':>7} {'FOLDS':>6} {'TRY':>4}  DIED OF"
+        f"{'STRATEGY':<{width}} {'VERDICT':<13} {'IR':>7} {'SHARPE':>7} "
+        f"{'FOLDS':>6} {'TRY':>4}  DIED OF"
     )
     lines = [header, "-" * len(header)]
     for row in rows:
-        name = row.name[:32] if row.name else row.strategy_id[:32]
+        name = (row.name or row.strategy_id)[:width]
         lines.append(
-            f"{name:<34} {row.verdict:<13} "
+            f"{name:<{width}} {row.verdict:<13} "
             f"{row.metric(row.information_ratio):>7} {row.metric(row.sharpe):>7} "
             f"{row.folds:>6} {row.attempts:>4}  {row.reason}"
         )

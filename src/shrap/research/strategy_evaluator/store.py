@@ -74,16 +74,30 @@ ALTER TABLE research.evaluations
 ADD COLUMN IF NOT EXISTS active_metrics JSONB NOT NULL DEFAULT '{}'::jsonb
 """.strip()
 
+# Added 2026-07-30. Fold consistency has been COMPUTED since PR #143 and
+# persisted nowhere: it appeared on one terminal line ("folds=3/6") and was
+# discarded. So the one measurement that answers "did the edge show up across
+# year-sets, or in a couple of them" could never be read back, compared between
+# strategies, or audited after the fact — which is most of what it was for.
+#
+# Defaults to '{}' for rows written before this column existed. Honestly "not
+# recorded", never "zero folds".
+ADD_EVALUATIONS_CONSISTENCY_METRICS_SQL = """
+ALTER TABLE research.evaluations
+ADD COLUMN IF NOT EXISTS consistency_metrics JSONB NOT NULL DEFAULT '{}'::jsonb
+""".strip()
+
 INSERT_EVALUATION_SQL = """
 INSERT INTO research.evaluations (
     evaluation_id, strategy_id, spec_hash, protocol_version, verdict, reason,
     anchor_required, anchor_fresh, total_trades, from_stage, to_stage,
-    aggregate_metrics, fold_metrics, stress_metrics, active_metrics, config,
-    card_path, trigger, created_at
+    aggregate_metrics, fold_metrics, stress_metrics, active_metrics,
+    consistency_metrics, config, card_path, trigger, created_at
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-    $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19
+    $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17::jsonb,
+    $18, $19, $20
 )
 """.strip()
 
@@ -166,6 +180,7 @@ class PostgresEvaluationStore:
             await conn.execute(CREATE_EVALUATIONS_TABLE_SQL)
             await conn.execute(ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL)
             await conn.execute(ADD_EVALUATIONS_ACTIVE_METRICS_SQL)
+            await conn.execute(ADD_EVALUATIONS_CONSISTENCY_METRICS_SQL)
             await conn.execute(CREATE_EVALUATIONS_STRATEGY_INDEX_SQL)
 
     async def insert_evaluation(
@@ -188,6 +203,7 @@ class PostgresEvaluationStore:
         active_metrics: dict[str, Any],
         config: dict[str, Any],
         card_path: str | None,
+        consistency_metrics: dict[str, Any] | None = None,
         trigger: str,
         created_at: datetime,
     ) -> None:
@@ -209,6 +225,7 @@ class PostgresEvaluationStore:
                 json.dumps(fold_metrics, separators=(",", ":")),
                 json.dumps(stress_metrics, separators=(",", ":")),
                 json.dumps(active_metrics, separators=(",", ":")),
+                json.dumps(consistency_metrics or {}, separators=(",", ":")),
                 json.dumps(config, separators=(",", ":")),
                 card_path,
                 trigger,
@@ -288,6 +305,7 @@ class PostgresEvaluatorReader:
 __all__ = [
     "ADD_EVALUATIONS_ACTIVE_METRICS_SQL",
     "ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL",
+    "ADD_EVALUATIONS_CONSISTENCY_METRICS_SQL",
     "CREATE_EVALUATIONS_TABLE_SQL",
     "CREATE_RESEARCH_SCHEMA_SQL",
     "INSERT_EVALUATION_SQL",

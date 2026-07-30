@@ -326,6 +326,7 @@ class EvaluationStorePort(Protocol):
         card_path: str | None,
         trigger: str,
         created_at: datetime,
+        consistency_metrics: dict[str, Any] | None = None,
     ) -> None: ...
 
 
@@ -782,6 +783,7 @@ class EvaluationPipeline:
             fold_metrics=outcome.fold_metrics,
             stress_metrics=outcome.stress_metrics,
             active_metrics=outcome.active_metrics,
+            consistency_metrics=outcome.consistency_metrics,
             config=outcome.config,
             card_path=str(card_path),
             trigger=outcome.trigger,

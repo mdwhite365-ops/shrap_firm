@@ -34,7 +34,8 @@ LEDGER_SQL = """
 WITH newest AS (
     SELECT DISTINCT ON (strategy_id)
         strategy_id, verdict, reason, protocol_version, total_trades,
-        aggregate_metrics, active_metrics, config, card_path, created_at
+        aggregate_metrics, active_metrics, consistency_metrics, config,
+        card_path, created_at
     FROM research.evaluations
     ORDER BY strategy_id, created_at DESC
 ),
@@ -50,7 +51,8 @@ SELECT
     s.created_at AS registered_at,
     t.attempts,
     n.verdict, n.reason, n.protocol_version, n.total_trades,
-    n.aggregate_metrics, n.active_metrics, n.card_path, n.created_at
+    n.aggregate_metrics, n.active_metrics, n.consistency_metrics,
+    n.card_path, n.created_at
 FROM research.strategies s
 LEFT JOIN newest n ON n.strategy_id = s.strategy_id
 LEFT JOIN tries t ON t.root = coalesce(s.lineage_root_id, s.strategy_id)

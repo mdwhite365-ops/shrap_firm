@@ -94,6 +94,7 @@ async def test_insert_evaluation_serializes_jsonb_and_binds_args() -> None:
         fold_metrics=[{"index": 0, "sharpe": 1.1}],
         stress_metrics={"sharpe": 0.6},
         active_metrics={"information_ratio": 0.9},
+        consistency_metrics={"folds_with_active_edge": 3, "n_folds": 6},
         config={"n_folds": 6},
         card_path="docs/strategies/evaluations/01STRAT/x.md",
         trigger="on-demand",
@@ -110,7 +111,46 @@ async def test_insert_evaluation_serializes_jsonb_and_binds_args() -> None:
     assert json.loads(str(args[11]))["trade_count"] == 210
     assert json.loads(str(args[12]))[0]["index"] == 0
     assert json.loads(str(args[14]))["information_ratio"] == 0.9
-    assert json.loads(str(args[15]))["n_folds"] == 6
+    # consistency_metrics was inserted before config, shifting it to $17.
+    # This is the renumbering hazard the next test guards against.
+    assert json.loads(str(args[15]))["folds_with_active_edge"] == 3
+    assert json.loads(str(args[16]))["n_folds"] == 6
+
+
+async def test_consistency_metrics_default_to_empty_rather_than_absent() -> None:
+    """Callers written before the column existed still bind a value.
+
+    ``{}`` is honestly "not recorded". Omitting the bind would break the
+    positional arity the test below pins.
+    """
+
+    pool = FakePool()
+    store = PostgresEvaluationStore(pool)
+
+    await store.insert_evaluation(
+        evaluation_id="01EVAL2",
+        strategy_id="01STRAT",
+        spec_hash="sha256:x",
+        protocol_version="0.2",
+        verdict="kill",
+        reason="no-edge",
+        anchor_required=False,
+        anchor_fresh=False,
+        total_trades=10,
+        from_stage="hypothesis",
+        to_stage="killed",
+        aggregate_metrics={},
+        fold_metrics=[],
+        stress_metrics={},
+        active_metrics={},
+        config={},
+        card_path=None,
+        trigger="on-demand",
+        created_at=datetime(2026, 7, 30, tzinfo=UTC),
+    )
+
+    args = next(a for sql, a in pool.conn.executed if sql == INSERT_EVALUATION_SQL)
+    assert json.loads(str(args[15])) == {}
 
 
 def test_insert_sql_placeholders_match_the_column_list() -> None:
