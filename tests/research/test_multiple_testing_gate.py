@@ -227,3 +227,75 @@ def test_a_strategy_far_above_any_adjusted_bar_always_promotes(attempts: int) ->
     result = _verdict(information_ratio=3.0, attempts=attempts)
 
     assert result.verdict == VERDICT_PROMOTE
+
+
+# --- a draw is not a row ------------------------------------------------------
+#
+# Mike ruled 2026-07-30 that killed attempts still count against the survivor.
+# The argument: a killed draw is still a draw, excluding failures makes a larger
+# search cheaper (inverting the rule), and repeated failures are evidence ABOUT
+# the survivor rather than noise around it.
+#
+# The refinement he agreed to: a STRUCTURAL death took no draw. A revision that
+# died on `insufficient-trades` or a dead anchor never sampled the hypothesis —
+# the plumbing failed before the question was asked — so charging the survivor
+# for it penalises a data problem rather than a search.
+
+
+def test_the_edge_reason_set_is_shared_with_the_ledger() -> None:
+    """One taxonomy, two readers. If they drift, the gate and the corpus view
+    disagree about what counts as having learned something."""
+
+    from shrap.research.ledger import EDGE_REASONS
+    from shrap.research.strategy_evaluator.store import SELECT_DRAW_COUNT_SQL
+
+    assert "reason = ANY" in SELECT_DRAW_COUNT_SQL
+    assert "worse-than-parent" in EDGE_REASONS
+    assert "no-active-edge" in EDGE_REASONS
+    assert "insufficient-trades" not in EDGE_REASONS
+    assert "anchor-not-live" not in EDGE_REASONS
+
+
+def test_the_query_requires_the_engine_to_have_run() -> None:
+    """`total_trades > 0` is the second half of "took a draw". A verdict that
+    looks like a finding but ran no computation is the confident-looking null
+    result recorded in shrap-first-verdict."""
+
+    from shrap.research.strategy_evaluator.store import SELECT_DRAW_COUNT_SQL
+
+    assert "total_trades > 0" in SELECT_DRAW_COUNT_SQL
+
+
+def test_re_evaluating_one_strategy_is_not_a_second_draw() -> None:
+    """DISTINCT strategy_id. Without it, re-running an evaluation would raise
+    the firm's own promote bar — so measuring again would make promotion
+    harder, which is absurd."""
+
+    from shrap.research.strategy_evaluator.store import SELECT_DRAW_COUNT_SQL
+
+    assert "count(DISTINCT strategy_id)" in SELECT_DRAW_COUNT_SQL
+
+
+def test_the_momentum_lineage_is_unchanged_by_the_refinement() -> None:
+    """Both momentum revisions died of EDGE reasons — `worse-than-parent` and
+    `no-edge` — so both took draws and the survivor still faces attempt 3.
+
+    That the refinement changes nothing in the case that prompted it is the
+    point: it is principled rather than convenient.
+    """
+
+    from shrap.research.ledger import EDGE_REASONS
+
+    assert {"worse-than-parent", "no-edge"} <= EDGE_REASONS
+    assert round(required_information_ratio(0.5, 3), 2) == 0.72
+
+
+def test_a_revision_of_a_structurally_dead_parent_starts_at_attempt_one() -> None:
+    """The refinement's whole purpose. The three probe strategies all died on
+    `insufficient-trades`; a revision of one of them has learned nothing from
+    it and should not pay for it."""
+
+    from shrap.research.ledger import STRUCTURAL_REASONS
+
+    assert "insufficient-trades" in STRUCTURAL_REASONS
+    assert required_information_ratio(0.5, 1) == 0.5

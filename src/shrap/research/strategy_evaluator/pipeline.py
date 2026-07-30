@@ -274,7 +274,7 @@ class SpecHygieneError(EvaluationError):
 class RegistryPort(Protocol):
     async def get(self, strategy_id: str) -> StrategyRecord | None: ...
 
-    async def attempts(self, strategy_id: str) -> int: ...
+    async def lineage(self, strategy_id: str) -> list[StrategyRecord]: ...
 
     async def transition(
         self,
@@ -301,6 +301,8 @@ class ReaderPort(Protocol):
     async def latest_information_ratio(
         self, strategy_id: str, protocol_version: str
     ) -> float | None: ...
+
+    async def count_draws(self, strategy_ids: Sequence[str]) -> int: ...
 
 
 class EvaluationStorePort(Protocol):
@@ -688,7 +690,13 @@ class EvaluationPipeline:
         # visible rather than silent.
         attempts = 1
         try:
-            attempts = await self._registry.attempts(strategy_id)
+            lineage = await self._registry.lineage(strategy_id)
+            siblings = [r.strategy_id for r in lineage if r.strategy_id != strategy_id]
+            # This evaluation is itself a draw, so the count starts at one and
+            # adds only siblings that genuinely sampled the hypothesis. A
+            # revision whose parent died on `insufficient-trades` is attempt 1:
+            # nothing was learned from that parent, so nothing is charged for it.
+            attempts = 1 + await self._reader.count_draws(siblings)
         except Exception:
             log.warning(
                 "strategy_evaluator.attempts_unavailable",

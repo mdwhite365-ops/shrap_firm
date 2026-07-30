@@ -23,6 +23,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any, Protocol
 
+from shrap.research.ledger import EDGE_REASONS
 from shrap.research.strategy_evaluator.strategy import BarSample
 
 CREATE_RESEARCH_SCHEMA_SQL = "CREATE SCHEMA IF NOT EXISTS research"
@@ -131,6 +132,28 @@ WHERE strategy_id = $1
   AND (active_metrics->>'n_periods')::int > 0
 ORDER BY created_at DESC
 LIMIT 1
+""".strip()
+
+# The multiple-testing denominator, counted as DRAWS rather than as rows.
+#
+# `registry.attempts` counted every strategy in a lineage, which over-counts:
+# a revision killed on `insufficient-trades` or a dead anchor never sampled the
+# hypothesis at all — the plumbing failed before the question was asked. Charging
+# the survivor for that penalises it for a data problem rather than for a search.
+#
+# A draw requires BOTH that the engine ran (total_trades > 0) and that the
+# verdict was a finding about edge rather than about the setup. The reason set
+# is `ledger.EDGE_REASONS`, so the two places that classify an outcome cannot
+# drift apart.
+#
+# DISTINCT because re-evaluating one strategy is the same draw measured again,
+# not a new one — otherwise a re-run would raise the firm's own promote bar.
+SELECT_DRAW_COUNT_SQL = """
+SELECT count(DISTINCT strategy_id) AS draws
+FROM research.evaluations
+WHERE strategy_id = ANY($1::text[])
+  AND total_trades > 0
+  AND reason = ANY($2::text[])
 """.strip()
 
 # Read-only. The Evaluator consumes these tables; other agents own them.
@@ -268,6 +291,29 @@ class PostgresEvaluatorReader:
             row = await conn.fetchrow(SELECT_TICKER_TIER_SQL, ticker)
         return None if row is None else str(row["tier"])
 
+    async def count_draws(self, strategy_ids: Sequence[str]) -> int:
+        """How many of these strategies actually sampled the hypothesis.
+
+        The honest multiple-testing denominator. Excludes lineage members whose
+        evaluation never reached a backtest or died on a setup defect: those
+        took no draw, so charging the survivor for them penalises a data problem
+        rather than a search.
+
+        Excludes the strategy being evaluated only if it has no prior edge
+        evaluation — a re-run is the same draw, and counting it would let the
+        firm raise its own bar by re-measuring.
+        """
+
+        if not strategy_ids:
+            return 0
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                SELECT_DRAW_COUNT_SQL, list(strategy_ids), sorted(EDGE_REASONS)
+            )
+        if row is None or row["draws"] is None:
+            return 0
+        return int(row["draws"])
+
     async def latest_information_ratio(
         self, strategy_id: str, protocol_version: str
     ) -> float | None:
@@ -310,6 +356,7 @@ __all__ = [
     "CREATE_RESEARCH_SCHEMA_SQL",
     "INSERT_EVALUATION_SQL",
     "SELECT_DAILY_BARS_SQL",
+    "SELECT_DRAW_COUNT_SQL",
     "SELECT_LATEST_ACTIVE_IR_SQL",
     "SELECT_LATEST_EVALUATION_AT_SQL",
     "SELECT_TICKER_TIER_SQL",
