@@ -41,6 +41,8 @@ _FEED = """<?xml version="1.0" encoding="UTF-8"?>
     <title>Illiquidity and the cross-section of expected returns</title>
     <summary>We document that expected returns rise with illiquidity.</summary>
     <published>2024-01-02T00:00:00Z</published>
+    <author><name>Yakov Amihud</name></author>
+    <author><name>Haim Mendelson</name></author>
     <link href="http://arxiv.org/abs/2401.01234v1" rel="alternate"/>
     <arxiv:primary_category term="q-fin.PM"/>
   </entry>
@@ -137,6 +139,7 @@ def _row(item_id: str = "arxiv-qfin:2401.01234v1") -> dict[str, Any]:
         "summary": "We document that expected returns rise with illiquidity.",
         "url": "http://arxiv.org/abs/2401.01234v1",
         "external_ts": datetime(2024, 1, 2, tzinfo=UTC),
+        "payload": {"primary_category": "q-fin.PM", "authors": ["Yakov Amihud"]},
     }
 
 
@@ -228,6 +231,7 @@ async def test_an_accepted_paper_reaches_the_literature_table_and_the_stream() -
     assert item.item_id == "arxiv-qfin:2401.01234v1"
     assert item.abstract.startswith("We document")
     assert item.category == "q-fin.PM"
+    assert item.authors == ("Yakov Amihud",)
     assert item.published_at == datetime(2024, 1, 2, tzinfo=UTC)
     assert reason == "illiquidity predicts returns"
     assert events.published[0]["stream"] == "research.literature.ingested"

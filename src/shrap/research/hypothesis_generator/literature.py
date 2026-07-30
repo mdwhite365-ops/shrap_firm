@@ -21,6 +21,7 @@ the half of a research funnel that normally evaporates.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,12 +46,19 @@ CREATE TABLE IF NOT EXISTS research.literature_items (
     abstract TEXT NOT NULL,
     url TEXT,
     published_at TIMESTAMPTZ,
+    authors JSONB NOT NULL DEFAULT '[]'::jsonb,
     accepted_reason TEXT,
     ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     proposed_at TIMESTAMPTZ,
     outcome TEXT,
     outcome_detail TEXT
 )
+""".strip()
+
+# Idempotent migration for tables created before authors were carried.
+ADD_LITERATURE_AUTHORS_COLUMN_SQL = """
+ALTER TABLE research.literature_items
+ADD COLUMN IF NOT EXISTS authors JSONB NOT NULL DEFAULT '[]'::jsonb
 """.strip()
 
 CREATE_LITERATURE_PENDING_INDEX_SQL = """
@@ -63,7 +71,7 @@ WHERE proposed_at IS NULL
 # literature, because the old items will still be there tomorrow and a claim
 # published this week is the one nobody has tested yet.
 SELECT_PENDING_LITERATURE_SQL = """
-SELECT item_id, source, category, title, abstract, url, published_at
+SELECT item_id, source, category, title, abstract, url, published_at, authors
 FROM research.literature_items
 WHERE proposed_at IS NULL
 ORDER BY published_at DESC NULLS LAST, item_id
@@ -72,9 +80,9 @@ LIMIT $1
 
 UPSERT_LITERATURE_SQL = """
 INSERT INTO research.literature_items (
-    item_id, source, category, title, abstract, url, published_at, accepted_reason
+    item_id, source, category, title, abstract, url, published_at, accepted_reason, authors
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
 ON CONFLICT (item_id) DO NOTHING
 """.strip()
 
@@ -96,18 +104,28 @@ class LiteratureItem:
     url: str | None = None
     published_at: datetime | None = None
     category: str | None = None
+    authors: tuple[str, ...] = ()
+    """From the feed's own metadata. Added 2026-07-30 after the first live run
+    refused a paper with *"No identifiable authors provided"* — the proposer is
+    required to cite an author and a year, and until this field existed it was
+    being asked to find them in an abstract, where they usually are not."""
 
     @property
     def citation_hint(self) -> str:
-        """What the model is shown as a starting point for the citation.
+        """The bibliographic facts the feed carries, shown to the model.
 
-        A hint, never the citation itself. The ``prior`` the proposer must
-        produce names authors and a year, and those come from reading the item
-        — filling them in from the item's metadata would let an item with no
-        attribution pass the one check that exists to catch freelancing.
+        Metadata only — never the ``prior`` itself. The proposer still has to
+        read the paper's *claim* and decide whether there is one, which is the
+        judgment this agent exists to make. Handing it the author list removes
+        an obstacle that was never part of that judgment: a citation cannot be
+        a test of anything when the citation data was withheld.
         """
 
         parts = [self.title]
+        if self.authors:
+            shown = ", ".join(self.authors[:6])
+            more = " et al." if len(self.authors) > 6 else ""
+            parts.append(f"authors: {shown}{more}")
         if self.published_at is not None:
             parts.append(f"published {self.published_at.date().isoformat()}")
         if self.url:
@@ -117,6 +135,16 @@ class LiteratureItem:
 
 def item_from_mapping(row: Mapping[str, Any]) -> LiteratureItem:
     published = row.get("published_at")
+    # asyncpg hands jsonb back as TEXT unless a codec is registered, and every
+    # fixture in this repo passes real lists — the shape the driver never
+    # produces. That mismatch took the research ledger down in production
+    # (PR #152), so decode defensively rather than trust the column type.
+    raw_authors = row.get("authors")
+    if isinstance(raw_authors, str):
+        try:
+            raw_authors = json.loads(raw_authors)
+        except (TypeError, ValueError):
+            raw_authors = []
     return LiteratureItem(
         item_id=str(row["item_id"]),
         source=str(row["source"]),
@@ -125,6 +153,7 @@ def item_from_mapping(row: Mapping[str, Any]) -> LiteratureItem:
         url=None if row.get("url") is None else str(row["url"]),
         published_at=published if isinstance(published, datetime) else None,
         category=None if row.get("category") is None else str(row["category"]),
+        authors=tuple(str(a) for a in raw_authors) if isinstance(raw_authors, list) else (),
     )
 
 
@@ -162,6 +191,7 @@ class PostgresLiteratureStore:
         async with self._pool.acquire() as conn:
             await conn.execute("CREATE SCHEMA IF NOT EXISTS research")
             await conn.execute(CREATE_LITERATURE_TABLE_SQL)
+            await conn.execute(ADD_LITERATURE_AUTHORS_COLUMN_SQL)
             await conn.execute(CREATE_LITERATURE_PENDING_INDEX_SQL)
 
     async def pending(self, limit: int) -> list[LiteratureItem]:
@@ -183,6 +213,7 @@ class PostgresLiteratureStore:
                 item.url,
                 item.published_at,
                 accepted_reason,
+                json.dumps(list(item.authors), separators=(",", ":")),
             )
 
     async def mark_processed(self, item_id: str, outcome: str, detail: str) -> None:

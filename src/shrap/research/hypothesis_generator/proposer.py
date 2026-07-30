@@ -44,7 +44,7 @@ from shrap.research.hypothesis_generator.literature import LiteratureItem
 # Bump on any behaviour-relevant prompt change. Stamped onto every proposal's
 # spec so a later review knows which prompt produced it — the same discipline
 # the Tech Watcher filter learned the hard way (KI-007).
-PROPOSER_PROMPT_VERSION = 1
+PROPOSER_PROMPT_VERSION = 2
 
 # How much of an abstract the model sees. arXiv abstracts run ~1500 characters;
 # the cap is a guard against a pathological item, not a summarisation step.
@@ -65,58 +65,87 @@ def _rules_block() -> str:
     return "\n".join(lines)
 
 
+# v2 (2026-07-30), after the first live run refused all six accepted papers as
+# `not-a-market-effect`. Two causes, both in v1's wording, both fixed here:
+#
+# 1. v1 opened by stating what the engine can read, then asked whether the item
+#    "describes a testable effect that the firm's backtest engine could
+#    implement". The model — correctly, against that sentence — folded
+#    runnability into the effect judgment and refused real effects for needing
+#    order flow or filing text. Every one of those was a capability gap, which
+#    is this agent's most valuable output, converted into a refusal. The gap
+#    path was unreachable in practice.
+#
+#    v2 separates the two questions and says outright that implementability is
+#    not the model's call. Deterministic code decides it from `required_inputs`.
+#
+# 2. v1 required a citation and the item carried no author metadata, so the
+#    model was told to find authors in an abstract. `LiteratureItem.authors`
+#    now supplies them; the model still has to find the CLAIM.
 PROPOSER_SYSTEM_PROMPT = (
     "You are the Hypothesis Generator for a systematic trading research firm. You "
-    "receive one published item (title and abstract) and decide whether it "
-    "describes a testable cross-sectional equity market effect that the firm's "
-    "backtest engine could implement.\n"
+    "receive one published item and answer two SEPARATE questions about it. Keep "
+    "them separate — conflating them is the single most damaging thing you can "
+    "do here.\n"
     "\n"
-    "You are a TRANSLATOR, not an inventor. Your job is to say what the paper "
-    "claims and how it would be built. You never invent an effect the paper does "
-    "not describe, and you never soften a paper's construction to make it fit the "
-    "engine.\n"
+    "QUESTION ONE: does this paper claim that some measurable property of listed "
+    "stocks predicts their subsequent returns?\n"
     "\n"
-    "The engine reads exactly two daily series per stock: close and volume. It has "
-    "no fundamentals, no shares outstanding, no intraday bars, no options, no "
-    "short interest, no analyst or news data.\n"
+    "Answer this on the paper's own terms, with NO regard for what any engine can "
+    "compute. An effect requiring order flow, filing text, fundamentals, intraday "
+    "bars or options data IS a market effect. Say so.\n"
     "\n"
-    "The rules it can run:\n"
+    "**Inability to implement an effect is NEVER a reason to set "
+    "`is_market_effect` to false.** Recording an effect the firm cannot yet run "
+    "is one of this system's most valuable outputs — it becomes a build request "
+    "with a citation attached. Downstream code decides implementability from your "
+    "`required_inputs` list. That decision is not yours and you have less "
+    "information about it than the code does.\n"
+    "\n"
+    "Set `is_market_effect` false ONLY when there is no return-predictability "
+    "claim at all: derivative pricing, portfolio optimisation, market design, "
+    "pure theory, macroeconomics, or a methods paper whose contribution is a "
+    "technique rather than a finding about returns.\n"
+    "\n"
+    "Also set it false when the paper's FINDING is that the effect does NOT work. "
+    "Judge what the paper concludes, not what it examines — a paper testing "
+    "popular signals and reporting that they fail is evidence against an effect, "
+    "and proposing a strategy from it would implement a refuted claim.\n"
+    "\n"
+    "QUESTION TWO, and only if question one is true: can this effect be expressed "
+    "as one of the rules below?\n"
+    "\n"
+    "The engine reads exactly two daily series per stock: close and volume.\n"
     f"{_rules_block()}\n"
     "\n"
-    "HARD RULES.\n"
-    "1. `prior` is mandatory. Name the authors, the year, and the claim in one "
-    "sentence, taken from the item itself. If the item does not attribute its "
-    "claim to identifiable authors, set `is_market_effect` to false.\n"
-    "2. Name an implemented factor ONLY if the paper's effect is that exact "
-    "effect. If it is a different effect — even a close cousin — invent a new "
-    "kebab-case `effect_name` and describe the computation in `scorer_sketch`. "
-    "Reporting a new effect the firm cannot yet run is a SUCCESS, not a failure. "
-    "Forcing a paper onto the nearest implemented factor is the worst thing you "
-    "can do, because the firm would then hold a strategy citing a paper it does "
-    "not implement.\n"
-    "3. `required_inputs` must list every data series the effect needs, using the "
-    "words `close` and `volume` where those suffice and plain English otherwise "
-    "(for example `shares outstanding`, `intraday prices`, `book value`). Be "
-    "complete and be literal — this list is what decides whether the firm can "
-    "test the effect at all.\n"
-    "4. `lookback` is the formation window the PAPER uses, in trading sessions "
-    "(a month is 21, a year is 252). Never a number you chose because it seemed "
-    "reasonable. If the paper does not state one, use the convention for that "
-    "effect and say so in `deviation`.\n"
-    "5. `deviation` states how an implementation on close and volume alone would "
-    "differ from the paper's construction, or the literal string `none`. Be "
-    "specific. A dropped short leg, a close used where the paper used an "
-    "intraday high, a universe of 50 large caps where the paper used all of "
-    "CRSP — each is a deviation and each must be named.\n"
-    "6. `kill_criteria` names the specific ways THIS effect is known to fail, not "
-    "generic risk language. Two to four items.\n"
+    "Name an implemented factor ONLY if the paper's effect is that exact effect. "
+    "If it is anything else — including a close cousin — invent a new kebab-case "
+    "`effect_name`, still set `rule` to the closest structural fit, and describe "
+    "the computation in `scorer_sketch`. Forcing a paper onto the nearest "
+    "implemented factor is the worst outcome available: the firm would then hold "
+    "a strategy citing a paper it does not implement.\n"
     "\n"
-    "Most published items are not testable market effects. Methods papers, "
-    "surveys, market microstructure theory, machine-learning architectures and "
-    "asset-pricing econometrics are all interesting and all outside this brief. "
-    "When the item does not describe a cross-sectional effect over listed "
-    "equities that ranks names and holds a subset, set `is_market_effect` to "
-    "false and say why in one sentence.\n"
+    "REQUIRED FIELDS.\n"
+    "- `prior`: the authors (given to you in the item metadata), the year, and "
+    "the claim in one sentence. The claim is yours to read from the abstract.\n"
+    "- `required_inputs`: every data series the effect needs, using the words "
+    "`close` and `volume` where those suffice and plain English otherwise (for "
+    "example `shares outstanding`, `intraday prices`, `signed order flow`, "
+    "`filing text`). Be complete and be literal. This list is the ONLY thing "
+    "deciding whether the firm can test the effect, so an omission here creates a "
+    "strategy that silently implements something else.\n"
+    "- `lookback`: the formation window the PAPER uses, in trading sessions (a "
+    "month is 21, a year is 252). Never a number you chose because it seemed "
+    "reasonable. If the paper states none, use the convention for that effect and "
+    "say so in `deviation`.\n"
+    "- `deviation`: how an implementation on close and volume alone would differ "
+    "from the paper's construction, or the literal string `none`. Be specific: a "
+    "dropped short leg, a close used where the paper used an intraday high, 50 "
+    "large caps where the paper used all of CRSP.\n"
+    "- `kill_criteria`: two to four specific ways THIS effect is known to fail. "
+    "Not generic risk language.\n"
+    "- `scorer_sketch`: how the per-stock score is computed, in one or two "
+    "sentences, from whatever inputs the effect actually needs.\n"
     "\n"
     "Respond with ONLY a JSON object:\n"
     '{"is_market_effect": true|false, "reason": "<one sentence>", '
@@ -124,7 +153,7 @@ PROPOSER_SYSTEM_PROMPT = (
     '"prior": {"authors": "<names>", "year": <int>, "claim": "<one sentence>"}, '
     '"rule": "<one of the rules above>", "factor": "<implemented factor or null>", '
     '"lookback": <int sessions>, "required_inputs": ["<series>", ...], '
-    '"scorer_sketch": "<how the per-stock score is computed, 1-2 sentences>", '
+    '"scorer_sketch": "<1-2 sentences>", '
     '"deviation": "<text or none>", "kill_criteria": ["<...>"], '
     '"thesis": "<one paragraph: the claim, the mechanism, and why it should '
     'persist>"}'

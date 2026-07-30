@@ -139,6 +139,26 @@ def _parse_ts(value: str | None) -> datetime | None:
         return None
 
 
+def _arxiv_authors(entry: ET.Element) -> list[str]:
+    """Author names from an arXiv entry.
+
+    Dropped until 2026-07-30, and the omission was load-bearing downstream: the
+    Hypothesis Generator refuses any proposal that cannot name an author and a
+    year, and it was being asked to find them in an abstract. On the first live
+    run it refused a paper with *"No identifiable authors provided"* — correctly,
+    against a prompt that had never been given any.
+    """
+
+    names: list[str] = []
+    for author in entry.findall(f"{_ATOM_NS}author"):
+        name = author.find(f"{_ATOM_NS}name")
+        if name is not None and name.text:
+            text = " ".join(name.text.split())
+            if text and text not in names:
+                names.append(text)
+    return names
+
+
 def _parse_feed(xml_text: str, context: str) -> list[ET.Element]:
     try:
         root = ET.fromstring(xml_text)
@@ -282,7 +302,11 @@ class ArxivSource:
             summary=_text(entry, "summary"),
             url=_link_href(entry) or entry_id,
             external_ts=_parse_ts(published),
-            payload={"entry_id": entry_id, "primary_category": primary_category},
+            payload={
+                "entry_id": entry_id,
+                "primary_category": primary_category,
+                "authors": _arxiv_authors(entry),
+            },
         )
 
 

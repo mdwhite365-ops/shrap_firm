@@ -96,7 +96,7 @@ LITERATURE_SYSTEM_PROMPT = (
 # must stay in step: an item in neither pool is never scored at all, and an item
 # in both is scored twice under prompts that disagree by design.
 SELECT_UNFILTERED_LITERATURE_SQL = """
-SELECT item_id, source, kind, title, summary, url, external_ts
+SELECT item_id, source, kind, title, summary, url, external_ts, payload
 FROM research.raw_source_items
 WHERE filtered_at IS NULL
   AND source = $1
@@ -194,6 +194,28 @@ class LiteratureReport:
         return "\n".join(lines)
 
 
+def _authors(payload: Any) -> tuple[str, ...]:
+    """Author names off the ingested payload, defensively.
+
+    asyncpg hands jsonb back as TEXT unless a codec is registered — the shape
+    no test fixture produces and every production row does (PR #152). Items
+    ingested before authors were captured simply have none, which is a real
+    state: the proposer then has nothing to cite and refuses, correctly.
+    """
+
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (TypeError, ValueError):
+            return ()
+    if not isinstance(payload, Mapping):
+        return ()
+    names = payload.get("authors")
+    if not isinstance(names, list):
+        return ()
+    return tuple(" ".join(str(n).split()) for n in names if str(n).strip())
+
+
 def _item_prompt(title: str, summary: str | None) -> str:
     return f"Title: {title}\nAbstract: {(summary or '')[:4000] or '(no abstract)'}"
 
@@ -268,6 +290,7 @@ async def literature_pass(
                     url=None if row["url"] is None else str(row["url"]),
                     published_at=external_ts if isinstance(external_ts, datetime) else None,
                     category=None if row["kind"] is None else str(row["kind"]),
+                    authors=_authors(row["payload"]),
                 ),
                 verdict.reason,
             )
