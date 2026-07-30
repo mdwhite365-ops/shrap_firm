@@ -49,6 +49,7 @@ from shrap.research.hypothesis_generator.expressible import (
     classify,
     hypothesis_key,
     missing_inputs,
+    rank_gaps,
 )
 from shrap.research.hypothesis_generator.literature import (
     OUTCOME_CAPABILITY_GAP,
@@ -235,7 +236,15 @@ class HypothesisGenerator:
             outcomes.append(outcome)
             if not self._dry_run:
                 await self._literature.mark_processed(item.item_id, outcome.outcome, outcome.detail)
-        queue = render_queue(await self._gaps.ranked())
+        # A dry run writes no gaps, so reading the store would report the
+        # durable queue — which is empty, and printed directly beneath a list of
+        # the gaps just found. It said "no effect has reached the capability
+        # check yet" under four of them on the first clean run (2026-07-30).
+        # Show what this pass found instead; the store is the right source only
+        # when this pass actually contributed to it.
+        found = [o.gap for o in outcomes if o.gap is not None]
+        ranked = rank_gaps(found) if self._dry_run else await self._gaps.ranked()
+        queue = render_queue(ranked)
         return GenerationReport(outcomes=tuple(outcomes), queue=queue, dry_run=self._dry_run)
 
     async def _one(self, item: LiteratureItem, corpus: _Corpus) -> ItemOutcome:

@@ -759,3 +759,45 @@ def test_the_empty_queue_does_not_claim_everything_was_runnable() -> None:
 
     assert "no effect has reached the capability check" in text
     assert "was runnable" not in text
+
+
+async def test_a_dry_run_reports_the_gaps_it_found_not_the_empty_store() -> None:
+    """A dry run writes no gaps, so reading the durable queue printed "no
+    effect has reached the capability check yet" directly beneath a list of
+    four gaps it had just found (first clean run, 2026-07-30)."""
+
+    generator, _, gaps, _ = _generator(
+        _FakeLLM(_response(effect_name="amihud-illiquidity", factor="amihud-illiquidity")),
+        dry_run=True,
+    )
+
+    report = await generator.run([_item()])
+
+    assert report.count(OUTCOME_CAPABILITY_GAP) == 1
+    assert "amihud-illiquidity" in report.queue
+    assert "has reached the capability check" not in report.queue
+    assert gaps.gaps == []  # still wrote nothing
+
+
+async def test_a_committed_run_reports_the_durable_queue() -> None:
+    """Not the pass's own findings — the point of the queue is that the same
+    gap cited by six papers over six weeks outranks one cited once."""
+
+    store = InMemoryGapStore()
+    store.gaps.append(
+        CapabilityGap(
+            effect_name="from-an-earlier-run",
+            kind=OUTCOME_MISSING_SCORER,
+            missing=(),
+            sketch="s",
+            citation=GapCitation("old", "t", None, "p"),
+        )
+    )
+    generator, _, _, _ = _generator(
+        _FakeLLM(_response(effect_name="new-effect", factor="new-effect")), gaps=store
+    )
+
+    report = await generator.run([_item()])
+
+    assert "from-an-earlier-run" in report.queue
+    assert "new-effect" in report.queue
