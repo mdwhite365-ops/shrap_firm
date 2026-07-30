@@ -318,3 +318,86 @@ def test_a_json_scalar_where_an_object_was_expected_is_ignored() -> None:
     row = row_from_mapping({"strategy_id": "01ABC", "verdict": "kill", "active_metrics": "42"})
 
     assert row.information_ratio is None
+
+
+# --- what the first production run got wrong ---------------------------------
+
+
+def _queued(name: str = "q") -> LedgerRow:
+    """A strategy proposed and not yet tested — verdict 'unevaluated', no reason."""
+
+    return row_from_mapping({"strategy_id": "01" + name.upper(), "name": name})
+
+
+def test_a_queued_strategy_is_not_a_death() -> None:
+    """The first production run reported "9 of 12 died of setup defects" when
+    three had failed and six were waiting. A ledger that inflates the failure
+    count argues for loosening a gate nothing has been measured against."""
+
+    row = _queued()
+
+    assert row.is_unevaluated
+    assert not row.is_structural
+
+
+def test_queued_strategies_are_excluded_from_every_failure_count() -> None:
+    rows = [
+        _row(name="a", reason="insufficient-trades", trades=20),
+        _row(name="b", verdict="hold-for-data", reason="below-sharpe-floor"),
+        _queued("c"),
+        _queued("d"),
+    ]
+
+    summary = summarise(rows, sharpe_floor=1.0, ir_floor=0.5)
+
+    assert summary.total == 4
+    assert summary.queued == 2
+    assert summary.structural_deaths == 1
+    assert summary.edge_deaths == 1
+
+
+def test_the_empty_reason_never_wins_most_common_outcome() -> None:
+    """It did on the first run: "most common outcome:  (6 of 12)" — the absence
+    of a result reported as the leading result."""
+
+    rows = [_queued(f"q{i}") for i in range(6)]
+    rows += [_row(name="a", reason="insufficient-trades", trades=20)]
+
+    notes = " ".join(observations(summarise(rows, sharpe_floor=1.0, ir_floor=0.5)))
+
+    assert "most common outcome:  " not in notes
+
+
+def test_the_queue_is_reported_rather_than_hidden() -> None:
+    rows = [_queued("a"), _queued("b"), _row(name="c", reason="no-active-edge")]
+
+    notes = " ".join(observations(summarise(rows, sharpe_floor=1.0, ir_floor=0.5)))
+
+    assert "2 of 3 are queued" in notes
+
+
+def test_the_denominator_for_findings_excludes_the_queue() -> None:
+    """ "3 of 12 tested a strategy's edge" understates it when 6 of the 12 have
+    not run. The honest denominator is what was actually evaluated."""
+
+    rows = [_row(name="a", reason="no-active-edge")] + [_queued(f"q{i}") for i in range(5)]
+
+    notes = " ".join(observations(summarise(rows, sharpe_floor=1.0, ir_floor=0.5)))
+
+    assert "of the 1 evaluations run so far" in notes
+
+
+def test_fold_consistency_is_read_from_its_own_column() -> None:
+    """It has been computed since PR #143 and persisted nowhere, so the ledger's
+    FOLDS column was n/a for every row on the first run."""
+
+    row = row_from_mapping(
+        {
+            "strategy_id": "01ABC",
+            "verdict": "hold-for-data",
+            "total_trades": 2507,
+            "consistency_metrics": '{"folds_with_active_edge": 3, "n_folds": 6}',
+        }
+    )
+
+    assert row.folds == "3/6"

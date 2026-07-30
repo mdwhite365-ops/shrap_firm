@@ -452,3 +452,52 @@ silent decisions:
   benchmark, five-year default lookback.
 
 *End of protocol v0.2.*
+
+
+## Open question: the benchmark is long-only, and some strategies are not
+
+**Raised 2026-07-30. Not decided — Mike owns it.**
+
+The information ratio is measured against equal-weight buy-and-hold of the
+strategy's own panel, which is a **100% long** book. That is the right benchmark
+for a long-only strategy: it asks "did selecting beat owning everything?"
+
+It is not obviously right for a **market-neutral** one. A dollar-neutral
+long/short book runs ~0% net exposure, so in a rising market it lags a long-only
+benchmark by roughly the market's return — regardless of whether its factor
+works. The IR then measures *"you were not long enough"*, which is a fact about
+the construction rather than about the skill.
+
+Two measurements on 2026-07-30 show the size of it:
+
+| Strategy | Sharpe | IR |
+|---|---|---|
+| momentum, long/short | −0.079 | **−0.599** |
+| reversal 5/1, long/short | −0.678 | **−1.329** |
+
+Both were correctly killed, and **on the absolute Sharpe, not the IR** — a
+dollar-neutral book that works should have positive Sharpe on its own, and
+neither did. So no verdict was wrong. But the IR line on those two evaluations
+does not mean what it means everywhere else in this document, and a future
+long/short strategy that genuinely works would still post a deeply negative IR
+here.
+
+Options, none taken:
+
+1. **Leave it.** The absolute Sharpe gate already catches market-neutral
+   failures, and one benchmark for all strategies keeps comparisons simple.
+   Cost: the IR number is misleading on a class of strategy, and the promote
+   gate uses IR.
+2. **Benchmark by construction.** Long-only strategies against equal-weight
+   buy-and-hold; market-neutral strategies against cash or a risk-free rate.
+   Cost: two benchmarks means cross-strategy IR comparisons stop being
+   apples-to-apples, which is what the ledger's corpus view depends on.
+3. **Beta-adjust the benchmark.** Scale the benchmark's return by the strategy's
+   realised net exposure. Cost: an estimated beta in the denominator of the
+   promote gate, which is a lot of machinery in a load-bearing place.
+
+Until this is decided, **read the IR of any strategy with a short leg as
+contaminated by construction**, and let the absolute Sharpe carry the verdict.
+The Runner cannot open a short anyway (`_invested` treats a negative weight as
+flat), so no such strategy can trade today — which is why this is an open
+question rather than a defect.

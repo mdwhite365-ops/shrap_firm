@@ -104,6 +104,47 @@ did I run" but "which containers are running code this change touched."
 `docker compose config --services` lists every service; grep the compose file
 for the Dockerfile you changed to find all of its consumers.
 
+### 1c. Two services can share a Dockerfile and still be separate build targets
+
+`strategy-evaluator` (tools profile, on demand) and `strategy-evaluator-trigger`
+(always-on) are built from the **same Dockerfile** and run the **same pipeline**.
+They are two compose services, so building one leaves the other untouched.
+
+This is §1b's lesson inverted. That one says *build the profile too*; this one
+says **the profiled build does not cover the always-on service that shares its
+image.**
+
+It bit on 2026-07-30 and was invisible for hours, because a stale evaluator does
+not error — it produces confident, well-formed, **wrong** verdicts:
+
+- the long/short momentum strategy evaluated to a Sharpe of `0.782248971076797`,
+  identical to the long-only original to fifteen decimal places. The image
+  predated PR #145, so `long_short` was parsed out of the spec and ignored, and
+  a two-sided rule was measured as a one-sided one.
+- the standdown revision returned `hold-for-data` where PR #144 requires
+  `kill (worse-than-parent)`. That gate was not in the image either.
+
+Both rows persisted. `latest_information_ratio` reads the newest row for the
+parent comparison, so a wrong verdict propagates into the *next* strategy's.
+
+**After any research-code change, rebuild both:**
+
+```bash
+cd /mnt/Archive/shrap/shrap_firm/infra
+sudo docker compose --profile tools build strategy-evaluator
+sudo docker compose up -d --build --force-recreate strategy-evaluator-trigger
+```
+
+**Verify the trigger specifically.** The compose summary is not evidence — a
+container left on the old image prints `Running 0.0s` rather than `Started`.
+Read its startup log, or re-run one known strategy through the tools CLI with
+`--dry-run` and check the numbers moved.
+
+**The general rule:** an always-on service that shares an image with a tools
+service is the one that will be forgotten, because the tools service is the one
+you type commands at. If a verdict looks *identical* to another strategy's,
+suspect the image before suspecting the data.
+
 ## 2. Do not override the container user
 
 Tools containers run as `USER shrap` (uid **10001**), and bind-mounted output
