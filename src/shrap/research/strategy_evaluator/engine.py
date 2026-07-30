@@ -276,6 +276,22 @@ class ConsistencyMetrics:
     worst_fold_ir: float
     fold_ir_mean: float
     fold_ir_stdev: float
+    fold_information_ratios: tuple[float, ...] = ()
+    """Every fold's information ratio, in order, oldest first.
+
+    Added 2026-07-30 after discovering the firm computed this sequence on every
+    evaluation and kept only its mean and standard deviation. That discarded the
+    answer to the question the promote floor most depends on — **does an early
+    fold's information ratio predict a late one's?** If it does not, the metric
+    has no persistence, the ranking is noise, and no floor is the right floor.
+
+    The loss was irreversible for the twelve strategies already killed: kills are
+    terminal and ``evaluate`` refuses any non-hypothesis strategy, so those runs
+    cannot be reproduced. Everything evaluated from here carries the sequence.
+
+    Ordered, because order is the whole point — a set of six numbers answers
+    "how dispersed" and only a sequence answers "does earlier predict later".
+    """
 
     @property
     def consistency(self) -> float:
@@ -298,6 +314,7 @@ class ConsistencyMetrics:
             "fold_ir_mean": self.fold_ir_mean,
             "fold_ir_stdev": self.fold_ir_stdev,
             "consistency": self.consistency,
+            "fold_information_ratios": list(self.fold_information_ratios),
         }
 
     @classmethod
@@ -319,6 +336,7 @@ class ConsistencyMetrics:
             worst_fold_ir=min(irs),
             fold_ir_mean=mean,
             fold_ir_stdev=stdev,
+            fold_information_ratios=tuple(irs),
         )
 
 
