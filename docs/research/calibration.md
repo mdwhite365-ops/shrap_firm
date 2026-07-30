@@ -41,6 +41,7 @@ Editing rules:
 - (b) Bottleneck Scout forward-test ledger
 - (c) Infrastructure Mapper graph-coverage metric
 - (d) Strategy Evaluator promotion-rate vs kill-rate over time
+- (e) Model Registry eval ledger
 
 Each section appends; none is overwritten.
 
@@ -216,6 +217,77 @@ without naming a number; Mike should set an explicit target band (e.g.
 controls are too loose; <1% suggests the Hypothesis Generator is
 mis-specifying trades from valid Scout signals") so the metric has a
 reference line to read against.
+
+---
+
+## (e) Model Registry eval ledger
+
+Where every shadow-eval run lands, per ADR-0009 §Update Protocol step 3.
+This section is created by the harness card (2026-07-30) and, as ADR-0009
+predicted, **it is created empty: no model eval has ever been run.** Every
+model in `docs/infrastructure/llm-registry.md` was chosen by reasoning, and
+one of them was chosen twice — the first `qwen2.5:9b` tag never existed.
+That is the gap this section exists to close.
+
+**How a run gets here.** `shrap-model-eval` renders the block; the operator
+appends it (`--out docs/research/calibration.md`) and commits it in the same
+PR that proposes the registry change, per step 4. A *rejected* candidate is
+recorded here too — a ledger that only contains promotions is the curated
+kind this file's editing rules forbid.
+
+```bash
+docker compose exec tech-watcher shrap-model-eval \
+    --models gpt-oss:20b-cloud,kimi-k2.5 --sample 30 --repeats 2 --dry-run
+```
+
+**What the harness measures, all mechanically:**
+
+| Metric | Reads as |
+|---|---|
+| schema adherence | did the response parse into a valid verdict at all — a model that fails the strict-JSON contract is out regardless of judgement |
+| self-consistency | same item, same model, twice. A model that disagrees with itself cannot hold a gate |
+| agreement with incumbent | overlap with the recorded verdict. **Not** a quality measure — it localizes where to look |
+| says-relevant rate | the model's own base rate, against a corpus that is ~99% negative |
+| latency p50/p95 | what it costs in wall clock |
+
+**What it does not do: decide.** Nothing in the harness knows which model was
+*right*. Agreement is not correctness — two models can agree and both be
+wrong, which is the more likely failure on a corpus this lopsided. Every run
+ends in a disagreement list, and adjudicating it is Mike's, per ADR-0009's
+"scored by Mike". An LLM judge is deliberately not in v1: it would require
+choosing a judge model, and the premise of this section is that model choices
+need evidence.
+
+**Sampling is stratified, and this is load-bearing.** The filter corpus runs
+roughly 99% not-relevant. A uniform 30-item sample is ~30 rejections, every
+model agrees on all of them, and the report reads 100% agreement while having
+measured nothing. The harness takes every available incumbent-relevant item
+up to half the budget and fills the rest from negatives. If a run reports zero
+positives in its sample, the report says so and the numbers are a floor rather
+than a ranking.
+
+**Pass criterion (ADR-0009 step 2, stated once here so runs are comparable).**
+A candidate is promotable when it (1) matches or beats the incumbent on schema
+adherence, (2) is at least as self-consistent, (3) shows no material latency
+regression for the tier's role, and (4) wins the adjudicated disagreements on
+Mike's read. Criterion 4 is the one that decides; 1–3 are disqualifiers, not
+recommendations. **Cost is a separate gate:** Ollama bills GPU-time against
+shared session and weekly caps, so a candidate that wins on quality can still
+be wrong for a high-volume bulk tier and right for a low-volume judgement one.
+Record which tier the run was for.
+
+### Runs
+
+*(none yet — this section was created empty on 2026-07-30 with the harness.
+The first run should compare the `local-classification` incumbent
+`gpt-oss:20b-cloud` against at least one higher-tier candidate, and its result
+belongs here whether it promotes anything or not.)*
+
+**[MIKE INPUT REQUIRED]** Which candidates to run first, and confirmation that
+their Ollama **usage tier** is inside the current subscription. An
+`OLLAMA_API_KEY` in `.env` establishes that requests authenticate, not that
+they are permitted — conflating the two is what got `kimi-k3:cloud` reverted
+once already.
 
 ---
 
