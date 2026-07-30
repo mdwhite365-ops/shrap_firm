@@ -42,9 +42,12 @@ from shrap.research.strategy_seed.probe_strategies import (
 from shrap.research.strategy_seed.technical_strategies import (
     MOMENTUM_SEEDS,
     MOMENTUM_SEEDS_BY_KEY,
+    REVERSAL_SEEDS,
+    REVERSAL_SEEDS_BY_KEY,
     TECHNICAL_SEEDS,
     TECHNICAL_SEEDS_BY_KEY,
     momentum_record,
+    reversal_record,
     technical_record,
 )
 
@@ -233,6 +236,57 @@ async def load_momentum(registry: RegistryPort, key: str) -> str:
     )
 
 
+async def load_reversal(registry: RegistryPort, key: str) -> str:
+    """Insert one short-horizon reversal seed at ``hypothesis``, idempotently.
+
+    Same universe and same machinery as the momentum seeds — the comparison
+    between the two rules is the point, and a different universe would confound
+    it with a selection difference.
+    """
+
+    seed = REVERSAL_SEEDS_BY_KEY.get(key)
+    if seed is None:
+        available = ", ".join(sorted(REVERSAL_SEEDS_BY_KEY))
+        raise SystemExit(f"refused: unknown reversal seed {key!r}; available: {available}")
+    record = reversal_record(seed)
+    existing = await registry.get_by_spec_hash(record.spec_hash)
+    if existing is not None:
+        return (
+            f"already present: {existing.strategy_id} ({existing.name}) "
+            f"status={existing.status} — skipped (no duplicate)"
+        )
+    inserted = await registry.register(
+        record,
+        reason="Mike-seed: short-horizon cross-sectional reversal over the launch universe",
+        actor=SEED_ACTOR,
+        trigger_kind=SEED_TRIGGER_KIND,
+    )
+    if not inserted:
+        return f"already present: {record.strategy_id} — skipped (strategy_id conflict)"
+    tradeable = (
+        "NOT TRADEABLE YET — the Runner cannot open a short; do not assign an account"
+        if seed.long_short
+        else "tradeable on the paper path, but it is a documented DEVIATION from the "
+        "long/short construction the prior measures"
+    )
+    return (
+        f"loaded: {record.strategy_id} ({record.name}) at status={record.status} "
+        f"over {len(seed.tickers)} tickers; evaluate with "
+        f"`shrap-strategy-evaluate --strategy-id {record.strategy_id} --dry-run`\n"
+        f"NOTE: {tradeable}."
+    )
+
+
+def render_reversal_catalogue() -> str:
+    """List the available reversal seeds without touching the database."""
+
+    lines = [f"Reversal seeds: {len(REVERSAL_SEEDS)}"]
+    for s in REVERSAL_SEEDS:
+        leg = "long/short" if s.long_short else "long only"
+        lines.append(f"  {s.key}  {s.strategy_id}  {s.name}  [{leg}]")
+    return "\n".join(lines)
+
+
 def render_momentum_catalogue() -> str:
     """List the available cross-sectional seeds without touching the database."""
 
@@ -270,6 +324,8 @@ async def _run(args: argparse.Namespace) -> str:
         return render_technical_catalogue()
     if args.action == "list-momentum":
         return render_momentum_catalogue()
+    if args.action == "list-reversal":
+        return render_reversal_catalogue()
     pool = await create_asyncpg_pool(args.dsn)
     registry = PostgresStrategyRegistry(pool)
     try:
@@ -283,6 +339,8 @@ async def _run(args: argparse.Namespace) -> str:
             return await load_technical(registry, args.key)
         if args.action == "load-momentum":
             return await load_momentum(registry, args.key)
+        if args.action == "load-reversal":
+            return await load_reversal(registry, args.key)
         # list
         return render_list(await registry.list_all())
     finally:
@@ -328,6 +386,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     momentum.add_argument("key", choices=sorted(MOMENTUM_SEEDS_BY_KEY), help="Momentum seed key")
     sub.add_parser("list-momentum", help="Show available momentum seeds (no database access)")
+
+    reversal = sub.add_parser(
+        "load-reversal", help="Insert a short-horizon reversal seed (idempotent)"
+    )
+    reversal.add_argument("key", choices=sorted(REVERSAL_SEEDS_BY_KEY), help="Reversal seed key")
+    sub.add_parser("list-reversal", help="Show available reversal seeds (no database access)")
     sub.add_parser("list", help="Show research.strategies rows (id, name, archetype, status)")
     return parser
 

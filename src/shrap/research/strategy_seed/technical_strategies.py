@@ -54,10 +54,12 @@ from typing import Any, NamedTuple
 
 from shrap.research.strategy_evaluator.cross_sectional import (
     MOMENTUM_PARAM_BOUNDS,
+    REVERSAL_PARAM_BOUNDS,
 )
 from shrap.research.strategy_evaluator.pipeline import (
     ARCHETYPE_TECHNICAL_CATALYST,
     RULE_CROSS_SECTIONAL_MOMENTUM,
+    RULE_CROSS_SECTIONAL_REVERSAL,
 )
 from shrap.research.strategy_evaluator.reference_strategy import (
     DEFAULT_TARGET_WEIGHT,
@@ -293,6 +295,37 @@ def momentum_kill_criteria() -> list[str]:
     return [*_MOMENTUM_KILL_CRITERIA, *_KILL_CRITERIA[1:]]
 
 
+# The first of these is the whole card. This strategy exists to cover the two
+# folds momentum lost, and an aggregate that looks respectable while losing
+# those same two folds has falsified the hypothesis regardless of its headline
+# number. Written before the run so the result cannot be read to fit.
+_REVERSAL_KILL_CRITERIA: tuple[str, ...] = (
+    "it does not beat the benchmark in the folds momentum lost. Momentum's "
+    "measured fold information ratios (2026-07-29) were 2023 -0.457 and 2026 "
+    "-0.241, both in modestly-positive years; those are the two this rule is "
+    "for. Winning elsewhere and losing there means it is a second copy of the "
+    "same bet, not a complement, whatever its aggregate says",
+    "its fold information ratios correlate POSITIVELY with momentum's. A "
+    "complementary strategy earns when the other does not; a positive "
+    "correlation means the firm has doubled one exposure while believing it "
+    "diversified",
+    "short-horizon reversal does not survive costs at this turnover — a 5-day "
+    "formation rotated across 50 names trades far harder than the 126/21 rule, "
+    "and reversal profits are small per name. This is the likeliest way it "
+    "dies, and the reason the honest test is net of the cost model rather than "
+    "gross",
+    "the effect is a liquidity premium the firm cannot actually harvest: "
+    "reversal profits concentrate in the names hardest to trade, and the "
+    "evaluator's ADV filter may be admitting fills that would not exist",
+)
+
+
+def reversal_kill_criteria() -> list[str]:
+    """Rule-specific falsifiers plus the protocol's own gates."""
+
+    return [*_REVERSAL_KILL_CRITERIA, *_KILL_CRITERIA[1:]]
+
+
 def _momentum_spec(seed: MomentumSeed) -> dict[str, Any]:
     return {
         "rule": RULE_CROSS_SECTIONAL_MOMENTUM,
@@ -355,6 +388,153 @@ def momentum_record(seed: MomentumSeed) -> StrategyRecord:
 
 
 MOMENTUM_SEEDS_BY_KEY: dict[str, MomentumSeed] = {s.key: s for s in MOMENTUM_SEEDS}
+
+
+class ReversalSeed(NamedTuple):
+    """One short-horizon cross-sectional reversal strategy over the universe."""
+
+    key: str
+    strategy_id: str
+    name: str
+    tickers: tuple[str, ...]
+    lookback: int
+    skip: int
+    top_n: int
+    thesis: str
+    long_short: bool = False
+    parent_strategy_id: str | None = None
+    revision_reason: str | None = None
+    derived_from_evaluation_id: str | None = None
+
+
+# Two roots, not a parent and a revision. They express the same documented
+# effect at two different fidelities, and neither is derived from the other's
+# result — calling one a revision of the other would put a construction choice
+# into the lineage as though it were a response to evidence.
+REVERSAL_SEEDS: tuple[ReversalSeed, ...] = (
+    ReversalSeed(
+        key="xs-reversal-5-1-10-longshort",
+        strategy_id="01KYRECMH8WZ2WZYB4ZE217E37",
+        name="Cross-sectional reversal (5/1, top 10) — long/short",
+        tickers=_MOMENTUM_TICKERS,
+        # Same universe as the momentum seeds, deliberately. The comparison
+        # between the two rules is the point of the card, and a different
+        # universe would confound it with a selection difference.
+        lookback=5,
+        skip=1,
+        top_n=10,
+        long_short=True,
+        thesis=(
+            "Short-horizon cross-sectional reversal: names that underperformed their "
+            "peers over the last week tend to bounce back over the following days. "
+            "The documented prior is Lehmann (1990) and Lo & MacKinlay (1990) — "
+            "short-term contrarian profits in the cross-section — and this is the "
+            "textbook long/short construction, long the losers and short the winners, "
+            "dollar-neutral. The one-day skip is the standard defence against buying "
+            "a bid-ask bounce rather than a real dislocation, not a tuned value. "
+            "This strategy exists to cover a MEASURED gap: the firm's momentum rule "
+            "lost the 2023 and 2026 folds (IR -0.457 and -0.241), both quiet, "
+            "modestly-positive years where it churned to lag a basket that sat still. "
+            "It was level with the benchmark in the 2022 crash (-0.004), so the gap "
+            "is not downside protection. Reversal is the documented counterpart that "
+            "earns in exactly those conditions. "
+            "NOT TRADEABLE YET: the Strategy Runner treats a negative weight as flat "
+            "and never opens a short, so a promoted long/short strategy would trade "
+            "only its long leg at half the intended book. Do not assign this one an "
+            "account until the Runner is short-capable. "
+            "No world-changer anchor: the thesis is entirely about relative price "
+            "behaviour."
+        ),
+    ),
+    ReversalSeed(
+        key="xs-reversal-5-1-10-longonly",
+        strategy_id="01KYRECMH8WZ2WZYB4ZE217E38",
+        name="Cross-sectional reversal (5/1, top 10) — long only",
+        tickers=_MOMENTUM_TICKERS,
+        lookback=5,
+        skip=1,
+        top_n=10,
+        long_short=False,
+        thesis=(
+            "The same short-horizon reversal rule with the short leg removed, so that "
+            "it can actually be traded on the paper path. "
+            "THIS IS A DELIBERATE DEVIATION FROM THE DOCUMENTED CONSTRUCTION and is "
+            "recorded as one. Lehmann (1990) and Lo & MacKinlay (1990) measure a "
+            "long/short contrarian portfolio; dropping a leg is exactly the error the "
+            "momentum rule made, where a one-sided book turned a factor bet into a "
+            "trend amplifier whose fold information ratio correlated +0.97 with fold "
+            "return. The same distortion should be expected here, in the opposite "
+            "direction, and the honest reading of any result is against the long/short "
+            "sibling rather than on its own. "
+            "It is seeded anyway because the Strategy Runner cannot open a short, so "
+            "this is the only version the firm can put on an account today. Whether "
+            "the short leg pays is answerable by comparing the two evaluations, and "
+            "that answer decides whether making the Runner short-capable is worth "
+            "building. "
+            "No world-changer anchor: the thesis is entirely about relative price "
+            "behaviour."
+        ),
+    ),
+)
+
+REVERSAL_SEEDS_BY_KEY: dict[str, ReversalSeed] = {s.key: s for s in REVERSAL_SEEDS}
+
+
+def _reversal_spec(seed: ReversalSeed) -> dict[str, Any]:
+    return {
+        "rule": RULE_CROSS_SECTIONAL_REVERSAL,
+        "params": {
+            "lookback": seed.lookback,
+            "skip": seed.skip,
+            "top_n": seed.top_n,
+            "gross_exposure": 1.0,
+            "long_short": seed.long_short,
+        },
+        "param_bounds": {k: list(v) for k, v in REVERSAL_PARAM_BOUNDS.items()},
+    }
+
+
+def compute_reversal_spec_hash(seed: ReversalSeed) -> str:
+    """Dedup key, same shape as every other seed family."""
+
+    material = json.dumps(
+        {
+            "name": seed.name,
+            "archetype": ARCHETYPE_TECHNICAL_CATALYST,
+            "anchor": ANCHOR,
+            "tickers": {"long": list(seed.tickers), "short": []},
+            "spec": _reversal_spec(seed),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def reversal_record(seed: ReversalSeed) -> StrategyRecord:
+    """Build one cross-sectional reversal seed at ``hypothesis``."""
+
+    return StrategyRecord(
+        strategy_id=seed.strategy_id,
+        name=seed.name,
+        version=1,
+        archetype=ARCHETYPE_TECHNICAL_CATALYST,
+        status=STATUS_HYPOTHESIS,
+        source=SOURCE,
+        thesis=seed.thesis,
+        anchor=dict(ANCHOR),
+        tickers={"long": list(seed.tickers), "short": []},
+        spec=_reversal_spec(seed),
+        spec_hash=compute_reversal_spec_hash(seed),
+        regime_sizing_modifier=dict(REGIME_SIZING_MODIFIER),
+        kill_criteria=reversal_kill_criteria(),
+        code_ref=CODE_REF,
+        created_at=None,
+        updated_at=None,
+        parent_strategy_id=seed.parent_strategy_id,
+        revision_reason=seed.revision_reason,
+        derived_from_evaluation_id=seed.derived_from_evaluation_id,
+    )
 
 
 # Falsifiers. Note what is absent: no world-changer criterion, because there is
@@ -445,9 +625,12 @@ __all__ = [
     "CODE_REF",
     "MOMENTUM_SEEDS",
     "MOMENTUM_SEEDS_BY_KEY",
+    "REVERSAL_SEEDS",
+    "REVERSAL_SEEDS_BY_KEY",
     "TECHNICAL_SEEDS",
     "TECHNICAL_SEEDS_BY_KEY",
     "MomentumSeed",
+    "ReversalSeed",
     "TechnicalSeed",
     "compute_momentum_spec_hash",
     "compute_spec_hash",

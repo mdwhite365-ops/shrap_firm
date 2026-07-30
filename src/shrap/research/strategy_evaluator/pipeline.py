@@ -47,6 +47,7 @@ from ulid import ULID
 from shrap.events import EventPublisher
 from shrap.research.strategy_evaluator.cross_sectional import (
     CrossSectionalMomentumStrategy,
+    CrossSectionalReversalStrategy,
     CrossSectionalTrendStrategy,
 )
 from shrap.research.strategy_evaluator.engine import (
@@ -158,6 +159,7 @@ DEFAULT_CARD_ROOT = Path("docs/strategies/evaluations")
 RULE_REFERENCE_TREND = "reference-trend"
 RULE_CROSS_SECTIONAL_TREND = "cross-sectional-trend"
 RULE_CROSS_SECTIONAL_MOMENTUM = "cross-sectional-momentum"
+RULE_CROSS_SECTIONAL_REVERSAL = "cross-sectional-reversal"
 
 # Rules that consume exactly one ticker. Declared rather than inferred.
 #
@@ -226,6 +228,8 @@ def _default_strategy_factory(record: StrategyRecord, tickers: list[str]) -> Str
         return CrossSectionalTrendStrategy.from_spec(params)
     if rule == RULE_CROSS_SECTIONAL_MOMENTUM:
         return CrossSectionalMomentumStrategy.from_spec(params)
+    if rule == RULE_CROSS_SECTIONAL_REVERSAL:
+        return CrossSectionalReversalStrategy.from_spec(params)
     if rule != RULE_REFERENCE_TREND:
         known = ", ".join(sorted({RULE_REFERENCE_TREND, *_CROSS_SECTIONAL_RULES}))
         raise SpecHygieneError(f"spec names unknown rule {rule!r}; known rules are {known}")
@@ -239,7 +243,11 @@ def _default_strategy_factory(record: StrategyRecord, tickers: list[str]) -> Str
 
 
 _CROSS_SECTIONAL_RULES: frozenset[str] = frozenset(
-    {RULE_CROSS_SECTIONAL_TREND, RULE_CROSS_SECTIONAL_MOMENTUM}
+    {
+        RULE_CROSS_SECTIONAL_TREND,
+        RULE_CROSS_SECTIONAL_MOMENTUM,
+        RULE_CROSS_SECTIONAL_REVERSAL,
+    }
 )
 
 
