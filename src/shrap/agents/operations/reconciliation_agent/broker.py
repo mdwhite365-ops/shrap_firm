@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from shrap.agents.operations.reconciliation_agent.records import BrokerOrderState
+from shrap.agents.operations.reconciliation_agent.records import BrokerOrderState, BrokerPosition
 from shrap.trading_floor.alpaca import AlpacaPaperClient, AsyncHttpClient
 
 
@@ -19,9 +19,11 @@ class BrokerSnapshotReader(Protocol):
 
     async def list_orders(self, since: str | None = None) -> list[BrokerOrderState]: ...
 
+    async def list_positions(self) -> list[BrokerPosition]: ...
+
 
 class AlpacaPaperSnapshotReader:
-    """Read-only Alpaca paper snapshot: account plus all orders."""
+    """Read-only Alpaca paper snapshot: account, orders, and open positions."""
 
     def __init__(
         self,
@@ -59,6 +61,38 @@ class AlpacaPaperSnapshotReader:
                 )
             )
         return orders
+
+    async def list_positions(self) -> list[BrokerPosition]:
+        """Open positions as the venue reports them.
+
+        ``market_value`` is taken from the broker rather than recomputed from
+        quantity x a price we looked up: the Risk Officer sizes limits off this
+        number, and the risk gate must not be the component that disagrees with
+        the broker about how large a position is.
+
+        A position missing a symbol or a market value is an error, not a row to
+        skip. Silently dropping it would understate exposure, and understated
+        exposure is the one direction a risk input must never fail in.
+        """
+
+        raw_positions = await self._client.list_positions(self._http_client)
+        positions: list[BrokerPosition] = []
+        for raw in raw_positions:
+            symbol = str(raw.get("symbol", "")).strip().upper()
+            if not symbol:
+                raise ValueError("Alpaca position snapshot entry is missing a symbol")
+            market_value = raw.get("market_value")
+            if market_value is None:
+                raise ValueError(f"Alpaca position for {symbol} is missing market_value")
+            positions.append(
+                BrokerPosition(
+                    symbol=symbol,
+                    quantity=float(raw.get("qty", 0.0)),
+                    market_value=float(market_value),
+                    side=_optional_str(raw.get("side")),
+                )
+            )
+        return positions
 
 
 def _optional_str(value: object) -> str | None:

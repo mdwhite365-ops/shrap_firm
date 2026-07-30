@@ -20,6 +20,7 @@ from shrap.agents.operations.reconciliation_agent.agent import (
     DEFAULT_PRODUCED_BY,
     AccountSnapshotSink,
     OrderStateRepository,
+    PositionSnapshotSink,
     Publisher,
     reconcile_once,
 )
@@ -30,6 +31,7 @@ from shrap.agents.operations.reconciliation_agent.broker import (
 from shrap.agents.operations.reconciliation_agent.db import (
     PostgresAccountSnapshotStore,
     PostgresOrderEventRepository,
+    PostgresPositionSnapshotStore,
 )
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
@@ -68,6 +70,7 @@ async def run_loop(
     retry_delay_seconds: float = 30.0,
     snapshot_sink: AccountSnapshotSink | None = None,
     lookback_days: float | None = 7.0,
+    position_sink: PositionSnapshotSink | None = None,
 ) -> None:
     """Run reconciliation passes until ``stop`` is set."""
 
@@ -81,6 +84,7 @@ async def run_loop(
                 broker=broker,
                 snapshot_sink=snapshot_sink,
                 lookback_days=lookback_days,
+                position_sink=position_sink,
             )
             delay = interval_seconds
         except Exception:
@@ -124,6 +128,8 @@ async def run(
     repository = PostgresOrderEventRepository(pool)
     snapshot_store = PostgresAccountSnapshotStore(pool)
     await snapshot_store.ensure_schema()
+    position_store = PostgresPositionSnapshotStore(pool)
+    await position_store.ensure_schema()
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as http_client:
         broker_reader = AlpacaPaperSnapshotReader(
             AlpacaPaperClient(alpaca_settings),
@@ -142,6 +148,7 @@ async def run(
                 retry_delay_seconds=retry_delay_seconds,
                 snapshot_sink=snapshot_store,
                 lookback_days=lookback_days,
+                position_sink=position_store,
             )
         finally:
             await redis.aclose()

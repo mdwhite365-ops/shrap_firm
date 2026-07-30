@@ -22,6 +22,7 @@ from shrap.agents.operations.reconciliation_agent.db import (
     UnidentifiedAccountError,
 )
 from shrap.agents.operations.reconciliation_agent.records import (
+    BrokerPosition,
     ReconciliationReport,
     StoredOrderState,
     compare_orders,
@@ -46,6 +47,16 @@ class AccountSnapshotSink(Protocol):
     async def record(self, event_id: str, broker: str, account: dict[str, Any]) -> None: ...
 
 
+class PositionSnapshotSink(Protocol):
+    async def record(
+        self,
+        event_id: str,
+        broker: str,
+        account_id: str,
+        positions: Sequence[BrokerPosition],
+    ) -> None: ...
+
+
 class Publisher(Protocol):
     async def publish(
         self,
@@ -66,6 +77,7 @@ async def reconcile_once(
     correlation_id: str | None = None,
     snapshot_sink: AccountSnapshotSink | None = None,
     lookback_days: float | None = None,
+    position_sink: PositionSnapshotSink | None = None,
 ) -> ReconciliationReport:
     """Run one reconciliation pass and publish its outcome.
 
@@ -143,6 +155,30 @@ async def reconcile_once(
                 reason=str(exc),
                 broker=broker,
                 run_id=run_id,
+            )
+    if position_sink is not None:
+        # Unlike the account snapshot, a failure here is logged and swallowed
+        # for the same reason: order reconciliation is the pass's job and does
+        # not depend on this write. The safe end state is the same too — the
+        # Risk Officer's position read goes stale and its portfolio gate fails
+        # closed, so a missing snapshot stops trading rather than permitting it.
+        try:
+            positions = await broker_reader.list_positions()
+            await position_sink.record(run_id, broker, account_id, positions)
+            log.info(
+                "reconciliation.positions_recorded",
+                broker=broker,
+                account_id=account_id,
+                positions=len(positions),
+                run_id=run_id,
+            )
+        except Exception:
+            log.error(
+                "reconciliation.position_snapshot_failed",
+                broker=broker,
+                account_id=account_id,
+                run_id=run_id,
+                exc_info=True,
             )
     await publisher.publish(
         stream=STREAM_RECONCILIATION_COMPLETED,

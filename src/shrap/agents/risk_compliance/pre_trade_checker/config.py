@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from shrap.research.universe_curator.launch_list import LAUNCH_LIST
 from shrap.risk_compliance.pre_trade import RiskPolicy
 from shrap.risk_compliance.rate_limit import RateLimitConfig
+from shrap.risk_compliance.risk_officer.limits import PortfolioLimits
 
 _DEFAULT_REDIS_URL = "redis" + "://" + "redis" + ":6379/0"
 
@@ -75,6 +76,43 @@ class Settings(BaseSettings):
     retry_delay_seconds: float = 1.0
     log_level: str = "INFO"
 
+    # --- Risk Officer portfolio layer ----------------------------------------
+    #
+    # Default OFF, on the Tier-3 precedent above. The portfolio gate reads
+    # `ops.position_snapshots`, which nothing wrote before this card — enabling
+    # it against an unpopulated table fails closed and vetoes every order,
+    # including the live smoke path. Turning it on is an explicit human decision
+    # taken once the Reconciliation Agent has run at least one pass with the new
+    # positions fetch.
+    portfolio_limits_enforcement: bool = False
+    monitor_interval_seconds: float = 300.0
+
+    # Limits. Defaults mirror `docs/risk/policy.md` v0.1, which is authoritative
+    # — these exist so an operator can tighten one without a deploy, not so the
+    # numbers can drift. `test_config_defaults_match_the_policy_doc` pins them.
+    max_ticker_weight: float = 0.20
+    max_gross_exposure: float = 1.00
+    max_net_exposure: float = 1.00
+    max_cluster_weight: float = 0.15
+    max_daily_loss: float = 0.02
+    max_strategy_drawdown: float = 0.25
+    correlation_threshold: float = 0.80
+    min_cluster_history: int = 40
+
+    def portfolio_limits(self) -> PortfolioLimits:
+        """Build the portfolio limits from config."""
+
+        return PortfolioLimits(
+            max_ticker_weight=self.max_ticker_weight,
+            max_gross_exposure=self.max_gross_exposure,
+            max_net_exposure=self.max_net_exposure,
+            max_cluster_weight=self.max_cluster_weight,
+            max_daily_loss=self.max_daily_loss,
+            max_strategy_drawdown=self.max_strategy_drawdown,
+            correlation_threshold=self.correlation_threshold,
+            min_cluster_history=self.min_cluster_history,
+        )
+
     @field_validator("allowed_universe", mode="before")
     @classmethod
     def _normalize_allowed_universe(cls, value: Any) -> str | list[str]:
@@ -135,4 +173,16 @@ class Settings(BaseSettings):
             "block_ms": self.block_ms,
             "retry_delay_seconds": self.retry_delay_seconds,
             "log_level": self.log_level,
+            "portfolio_limits_enforcement": self.portfolio_limits_enforcement,
+            "monitor_interval_seconds": self.monitor_interval_seconds,
+            "portfolio_limits": {
+                "max_ticker_weight": self.max_ticker_weight,
+                "max_gross_exposure": self.max_gross_exposure,
+                "max_net_exposure": self.max_net_exposure,
+                "max_cluster_weight": self.max_cluster_weight,
+                "max_daily_loss": self.max_daily_loss,
+                "max_strategy_drawdown": self.max_strategy_drawdown,
+                "correlation_threshold": self.correlation_threshold,
+                "min_cluster_history": self.min_cluster_history,
+            },
         }

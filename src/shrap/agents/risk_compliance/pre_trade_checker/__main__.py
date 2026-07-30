@@ -28,6 +28,9 @@ def main() -> None:
             tier3_cache_ttl_seconds=settings.tier3_cache_ttl_seconds,
             group=settings.service_name,
             consumer=settings.instance_id,
+            portfolio_limits_enforcement=settings.portfolio_limits_enforcement,
+            portfolio_limits=settings.portfolio_limits(),
+            monitor_interval_seconds=settings.monitor_interval_seconds,
         )
     )
 

@@ -360,8 +360,15 @@ services:
       - shrap_net
 
   # -------------------------------------------------------------------------
-  # Pre-Trade Checker - deterministic Month 1 risk gate. Consumes
-  # trading.decision.intent and publishes risk.intent.approved/vetoed.
+  # Risk Officer - the firm's single point of veto. Consumes
+  # trading.decision.intent and publishes risk.intent.approved/vetoed, plus
+  # risk.alert and risk.kill_switch.set/clear.
+  #
+  # The service and container keep the pre-trade-checker name: this process WAS
+  # the Pre-Trade Checker, which its own spec called "the Month 1 wire-only Risk
+  # Officer stub", and the portfolio layer graduated it in place. Renaming would
+  # recreate the container and the consumer group, and a fresh group re-reads
+  # the intent stream from START_ID and re-approves historical intents.
   # -------------------------------------------------------------------------
   pre-trade-checker:
     build:
@@ -399,6 +406,26 @@ services:
       PRE_TRADE_CHECKER_BLOCK_MS: "5000"
       PRE_TRADE_CHECKER_RETRY_DELAY_SECONDS: "1.0"
       PRE_TRADE_CHECKER_LOG_LEVEL: "INFO"
+      # Risk Officer portfolio layer: per-ticker, gross/net and correlation-cluster
+      # caps, plus the daily-loss and strategy-drawdown monitors. Limits live in
+      # docs/risk/policy.md; override an individual one below only to TIGHTEN it.
+      #
+      # Default off, same reasoning as TIER3_ENFORCEMENT above: the gate reads
+      # ops.position_snapshots, which the Reconciliation Agent only began writing
+      # in this card. Against an empty table the gate cannot tell a flat account
+      # from an unmeasured one, fails closed, and vetoes every order. Turn this on
+      # AFTER confirming a reconciliation pass has written positions:
+      #   select count(*) from ops.position_snapshots;
+      PRE_TRADE_CHECKER_PORTFOLIO_LIMITS_ENFORCEMENT: "${PRE_TRADE_CHECKER_PORTFOLIO_LIMITS_ENFORCEMENT:-false}"
+      PRE_TRADE_CHECKER_MONITOR_INTERVAL_SECONDS: "${PRE_TRADE_CHECKER_MONITOR_INTERVAL_SECONDS:-300.0}"
+      PRE_TRADE_CHECKER_MAX_TICKER_WEIGHT: "${PRE_TRADE_CHECKER_MAX_TICKER_WEIGHT:-0.20}"
+      PRE_TRADE_CHECKER_MAX_GROSS_EXPOSURE: "${PRE_TRADE_CHECKER_MAX_GROSS_EXPOSURE:-1.00}"
+      PRE_TRADE_CHECKER_MAX_NET_EXPOSURE: "${PRE_TRADE_CHECKER_MAX_NET_EXPOSURE:-1.00}"
+      PRE_TRADE_CHECKER_MAX_CLUSTER_WEIGHT: "${PRE_TRADE_CHECKER_MAX_CLUSTER_WEIGHT:-0.15}"
+      PRE_TRADE_CHECKER_MAX_DAILY_LOSS: "${PRE_TRADE_CHECKER_MAX_DAILY_LOSS:-0.02}"
+      PRE_TRADE_CHECKER_MAX_STRATEGY_DRAWDOWN: "${PRE_TRADE_CHECKER_MAX_STRATEGY_DRAWDOWN:-0.25}"
+      PRE_TRADE_CHECKER_CORRELATION_THRESHOLD: "${PRE_TRADE_CHECKER_CORRELATION_THRESHOLD:-0.80}"
+      PRE_TRADE_CHECKER_MIN_CLUSTER_HISTORY: "${PRE_TRADE_CHECKER_MIN_CLUSTER_HISTORY:-40}"
     depends_on:
       redis:
         condition: service_healthy

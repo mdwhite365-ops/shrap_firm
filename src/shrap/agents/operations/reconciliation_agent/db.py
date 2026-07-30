@@ -7,9 +7,11 @@ writes, no event-level access.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from typing import Any, Protocol
 
-from shrap.agents.operations.reconciliation_agent.records import StoredOrderState
+from shrap.agents.operations.reconciliation_agent.records import BrokerPosition, StoredOrderState
 
 # Scoped to one account as well as one broker. ADR-0017 puts three accounts on
 # `alpaca-paper`, and each Reconciliation Agent compares against ONE account's
@@ -58,6 +60,8 @@ class AsyncConnection(Protocol):
     async def execute(self, sql: str, *args: object) -> object: ...
 
     async def fetch(self, sql: str, *args: object) -> list[Any]: ...
+
+    def transaction(self) -> AbstractAsyncContextManager[object]: ...
 
 
 class AcquireContext(Protocol):
@@ -167,6 +171,52 @@ ON CONFLICT (event_id) DO NOTHING
 # containers. Alpaca returns it on GET /v2/account.
 BROKER_ACCOUNT_ID_FIELD = "account_number"
 
+# The firm's only record of what it actually holds. Nothing stored positions
+# before this: the Reconciliation Agent read the account and the orders, and the
+# Risk Officer has no broker credentials of its own (ADR-0003), so portfolio
+# limits had no book to measure against.
+#
+# One row per position per pass, keyed by pass. That makes the table append-only
+# like its sibling and lets a reader take "the newest pass for this account" as
+# a consistent set — rather than a per-ticker latest, which could mix two passes
+# and report a position that was closed in the newer one.
+#
+# A flat account writes NO rows for its pass. Readers therefore cannot tell
+# "flat" from "never ran" by row count alone, which is why the marker row below
+# exists: every pass writes one, so the newest pass is always datable.
+CREATE_POSITION_SNAPSHOTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS ops.position_snapshots (
+    event_id TEXT NOT NULL,
+    at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    broker TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    quantity DOUBLE PRECISION NOT NULL,
+    market_value DOUBLE PRECISION NOT NULL,
+    side TEXT,
+    PRIMARY KEY (event_id, ticker)
+)
+""".strip()
+
+CREATE_POSITION_SNAPSHOTS_ACCOUNT_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS position_snapshots_account_at_idx
+ON ops.position_snapshots (account_id, at DESC)
+""".strip()
+
+INSERT_POSITION_SNAPSHOT_SQL = """
+INSERT INTO ops.position_snapshots (
+    event_id, broker, account_id, ticker, quantity, market_value, side
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (event_id, ticker) DO NOTHING
+""".strip()
+
+# Written on every pass, including a pass that found no positions. Its ticker is
+# a sentinel that cannot collide with a real symbol, and readers exclude it.
+# Without it, a flat account and a dead Reconciliation Agent are the same
+# absence of rows — and the Risk Officer must halt on one and trade on the other.
+FLAT_MARKER_TICKER = "__FLAT__"
+
 
 class UnidentifiedAccountError(Exception):
     """A snapshot arrived with no broker account id, so it cannot be attributed.
@@ -231,3 +281,66 @@ class PostgresAccountSnapshotStore:
                 _float_or_none(account.get("buying_power")),
                 _float_or_none(account.get("portfolio_value")),
             )
+
+
+class PostgresPositionSnapshotStore:
+    """Append-only store: the account's open positions, once per pass.
+
+    The Risk Officer's only view of the book. It holds no broker credentials
+    (ADR-0003) and cannot ask the venue itself, so if this write does not happen
+    the portfolio limits have nothing to measure and the gate fails closed.
+    """
+
+    def __init__(self, pool: AsyncPool) -> None:
+        self._pool = pool
+
+    async def ensure_schema(self) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(CREATE_OPS_SCHEMA_SQL)
+            await conn.execute(CREATE_POSITION_SNAPSHOTS_TABLE_SQL)
+            await conn.execute(CREATE_POSITION_SNAPSHOTS_ACCOUNT_INDEX_SQL)
+
+    async def record(
+        self,
+        event_id: str,
+        broker: str,
+        account_id: str,
+        positions: Sequence[BrokerPosition],
+    ) -> None:
+        """Persist one pass's positions, plus the marker that proves it ran.
+
+        The marker is written **first**. If the process dies midway the reader
+        then sees a pass with a timestamp and fewer positions than the account
+        truly holds — understated exposure — which is why the whole write runs
+        in one transaction and either lands complete or not at all.
+        """
+
+        if not account_id.strip():
+            raise UnidentifiedAccountError(
+                "position snapshot has no account id, so it cannot be attributed. "
+                "Refusing to write positions the Risk Officer would read as some "
+                "other account's book."
+            )
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    INSERT_POSITION_SNAPSHOT_SQL,
+                    event_id,
+                    broker,
+                    account_id,
+                    FLAT_MARKER_TICKER,
+                    0.0,
+                    0.0,
+                    None,
+                )
+                for position in positions:
+                    await conn.execute(
+                        INSERT_POSITION_SNAPSHOT_SQL,
+                        event_id,
+                        broker,
+                        account_id,
+                        position.symbol,
+                        position.quantity,
+                        position.market_value,
+                        position.side,
+                    )

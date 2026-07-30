@@ -37,6 +37,23 @@ class BrokerOrderState:
 
 
 @dataclass(frozen=True, slots=True)
+class BrokerPosition:
+    """One open position as reported by the broker.
+
+    Written to ``ops.position_snapshots`` and read by the Risk Officer, which
+    has no broker credentials of its own (ADR-0003) and so cannot ask the venue
+    directly. This is the firm's only source of position truth.
+
+    ``quantity`` and ``market_value`` are signed: negative for a short.
+    """
+
+    symbol: str
+    quantity: float
+    market_value: float
+    side: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Discrepancy:
     """One divergence between broker state and the persisted order trail."""
 
