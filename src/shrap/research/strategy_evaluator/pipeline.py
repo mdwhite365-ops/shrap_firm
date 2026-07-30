@@ -70,6 +70,7 @@ from shrap.research.strategy_evaluator.verdict import (
     VERDICT_PROMOTE,
     Verdict,
     map_verdict,
+    required_information_ratio,
 )
 from shrap.research.strategy_registry import (
     STATUS_HYPOTHESIS,
@@ -269,6 +270,8 @@ class SpecHygieneError(EvaluationError):
 class RegistryPort(Protocol):
     async def get(self, strategy_id: str) -> StrategyRecord | None: ...
 
+    async def attempts(self, strategy_id: str) -> int: ...
+
     async def transition(
         self,
         strategy_id: str,
@@ -353,6 +356,14 @@ class EvaluationOutcome:
     consistency_metrics: dict[str, Any] = field(default_factory=dict)
     """Cross-fold consistency. Empty when the engine did not run."""
 
+    attempts: int = 1
+    """How many strategies this lineage has burned, including the original.
+
+    The multiple-testing denominator. Recorded on the outcome so that a
+    promotion can always be read against the size of the search that produced
+    it — a 1 sitting on a long lineage means the registry could not answer and
+    the adjustment was skipped, which has to be visible rather than silent."""
+
     coverage: PanelCoverage | None = None
     """Panel extent and what truncated it. ``None`` when no panel was built —
     a spec refusal or a dead anchor stops before the dataset, and reporting
@@ -372,7 +383,7 @@ class EvaluationOutcome:
             f"trades={self.total_trades} sharpe={self.base_sharpe:.3f} "
             f"stress_sharpe={self.stress_sharpe:.3f} ir={self.reported_ir} "
             f"{self.reported_coverage} {self.reported_consistency} "
-            f"protocol={self.protocol_version}"
+            f"{self.reported_attempts} protocol={self.protocol_version}"
         )
 
     @property
@@ -411,6 +422,20 @@ class EvaluationOutcome:
         if not raw:
             return "folds=n/a"
         return f"folds={raw.get('folds_with_active_edge')}/{raw.get('n_folds')}"
+
+    @property
+    def reported_attempts(self) -> str:
+        """``attempt=3/ir>=0.75`` — which try this is, and the bar it must clear.
+
+        Both halves matter. The attempt number alone does not say what it cost,
+        and the adjusted floor alone does not say why it moved.
+        """
+
+        floor = self.config.get("information_ratio_floor")
+        if floor is None:
+            return f"attempt={self.attempts}"
+        required = required_information_ratio(float(floor), self.attempts)
+        return f"attempt={self.attempts}/ir>={required:.2f}"
 
     @property
     def reported_coverage(self) -> str:
@@ -643,6 +668,29 @@ class EvaluationPipeline:
             parent_ir = await self._reader.latest_information_ratio(
                 record.parent_strategy_id, PROTOCOL_VERSION
             )
+        # How many strategies this idea has burned, including the original.
+        # A search that keeps varying one hypothesis until something clears the
+        # floor has found the best of N draws, not edge — this is the number
+        # that lets the gate tell those apart. Counted since PR #141 and read
+        # for the first time here.
+        #
+        # Failure is not fatal: a registry that cannot answer leaves the count
+        # at 1, which is the UNPENALISED value. That is the wrong direction for
+        # a risk control, and it is chosen deliberately — the alternative is a
+        # registry hiccup silently blocking every promotion in the firm, which
+        # is the more damaging failure and the harder one to diagnose. The
+        # evaluation card records the count it used, so a 1 on a long lineage is
+        # visible rather than silent.
+        attempts = 1
+        try:
+            attempts = await self._registry.attempts(strategy_id)
+        except Exception:
+            log.warning(
+                "strategy_evaluator.attempts_unavailable",
+                strategy_id=strategy_id,
+                note="multiple-testing adjustment skipped; treating as first attempt",
+                exc_info=True,
+            )
         verdict = map_verdict(
             anchor_required=policy.requires_anchor,
             anchor_fresh=anchor_fresh,
@@ -654,6 +702,7 @@ class EvaluationPipeline:
             information_ratio=result.active.information_ratio,
             information_ratio_floor=self._config.information_ratio_floor,
             parent_information_ratio=parent_ir,
+            attempts=attempts,
         )
         return self._build_outcome(
             record=record,
@@ -670,6 +719,7 @@ class EvaluationPipeline:
             stress_metrics=result.stress.as_dict(),
             active_metrics=result.active.as_dict(),
             consistency_metrics=result.consistency.as_dict(),
+            attempts=attempts,
             coverage=coverage,
             trigger=trigger,
             ts=ts,
@@ -886,6 +936,7 @@ class EvaluationPipeline:
         ts: datetime,
         coverage: PanelCoverage | None = None,
         consistency_metrics: dict[str, Any] | None = None,
+        attempts: int = 1,
     ) -> EvaluationOutcome:
         to_stage = _verdict_to_stage(verdict.verdict)
         evaluation_id = str(ULID())
@@ -917,6 +968,7 @@ class EvaluationPipeline:
             card_markdown="",
             coverage=coverage,
             consistency_metrics=consistency_metrics or {},
+            attempts=attempts,
         )
         return _with_card(outcome, render_evaluation_card(outcome))
 
