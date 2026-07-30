@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -12,11 +14,19 @@ import structlog
 
 from shrap.agents.operations.health_monitor import alerts
 from shrap.agents.operations.health_monitor.checks import ALL_CHECKS, CheckResult
+from shrap.agents.operations.health_monitor.freshness import (
+    STREAM_HEALTH_ANOMALY,
+    FreshnessSweeper,
+    anomaly_payload,
+    is_freshness_check,
+)
 from shrap.agents.operations.health_monitor.state import HealthState
+from shrap.common.db import create_asyncpg_pool
 from shrap.common.envelope import Envelope
 from shrap.common.logging import configure_logging
 from shrap.common.prom_client import PrometheusClient
 from shrap.common.redis_client import RedisStreamClient
+from shrap.operations.staleness import PostgresStalenessStore
 
 if TYPE_CHECKING:
     from shrap.agents.operations.health_monitor.config import Settings
@@ -69,12 +79,25 @@ async def tick_once(
     state: HealthState,
     http_client: httpx.AsyncClient,
     settings: Settings,
+    freshness: FreshnessSweeper | None = None,
+    now: datetime | None = None,
 ) -> list[CheckResult]:
     """Run one tick: all checks, publish tick envelope, dispatch any transitions.
 
     Factored out so tests can drive a single tick deterministically.
+
+    Freshness checks (``shrap.operations.staleness``) run on their own slower
+    cadence and are simply absent from ``results`` on ticks where they are not
+    due — the state machine keys on check name, so an absent check holds its
+    previous verdict rather than being read as recovered.
     """
-    results = await asyncio.gather(*(_run_check(fn, prom) for fn in ALL_CHECKS))
+    infra_results = list(await asyncio.gather(*(_run_check(fn, prom) for fn in ALL_CHECKS)))
+    results = list(infra_results)
+
+    if freshness is not None and freshness.due(time.monotonic()):
+        results.extend(
+            await freshness.run(now if now is not None else datetime.now(UTC), time.monotonic())
+        )
 
     tick_payload = {
         "checks": [r.to_dict() for r in results],
@@ -93,7 +116,11 @@ async def tick_once(
         if t is not None:
             transitions.append((t, r))
 
-    system_wide = state.degraded_count() >= 2
+    # System-wide escalation (the urgent ntfy path) stays a statement about the
+    # substrate. Five stale tables mean the firm's producers are broken, which is
+    # serious and routine-alerted; it is not the "Redis and Postgres are both
+    # gone" emergency that priority-5 exists for.
+    system_wide = sum(1 for r in infra_results if state.is_degraded(r.name)) >= 2
 
     for transition, check in transitions:
         stream = STREAM_DEGRADED if transition == "degraded-confirmed" else STREAM_RECOVERED
@@ -107,6 +134,15 @@ async def tick_once(
                 "system_wide": system_wide,
             },
         )
+        if freshness is not None and is_freshness_check(check.name):
+            verdict = freshness.verdict_for(check.name)
+            if verdict is not None:
+                await _publish(
+                    redis,
+                    STREAM_HEALTH_ANOMALY,
+                    settings,
+                    anomaly_payload(transition, verdict, settings.service_name),
+                )
         await alerts.dispatch(
             transition,
             check,
@@ -148,6 +184,28 @@ async def run(settings: Settings) -> None:
     stop = asyncio.Event()
     _install_signal_handlers(stop)
 
+    # Freshness is the one part of the monitor that needs Postgres. If the pool
+    # cannot be built, the substrate checks still run — losing output freshness
+    # is bad, losing the whole monitor is worse.
+    pool: Any | None = None
+    freshness: FreshnessSweeper | None = None
+    if settings.freshness_enabled:
+        try:
+            pool = await create_asyncpg_pool(settings.postgres_dsn_value())
+            freshness = FreshnessSweeper(
+                store=PostgresStalenessStore(pool),
+                interval_seconds=settings.freshness_interval_seconds,
+            )
+            log.info(
+                "health_monitor.freshness_enabled",
+                interval_seconds=settings.freshness_interval_seconds,
+                targets=[t.name for t in freshness.targets],
+            )
+        except Exception:
+            log.exception("health_monitor.freshness_pool_failed")
+    else:
+        log.warning("health_monitor.freshness_disabled")
+
     async with httpx.AsyncClient(timeout=10.0) as http_client:
         try:
             await _publish(
@@ -162,7 +220,7 @@ async def run(settings: Settings) -> None:
         try:
             while not stop.is_set():
                 try:
-                    await tick_once(prom, redis, state, http_client, settings)
+                    await tick_once(prom, redis, state, http_client, settings, freshness)
                 except Exception:
                     log.exception("health_monitor.tick_failed")
                 try:
@@ -180,4 +238,6 @@ async def run(settings: Settings) -> None:
             except Exception:
                 log.exception("health_monitor.shutdown_publish_failed")
             await redis.close()
+            if pool is not None:
+                await pool.close()
             log.info("health_monitor.stopped")

@@ -20,7 +20,9 @@ WORKDIR /app
 
 COPY --from=builder /wheels /wheels
 
-# Install shrap wheel + runtime deps + health-monitor optional dep.
+# Install shrap wheel + runtime deps + health-monitor optional deps.
+# asyncpg is for the output-freshness checks only (shrap.operations.staleness);
+# the Prometheus checks need no database.
 RUN pip install --no-cache-dir /wheels/*.whl \
         "redis>=5.0" \
         "httpx>=0.27" \
@@ -28,6 +30,7 @@ RUN pip install --no-cache-dir /wheels/*.whl \
         "pydantic>=2.7" \
         "python-ulid>=2.7" \
         "pydantic-settings>=2.4" \
+        "asyncpg>=0.29" \
     && rm -rf /wheels
 
 USER shrap

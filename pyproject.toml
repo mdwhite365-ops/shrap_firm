@@ -27,7 +27,7 @@ dev = [
     "mypy>=1.11",
     "pre-commit>=3.8",
 ]
-health-monitor = ["pydantic-settings>=2.4"]
+health-monitor = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 audit-logger = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 pre-trade-checker = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 execution-agent = ["pydantic-settings>=2.4"]
