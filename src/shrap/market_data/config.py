@@ -49,6 +49,12 @@ class Settings(BaseSettings):
 
         return self.postgres_dsn.get_secret_value()
 
+    # NOTE: TriggerSettings below reuses this class's fields and adds the sweep
+    # knobs. It is a subclass rather than a copy so that a change to the feed,
+    # adjustment or throttle applies to the scheduled path and the hand-run one
+    # identically — two settings classes that drifted would mean the automated
+    # sweep quietly fetching under different terms than a manual backfill.
+
     def market_data_settings(self) -> AlpacaMarketDataSettings:
         """Data-host-only Alpaca credentials from the shared ``ALPACA_*`` env names."""
 
@@ -71,4 +77,39 @@ class Settings(BaseSettings):
         }
 
 
-__all__ = ["Settings"]
+class TriggerSettings(Settings):
+    """Configuration for the scheduled sweep (``MARKET_DATA_TRIGGER_*`` env vars).
+
+    Inherits every field above so the automated path fetches on exactly the same
+    terms as a hand-run backfill, and adds only the scheduling knobs.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="MARKET_DATA_TRIGGER_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    service_name: str = "market-data-trigger"
+
+    # Daily bars change once per session, so the interval buys latency after the
+    # close rather than resolution. Six hours guarantees a post-close pull within
+    # six hours on every trading day at four passes daily — 50 requests a pass
+    # against a box that runs every agent at 0.00% CPU.
+    sweep_interval_seconds: float = 21600.0
+
+    # adjustment=all means splits and dividends restate history, so the newest
+    # bars are not final when first written. Five days re-requests the window
+    # where a correction is still plausible; the upsert is idempotent, so the
+    # cost is a few refreshed rows per ticker and the alternative is being
+    # quietly wrong about a split.
+    restate_days: int = 5
+
+    # Used only for a ticker the store has never seen — a name newly added to
+    # the universe. Matches the backfill CLI's default lookback so an onboarded
+    # name gets the same history a hand-run backfill would have given it.
+    bootstrap_days: int = 5 * 365
+
+
+__all__ = ["Settings", "TriggerSettings"]

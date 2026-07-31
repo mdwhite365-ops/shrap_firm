@@ -798,7 +798,9 @@ known good.
 
 ## KI-024 — Nothing automatically ingests price bars
 
-**Status:** Open, found 2026-07-31 by the full systems check.
+**Status:** Fix shipped 2026-07-31 (`market-data-trigger` + a freshness target);
+pending Dell deploy and first live sweep. Found 2026-07-31 by the full systems
+check.
 
 `market_data.daily_bars` held 50 tickers and 72,447 rows with
 `max(session_date) = 2026-07-29` — two sessions stale on 2026-07-31. The cause
@@ -813,9 +815,42 @@ limit and how many are an un-run backfill is currently unknowable, which is the
 part that matters: a verdict that says "not enough data" is indistinguishable
 from one caused by nobody running a job.
 
-**Fix shape:** either an always-on ingest service or a scheduled trigger of the
-existing tool, plus a freshness check in the Health Monitor — #167 already
-implements output-freshness alarms and this is a natural subject for one.
+**Mitigation (shipped 2026-07-31).** `market-data-trigger` is an always-on
+service that sweeps every six hours. Three choices in it are worth recording
+because each was a fork:
+
+- **Tickers come from the Curator's Tier-3 launch list**, the same source
+  `--launch-list` already resolves — not from its own config, which would be a
+  second source of truth that silently diverges from the universe.
+- **The window is computed per ticker from what the store already holds**, so a
+  sweep asks for the gap rather than five years. Per-ticker rather than one
+  global maximum on purpose: a name added to the universe later has no history,
+  and a global maximum would start its series at today and leave it permanently
+  short — a gap that would only surface as an inexplicably thin backtest months
+  later.
+- **No market-calendar awareness.** A Sunday sweep asks for a window containing
+  no sessions and writes nothing, costing one request per ticker. Coupling this
+  to the Market Phase Scheduler would save a request that does not matter, and
+  the failure mode of a wrong calendar — silently skipping a real session — is
+  much worse than a wasted call.
+
+**The alarm ships with it, and that is the point.** `DEFAULT_TARGETS` gains
+`market_data.daily_bars` on `fetched_at` (refreshed by the upsert on conflict,
+so it measures sweep liveness and is weekend-independent) with an 18-hour
+threshold — three missed sweeps. A trigger that dies quietly is the failure this
+card exists to end, so shipping the service without the check would reproduce
+KI-024 with extra steps.
+
+The test that previously asserted `daily_bars` was *deliberately not* a target
+now asserts the inverse, with the reasoning: a table earns a freshness target
+exactly when something is supposed to be writing to it on a schedule. The old
+exclusion was correct when written and became a blind spot when the premise
+changed.
+
+**Still open until verified live**, and one question this does not answer: how
+many of the 13 `hold-for-data` verdicts were the stale panel and how many are a
+real data limit. Re-running those evaluations against a current panel is the
+only way to find out, and it is a separate card.
 
 ## KI-025 — Redis streams grow without bound
 

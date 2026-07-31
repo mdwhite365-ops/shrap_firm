@@ -21,10 +21,10 @@ the package docstring and ``docs/infrastructure/market-data.md``.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 CREATE_MARKET_DATA_SCHEMA_SQL = "CREATE SCHEMA IF NOT EXISTS market_data"
 
@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS market_data.daily_bars (
     fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (ticker, session_date, adjustment)
 )
+""".strip()
+
+SELECT_LAST_SESSION_BY_TICKER_SQL = """
+SELECT ticker, max(session_date) AS last_session
+FROM market_data.daily_bars
+GROUP BY ticker
 """.strip()
 
 UPSERT_DAILY_BAR_SQL = """
@@ -89,6 +95,8 @@ class DailyBarRow:
 class AsyncConnection(Protocol):
     async def execute(self, sql: str, *args: object) -> object: ...
 
+    async def fetch(self, sql: str, *args: object) -> Sequence[Mapping[str, Any]]: ...
+
 
 class AcquireContext(Protocol):
     async def __aenter__(self) -> AsyncConnection: ...
@@ -110,6 +118,21 @@ class PostgresDailyBarStore:
         async with self._pool.acquire() as conn:
             await conn.execute(CREATE_MARKET_DATA_SCHEMA_SQL)
             await conn.execute(CREATE_DAILY_BARS_TABLE_SQL)
+
+    async def last_session_by_ticker(self) -> dict[str, date]:
+        """Newest stored ``session_date`` per ticker.
+
+        This is what lets an incremental sweep ask for the days it is missing
+        instead of re-requesting five years on every pass. Per-ticker rather
+        than a single global maximum on purpose: a name added to the universe
+        later has no history, and a global maximum would quietly start its
+        series at today and leave it permanently short — a gap that would only
+        surface as an inexplicably thin backtest months later.
+        """
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_LAST_SESSION_BY_TICKER_SQL)
+        return {str(row["ticker"]): cast(date, row["last_session"]) for row in rows}
 
     async def upsert_bars(self, bars: Sequence[DailyBarRow]) -> int:
         """Upsert ``bars`` one row at a time; returns the count handed in.
