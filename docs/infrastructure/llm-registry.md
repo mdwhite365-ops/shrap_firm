@@ -98,6 +98,20 @@ Changing the latter without breaking the former is the whole point.
 > laddering up (e.g. to `gpt-oss:120b-cloud`, *Medium Usage*) or falling back
 > to a local tag is an env edit and a restart.
 
+> **Correction 2026-07-31 (later the same day).** The row below, and the note
+> that follows it, justify this promotion partly on the claim that the five
+> models were *indistinguishable on judgement*. **That claim is false and is
+> reversed in `calibration.md` §(e) Correction 2.** `qwen3.5:397b` admits items
+> `gpt-oss:20b-cloud` rejects under an identical prompt v4 — two of them in a
+> 599-item stratified sample, both hard-leg USASpending awards. The eval that
+> found "zero disagreements" sampled 20 items from a corpus that is 72%
+> content-free EDGAR metadata and contained no USASpending items at all.
+>
+> The promotion stands and is now better justified than it was: it is not a
+> latency trade, it changes what the funnel admits. **No item in the corpus has
+> yet been scored by it** — production switched on 2026-07-31, so every stored
+> verdict predates the model that is now running.
+
 > **Update 2026-07-31 — the filter binding is now `qwen3.5:397b`, and the
 > cost-shaping paragraph above is superseded on its central claim.**
 >

@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-07-31 (KI-022–KI-025 added by the full systems check)
+**Last updated:** 2026-07-31 (KI-026 added; KI-009 diagnosis corrected by the bar experiment)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -269,6 +269,60 @@ correctly flip them, but they are the only items any model has ever admitted
 and therefore the experiment's one natural control: a candidate bar that
 admits nothing *and* rejects these is failing differently from one that admits
 them. Correcting the record is cheap and can happen after.
+
+### Resolved 2026-07-31 by the bar experiment — two causes, neither the one predicted
+
+The experiment ran (#180, #181). **The hypothesis above is falsified**, and the
+falsification condition was written into the spec before the run: *"if Bar A
+wins, the bars are not misapplied and the constraint is upstream in what we
+ingest."*
+
+On a source-stratified 599-item sample, `qwen3.5:397b`:
+
+| bar | admits |
+|---|---|
+| **A — incumbent, unmodified** | Anduril `physical-realization`, HALEU `cost-curve` |
+| **B — evidence contribution** | Anduril `physical-realization`, HALEU `cost-curve` |
+| **C — signal tagging** | HALEU only, mislabelled `bio-mechanism` |
+
+**Bar B admits exactly what the incumbent admits.** Reformulating the question
+changes nothing. Bar C is strictly worse: flattening the signal catalogue strips
+the archetype context that gives a signal meaning, so "manufacturing scale
+demonstrated at acceptable cost" matched a uranium enrichment plant under
+*Biological-mechanism unlocks*. **The archetype bars are not misapplied.** The
+taxonomy ruling this entry has been waiting on is not needed.
+
+The two real causes, both found by the same run:
+
+**1. 72% of the corpus contains no fact to judge.** `sec-edgar` is 3,740 of
+5,221 items, and its stored summary is the Atom index entry:
+
+```
+<b>Filed:</b> 2026-07-31 <b>AccNo:</b> 0001193125-26-328866 <b>Size:</b> 565 KB
+<br>Item 8.01: Other Events <br>Item 9.01: Financial Statements and Exhibits
+```
+
+Filed date, accession number, **file size in kilobytes**, item codes. No
+revenue, capacity, capex or pricing — nothing any bar could admit. Zero EDGAR
+admits from ~425 scored, under all three bars. Meanwhile `usaspending` averages
+*fewer* characters (147 vs 179) and admits at roughly **14%**, because its
+summary states a recipient, an amount and a purpose. Length was never the
+discriminator; content type is. The Filing Processor already fetches EDGAR full
+text into `intelligence.filings.full_text` and scores per item code with priors
+— the Tech Watcher ingests the same filings and keeps only the index entry.
+Tracked as **KI-026**.
+
+**2. The filter is partly model-limited after all.** Both admitted items had
+been scored under the *same* prompt v4 by `gpt-oss:20b-cloud` and marked
+not-relevant. See `calibration.md` §(e) Correction 2 — the shadow eval's "five
+models, zero disagreements" was measured on 20 items containing no USASpending
+awards at all. **No item in the corpus has ever been scored by the promoted
+model**, and `refilter_pass` already selects on the `(prompt version, model)`
+pair, so a full re-filter needs no new code.
+
+**KI-009 stays open**, but the ruling it was waiting for is not the one it
+needed. It now depends on the EDGAR ingest card (KI-026) and a re-filter under
+`qwen3.5:397b`, neither of which requires a decision from Mike.
 
 ## KI-010 — Ingest legs die silently
 
@@ -976,3 +1030,49 @@ never Shrap's. They age out of the agent's 7-day lookback window on their own.
 A mechanism for acknowledging a known-benign divergence is deliberately *not*
 built, because the only one on record resolves itself and building an
 acknowledgement workflow for a single self-clearing case would be scaffolding.
+
+## KI-026 — The Tech Watcher reads EDGAR's index, not its filings
+
+**Status:** Open, found 2026-07-31 by the archetype bar experiment.
+
+`research.raw_source_items` holds 3,740 `sec-edgar` items — **72% of the whole
+corpus** — and every one stores the Atom *index entry* rather than the filing:
+
+```
+<b>Filed:</b> 2026-07-31 <b>AccNo:</b> 0001193125-26-328866 <b>Size:</b> 565 KB
+<br>Item 8.01: Other Events <br>Item 9.01: Financial Statements and Exhibits
+```
+
+A filed date, an accession number, **a file size in kilobytes**, and the item
+codes. There is no fact in it about the company, the money, or the event. The
+filter has been correctly rejecting document metadata 3,740 times, and every
+model tested agreed because every model was right.
+
+**The comparison that makes it unambiguous.** `usaspending` summaries average
+*fewer* characters (147 vs 179) and admit at roughly **14%**, because they state
+a recipient, an amount and a purpose — *"$900,000,000 … to establish new annual
+domestic commercial HALEU capacity"*. Across all three bars of the experiment,
+`sec-edgar` admitted **0 of ~425 scored**. Length is not the discriminator;
+content type is.
+
+**The capability already exists in the firm.** The Filing Processor fetches
+EDGAR full text into `intelligence.filings.full_text` and scores per item code
+with item-code priors (PR #66/#68). Two legs read EDGAR; one of them reads the
+document.
+
+**Scope of the card:**
+
+1. Fetch filing text for the Tech Watcher's EDGAR leg, reusing the Filing
+   Processor's fetcher rather than writing a second one.
+2. **Strip HTML.** `sources.py` calls `_strip_html` for some sources and not for
+   the EDGAR leg, so the model is currently handed `<b>` and `<br>` tags.
+3. **Keep the item codes and use them.** *"Item 1.01: Entry into a Material
+   Definitive Agreement"* is meaningfully different from *"Item 8.01: Other
+   Events"*, and the Filing Processor already has priors for exactly that.
+4. Bound the text — full 10-Ks are large and the filter prompt is ~1,400 tokens
+   today. Decide a budget rather than inheriting one.
+
+**Sequencing note:** this multiplies the judgeable corpus by roughly four. Do it
+*before* re-running the bar experiment or drawing further conclusions about the
+taxonomy, because every rate measured so far has a denominator that is 72%
+metadata.
