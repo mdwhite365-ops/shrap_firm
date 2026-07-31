@@ -98,6 +98,31 @@ Changing the latter without breaking the former is the whole point.
 > laddering up (e.g. to `gpt-oss:120b-cloud`, *Medium Usage*) or falling back
 > to a local tag is an env edit and a restart.
 
+> **Update 2026-07-31 — the filter binding is now `qwen3.5:397b`, and the
+> cost-shaping paragraph above is superseded on its central claim.**
+>
+> That paragraph reasoned that a higher usage tier on the bulk filter would be
+> "paying top rates." The first shadow eval measured it instead
+> (`calibration.md` §(e) Run 3) and the reasoning does not survive contact:
+> five models spanning four usage tiers produced **identical** judgement on the
+> filter task — same schema adherence, same self-consistency, same verdicts,
+> zero disagreements — leaving latency and tier as the only discriminators.
+>
+> The tier premium is also smaller than the paragraph assumes. In the week of
+> 2026-07-31 the entire box spent 3,320 requests, 2,941 of them this filter,
+> for **1.2% of the Pro weekly allowance**. At that headroom a one-tier move on
+> the bulk path does not bind, and since Ollama bills GPU-time, a model 3.3x
+> faster at p50 may cost less in the billed unit despite the higher tier. The
+> `think=False` argument stands on its own and is untouched: nothing here
+> recommends a flagship *reasoning* model for a yes/no call.
+>
+> **Only the filter moved.** `SHRAP_INTEL_BULK_MODEL` still resolves
+> `local-classification` to `gpt-oss:20b-cloud` for the News Analyzer and
+> Filing Processor. Their task is materiality, not filtering, and it has never
+> been evaluated — the corpus those agents draw on was empty when the harness
+> was built. Same tier alias, different task, and the tier alias is not
+> evidence.
+
 Context-window numbers are approximate and will shift as providers update
 their offerings or as Ollama configuration changes the effective window
 for local models. Treat the numbers as planning guidance, not contracts.
@@ -147,6 +172,7 @@ Append-only. Newest at the bottom.
 | 2026-05-30 | `local-heavy` | N/A | `mistral-small:24b-instruct-q4_K_M` | initial seed | Mike White | this PR |
 | 2026-05-30 | `no-llm` | N/A | N/A | initial seed | Mike White | this PR |
 | 2026-07-16 | `local-classification` | `qwen2.5:9b-instruct-q4_K_M` | `qwen3.5:9b-q4_K_M` | N/A — seed correction, not a swap: the v0.1 tag never existed (Qwen 2.5 has no 9B; discovered on first `ollama pull`). No incumbent ever ran, so there is nothing to shadow-eval against. `qwen3.5:9b-q4_K_M` is 6.6 GB, fits the Dell's 8 GB GTX 1080; requires Ollama >= 0.31.x (compose pin bumped 0.3.12 → 0.31.2 in the same PR). | Mike White | PR (this) |
+| 2026-07-31 | `local-classification` — **Tech Watcher filter binding only** (`SHRAP_FILTER_MODEL`) | `gpt-oss:20b-cloud` (*Low Usage*) | `qwen3.5:397b` (*Medium Usage*) | **The first real shadow-eval, and the first entry in `calibration.md` §(e).** Five models, 20 items, 2 repeats, prompt v4: `gpt-oss:20b-cloud`, `qwen3.5:397b`, `deepseek-v4-pro:cloud`, `glm-5.2`, `kimi-k2.6`. All five scored 100% schema, 100% self-consistency, 90% incumbent agreement, 0% says-relevant, **100% pairwise agreement and zero disagreements** — indistinguishable on judgement, so the call reduces to latency and tier. `qwen3.5:397b` is the lowest tier among the fast models (p95 2539ms vs the incumbent's 12769ms). Cost gate cleared on measurement: the box spent 3,320 requests that week for 1.2% of the Pro weekly allowance. Two candidates were unreachable and the errors said why, not the tags — `kimi-k2.5` retired (410), `kimi-k3` outside included usage (402). **`SHRAP_INTEL_BULK_MODEL` deliberately unchanged**: same tier alias, unevaluated task. | Mike White | PR (this) |
 | 2026-07-27 | *deployment routing only* (Tech Watcher) | `qwen3.5:9b-q4_K_M` on both tiers | `gpt-oss:20b-cloud` (filter) / `kimi-k3:cloud` (synthesis), both via the Ollama daemon's cloud proxy | **Failure evidence, not a shadow-eval.** The incumbent could not perform the task: it rejected a DOE announcement of a *fourth* reactor criticality as "a single milestone" lacking "independent replication," and named `physical-realization`'s example vocabulary (fusion ignition) for a fission item. Filter prompt v4 addressed every prompt-side cause and moved nothing — 16 items re-scored, 0 verdict changes. Consequence was structural: 8 of 8 clusters ever logged were arXiv-only, so triangulation (≥2 origins + ≥1 hard leg) could never fire and the funnel could not promote anything. See DQ-006, KI-009. | Mike White | PR (this) |
 
 ## Hard Rules
