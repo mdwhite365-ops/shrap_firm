@@ -434,7 +434,56 @@ carry the reason `'unparseable filter response'`. The fenced-JSON defect fixed
 in PR #172 never cost production a verdict. Run 2's schema numbers were wrong;
 the production corpus was not affected. No repair run is needed.
 
----
+#### Correction 2 — 2026-07-31, reverses Run 3's central conclusion
+
+Per editing rule 1 the entries above stand. This reverses what was concluded
+from them.
+
+**Run 3 concluded: "five model families spanning four usage tiers returning 0%
+relevant on the same corpus is the strongest evidence yet that the filter is not
+model-limited." That is false.** The archetype bar experiment scored a
+source-stratified 599-item sample hours later and found two items admitted under
+**prompt v4 unmodified** by `qwen3.5:397b`. Both had been scored under the same
+prompt v4 by `gpt-oss:20b-cloud` and marked not-relevant:
+
+| item | prompt | model | verdict |
+|---|---|---|---|
+| `usaspending:CONT_AWD_89233126FNA400803…` | 4 | `gpt-oss:20b-cloud` | not relevant |
+| ″ | 4 | `qwen3.5:397b` | **relevant** (`physical-realization`) |
+| `usaspending:CONT_AWD_89243226FNE400212…` | 4 | `gpt-oss:20b-cloud` | not relevant |
+| ″ | 4 | `qwen3.5:397b` | **relevant** (`cost-curve`, $900M HALEU capacity) |
+
+Same prompt, same items, different model, different verdict. **The filter is
+partly model-limited**, and the promotion recorded in the registry did real work
+beyond latency — which is not the reason it was approved for.
+
+**Why the eval missed it, and this is the part worth keeping.** Run 3 sampled 20
+items stratified on the incumbent's *recorded verdict*: 2 positives (both
+fossils) and 18 negatives drawn uniformly from a corpus that is **72%
+content-free EDGAR metadata** — stored summaries are `Filed / AccNo / Size in KB
+/ item codes`, with no fact in them at all. Every model rejects a file size, and
+agrees while doing so. The sample contained **no USASpending awards**, which is
+the only source that admits anything under any bar. "Zero disagreements" was a
+property of the sample, not of the models.
+
+**Three sampling artifacts in one day, all the same shape.** The positive
+stratum was two fossils; the bar experiment's first `--limit` was a head-of-list
+slice that scored 600 arXiv items and reported a hard-leg count it had never
+measured; and this. Each time the number looked like a finding and was a
+property of how the items were chosen. **The standing lesson: before reading a
+rate, state what the denominator is made of.** A stratified sample keyed on the
+thing being tested is not automatically representative of the thing being
+measured.
+
+**What survives Run 3 unchanged:** the promotion of `qwen3.5:397b` (right call,
+wrong recorded reason), the latency and schema measurements, and the finding
+that `deepseek-v4-pro` and `glm-5.2` offer nothing over it. **What does not
+survive:** the claim that model choice cannot move the funnel.
+
+**Consequence, not yet run:** no item in the corpus has ever been scored by the
+promoted model — production only switched on 2026-07-31. `refilter_pass` already
+selects on the `(prompt version, model)` pair, so a full re-filter needs no new
+code and is the cheapest untested lever the funnel has.
 
 ## Cross-section principles
 
