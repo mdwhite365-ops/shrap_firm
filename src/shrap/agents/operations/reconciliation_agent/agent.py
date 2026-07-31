@@ -21,6 +21,7 @@ from shrap.agents.operations.reconciliation_agent.db import (
     BROKER_ACCOUNT_ID_FIELD,
     UnidentifiedAccountError,
 )
+from shrap.agents.operations.reconciliation_agent.discrepancy_state import DiscrepancyTracker
 from shrap.agents.operations.reconciliation_agent.records import (
     BrokerPosition,
     ReconciliationReport,
@@ -78,6 +79,7 @@ async def reconcile_once(
     snapshot_sink: AccountSnapshotSink | None = None,
     lookback_days: float | None = None,
     position_sink: PositionSnapshotSink | None = None,
+    tracker: DiscrepancyTracker | None = None,
 ) -> ReconciliationReport:
     """Run one reconciliation pass and publish its outcome.
 
@@ -85,6 +87,14 @@ async def reconcile_once(
     status travels in the completed event. A broker or database failure
     raises before any event is published — a pass either reports a full
     comparison or reports nothing.
+
+    ``tracker`` makes the discrepancy stream edge-triggered: pass one from a
+    long-running loop and only *new* divergences are published. Omit it and
+    every divergence is published, which is correct for a one-shot run.
+    ``operations.reconciliation-completed`` is unaffected either way — it stays
+    level-triggered, carrying the current count on every pass, so suppressing a
+    repeat never hides the current state. See
+    :mod:`~shrap.agents.operations.reconciliation_agent.discrepancy_state`.
     """
 
     run_id = correlation_id or str(ULID())
@@ -110,7 +120,14 @@ async def reconcile_once(
 
     report = compare_orders(stored=stored, broker_orders=broker_orders, broker=broker)
 
-    for discrepancy in report.discrepancies:
+    # Edge-triggered when a tracker is supplied: a new divergence is news, the
+    # same divergence next pass is not. Without one every caller behaves as
+    # before and reports everything, which is right for a one-shot run where
+    # there is no previous pass to be relative to.
+    delta = tracker.observe(report.discrepancies) if tracker is not None else None
+    announce = report.discrepancies if delta is None else delta.appeared
+
+    for discrepancy in announce:
         await publisher.publish(
             stream=STREAM_RECONCILIATION_DISCREPANCY,
             produced_by=produced_by,
@@ -132,6 +149,19 @@ async def reconcile_once(
             broker_order_id=discrepancy.broker_order_id,
             stored_status=discrepancy.stored_status,
             broker_status=discrepancy.broker_status,
+        )
+
+    if delta is not None and (delta.suppressed or delta.resolved):
+        # Suppression is stated, not silent. A quiet discrepancy stream should be
+        # evidence that nothing changed, not evidence that the agent stopped
+        # looking — and that distinction is exactly what was missing when 11,096
+        # identical events taught everyone to ignore the stream.
+        log.info(
+            "reconciliation.discrepancies_unchanged",
+            broker=broker,
+            appeared=len(delta.appeared),
+            suppressed=delta.suppressed,
+            resolved=delta.resolved,
         )
 
     account_summary = {
