@@ -33,6 +33,7 @@ from shrap.agents.operations.reconciliation_agent.db import (
     PostgresOrderEventRepository,
     PostgresPositionSnapshotStore,
 )
+from shrap.agents.operations.reconciliation_agent.discrepancy_state import DiscrepancyTracker
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher, RedisPublisher
@@ -72,7 +73,17 @@ async def run_loop(
     lookback_days: float | None = 7.0,
     position_sink: PositionSnapshotSink | None = None,
 ) -> None:
-    """Run reconciliation passes until ``stop`` is set."""
+    """Run reconciliation passes until ``stop`` is set.
+
+    One tracker for the life of the process makes the discrepancy stream
+    edge-triggered — see
+    :mod:`~shrap.agents.operations.reconciliation_agent.discrepancy_state` for
+    why 11,096 identical events made that necessary. It is deliberately not
+    persisted: a restart re-announces whatever is currently outstanding, which
+    is the right baseline for an agent whose job is to state what it sees.
+    """
+
+    tracker = DiscrepancyTracker()
 
     while not stop.is_set():
         try:
@@ -85,6 +96,7 @@ async def run_loop(
                 snapshot_sink=snapshot_sink,
                 lookback_days=lookback_days,
                 position_sink=position_sink,
+                tracker=tracker,
             )
             delay = interval_seconds
         except Exception:

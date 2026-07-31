@@ -880,3 +880,56 @@ it cannot be acted on. Both are worth knowing; neither is currently visible.
 Diagnose before trimming: `XRANGE operations.reconciliation-discrepancy - + COUNT 5`
 answers which it is in one command, and trimming first would destroy the
 evidence.
+
+### Diagnosed 2026-07-31 — the answer was neither, and the fix is not retention
+
+The payload:
+
+```json
+{"kind":"missing-in-store","broker_status":"filled","stored_status":null,"symbol":"SPY"}
+```
+
+**The comparison was correct and the reporting was wrong.** Mike cancelled the
+account's original test orders by hand in the Alpaca UI. Those orders were never
+Shrap's, so `trading.paper_order_events` correctly has no row for them, and
+`compare_orders` correctly reported a divergence. Then the agent re-announced
+that same understood divergence **every 300 seconds, from three agents, for
+weeks** — because `agent.py` published one event per discrepancy per pass with
+no state at all.
+
+So **11,096 was a re-report count, not an incident count**, and the number said
+nothing about how many orders were actually involved. Neither of the two
+hypotheses above was right: not book drift, and not a noisy predicate.
+
+**Fix shipped 2026-07-31:** the two streams now make the distinction they were
+already halfway to making.
+
+- `operations.reconciliation-completed` stays **level-triggered** — it already
+  carried `discrepancies` and `clean` on every pass, so current state remains
+  observable and a divergence that clears needs no event of its own.
+- `operations.reconciliation-discrepancy` becomes **edge-triggered** — a new
+  divergence is news, the same divergence next pass is not.
+
+That collapses the stream from *time times divergences* to just *divergences*,
+and restores the property an alarm needs: an event in it means something
+changed. The tracker is process-local and resets on restart, mirroring the
+Health Monitor's transition state, so a fresh process re-states what it sees
+rather than silently inheriting a baseline it never observed. Suppression is
+logged (`reconciliation.discrepancies_unchanged`) rather than silent — a quiet
+stream should be evidence that nothing changed, not evidence that the agent
+stopped looking.
+
+**Retention is still open, and is now the smaller half.** `ops.health-tick` at
+80,509 is legitimate one-per-tick liveness and wants a `MAXLEN ~` cap; the
+reconciliation streams will stop growing pathologically on their own once the
+fix deploys. Consumer-group lag was measured at **0 on every stream** with the
+Audit Logger 2 seconds behind and 118,344 rows persisted to `ops.audit_events`,
+so trimming Redis is safe whenever it is done — nothing would be lost that is
+not already durable in Postgres.
+
+**One thing this does not do:** resolve the underlying divergence. The broker
+still holds orders the store has no row for, and it always will — they were
+never Shrap's. They age out of the agent's 7-day lookback window on their own.
+A mechanism for acknowledging a known-benign divergence is deliberately *not*
+built, because the only one on record resolves itself and building an
+acknowledgement workflow for a single self-clearing case would be scaffolding.
