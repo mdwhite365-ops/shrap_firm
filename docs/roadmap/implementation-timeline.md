@@ -1,6 +1,6 @@
 # Implementation timeline
 
-**Last updated:** 2026-07-28 (evening — #102–#115 merged)
+**Last updated:** 2026-07-31 (`main` at #175; #129–#175 were missing from this file)
 **Supersedes** `docs/roadmap/paper-spine-tree.md` as the answer to "what's next."
 That document is the Month-1/2 paper-spine plan; its last card (Card 18) shipped
 weeks ago and it has not tracked anything since.
@@ -15,16 +15,31 @@ block that could not run (2026-07-27). One ordered list, dependency-first.
 
 ---
 
-## Status, 2026-07-29
+## Status, 2026-07-31
 
-**Phase 0 and Phase 1 are done. Phase 2 Track B is partly done.** See
-`docs/status/session-handoff.md` for Mike's rulings on capital and risk appetite,
-and for what a fresh session should pick up.
+**Phase 0 and Phase 1 are done. Phase 2 Track A is done. Track B is partly
+done.** See `docs/status/session-handoff.md` for Mike's rulings and what a fresh
+session should pick up.
 
 Landed #102–#118: archetype-conditional gates · the Evaluator trigger with
 ADR-0015's kill-asymmetric autonomy · CI on every push · the full-firm audit ·
 `shrap-strategy-stage` · **benchmark-relative evaluation** · cross-sectional
 rules · the momentum seed · **notional sizing, arithmetic and wiring**.
+
+**Landed #129–#175, and this file did not know it until 2026-07-31.** Three
+paper accounts · information ratio and panel coverage in the verdict · the
+ragged price panel · protocol 0.2 · strategy lineage and multiple-testing
+correction · **the Risk Officer (#146)** · **the research ledger (#149)** ·
+four documented factor effects · **the firm proposing its own strategies
+(#156) with an autonomous trigger (#163)** · arXiv q-fin ingest · box-wide
+cloud routing · **the first shadow eval, and the `qwen3.5:397b` promotion it
+produced (#170–#175)**.
+
+> **Two items below were listed as pending while already shipped**, which is
+> what a 46-PR documentation gap does to a roadmap. Both are marked **DONE**
+> in place rather than deleted, because an ordered plan that quietly loses its
+> completed rows stops being auditable. See `recent-changes.md` for the full
+> backfill and `make doc-drift` for the check that should prevent a fourth one.
 
 **The scope changed on 2026-07-29.** ADR-0016 commits the firm to three asset
 classes — equities, MES futures, spot crypto — operating continuously. Read it
@@ -37,10 +52,15 @@ now. What replaced it — continuous intraday margin requirements — is a Risk
 Officer problem that applies immediately, because margin is reachable today and
 the firm has no leverage bound in code.
 
-**Next, in order:** forward-test scoring (nothing evaluates a strategy *after*
-promotion — more urgent under ADR-0016, not less) → Risk Officer limits (2.7,
-now a live exposure rather than a futures prerequisite) → intraday bars (2.8) →
-Runner firing intraday (2.9) → intraday equities (2.10).
+**Next, in order:** the archetype bar experiment (1.4 — the funnel has admitted
+**nothing** across 2,472 v4 verdicts, and five models across four usage tiers
+proved that is not a model problem) → forward-test scoring (nothing evaluates a
+strategy *after* promotion — more urgent under ADR-0016, not less) → intraday
+bars (2.8) → Runner firing intraday (2.9) → intraday equities (2.10).
+
+Risk Officer limits (2.7) have **shipped** (#146) and are removed from this
+ordering. They are also essentially unexercised: the Officer has recorded one
+decision ever, because no order has flowed since 2026-07-29 — see KI-022.
 
 ---
 
@@ -120,7 +140,7 @@ what unblocks fastest, not by importance.
 |---|---|---|---|
 | 2.3 | **Intraday data decision** | — | **Mike's call.** `market_data.daily_bars` cannot express "fast loops, many trades" at any parameterisation. Scope: bar size, feed, cost, whether the walk-forward still applies. **Decide it against the direction of travel below** — an equities-only feed answers today's question and none of the next one. |
 | 2.4 | **Sweep Detector** — ADR-0013 §4, the first genuine Framework #3 strategy | 1.1, 2.3 | Mike's existing liquidation-sweep logic, wrapped. The one strategy in the firm's future with a real prior behind it. |
-| 2.5 | **Hypothesis Generator** with `technical-catalyst` in its archetype set | 1.1 | ADR-0013 sequencing item 3. Its spec predates ADR-0013 and allows only the two ADR-0007 archetypes; the spec needs updating before the code. |
+| 2.5 | ~~**Hypothesis Generator** with `technical-catalyst` in its archetype set~~ **DONE** | 1.1 | Shipped. The spec was two ADRs out of date and was fixed (#151); the agent was built (#156) and given an autonomous trigger (#163). `hypothesis-generator-trigger` runs as a service; `hypothesis-generator` itself is `--profile tools`, invoked by the trigger. The note that "the spec needs updating before the code" was true on 2026-07-28 and stale by 2026-07-30. |
 | 2.6 | **Strategy Runner consumes `intelligence.signal`** | 2.4 | ADR-0013 §3. Closes KI-011 — two deployed agents have been writing to a stream with no consumer since Month 2. |
 
 ---
@@ -187,7 +207,7 @@ now.
 
 | # | Item | Depends on | Note |
 |---|---|---|---|
-| 2.7 | **Risk Officer: leverage, drawdown, per-strategy loss limits, and an intraday-margin-deficit model** | — | The firm has none of these. Margin is reachable by a $10k account *today* (post-2026-06-04, $2,000 minimum), so this is a live exposure, not a futures prerequisite. The 90-day new-position freeze after a pattern of unmet deficits is the specific failure an autonomous agent can repeat without tiring. |
+| 2.7 | ~~**Risk Officer: leverage, drawdown, per-strategy loss limits, and an intraday-margin-deficit model**~~ **DONE** | — | Shipped in #146. "The firm has none of these" was true when written and false from 2026-07-30. It is a **library** at `src/shrap/risk_compliance/risk_officer/` enforced inside the Pre-Trade Checker, not a compose service — there is no container to check. Its limits are unruled first cuts, and it has recorded exactly one decision (a `UNKNOWN_STRATEGY` veto) because no order has flowed since 2026-07-29. Built ≠ exercised; see KI-022. |
 | 2.8 | **Intraday bars ingest** | — | Second price path. `market_data.daily_bars` cannot express a fast loop at any parameterisation. Scope bar size and feed against ADR-0016's three asset classes, not equities alone. |
 | 2.9 | **Runner fires more than once per session** | 2.8 | The pass triggers on entry to `open` and the guard is `(strategy_id, session_date)`. Both are daily-bar assumptions. Note this is *capability*: a strategy that declines to act intraday stays correct and must stay cheap. |
 | 2.10 | **Intraday equities path** | 2.7, 2.8, 2.9 | First asset under ADR-0016 and the cheapest — reuses the broker, the 50-name universe, Tier 3, the strategies and the Evaluator. No new calendar; no ADR-0003 gate if bars are polled rather than streamed. |

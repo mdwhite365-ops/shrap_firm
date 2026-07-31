@@ -1,13 +1,125 @@
-# Session handoff — 2026-07-28
+# Session handoff — 2026-07-31
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
-`main` is green (`739 passed` with #117), CI runs on every push and PR. Cards
-#102–#116 merged; **#117 (notional sizing wired) is open**.
+**Run `make doc-drift` before you trust this file.** It was 58 PRs behind on
+2026-07-31 while `CLAUDE.md` named it ground truth — the third and worst
+recurrence of that failure. `main` is at **#175**.
+
+The prior handoff (2026-07-28) is preserved below the line: its rulings on
+capital, the growth target and risk limits are still in force and were never
+superseded. What changed is everything after them.
 
 ---
 
-## Mike's rulings this session
+## State of the firm, measured 2026-07-31
+
+Not inferred from documents. This is a full systems check against the running
+Dell and the database.
+
+| | |
+|---|---|
+| Always-on containers | **34**, all `running` |
+| Unhealthy | `langfuse`, `qdrant` |
+| Ingest | six legs, `sec-edgar` 8 minutes old; `doe-newsroom` **2 days** stale |
+| Filter backlog | **0** — 5,177 of 5,177 items scored |
+| Items ever judged relevant | **2**, both fossils (see KI-009) |
+| Clusters ever synthesized | **0** — 16 rows, all `held-single-source` |
+| Strategies | 12 killed, 2 hypothesis, **0 promoted, 0 live** |
+| Evaluations | 26; the most common verdict is `hold-for-data` (13), not `kill` (9) |
+| Orders | none since **2026-07-29 13:32**; all 141 rows have a blank `account_id` |
+| Risk Officer decisions | **1**, ever |
+| Market data | 50 tickers, **2 days stale**, no automated ingest |
+| Box load | every agent at 0.00% CPU, ~40 MB, against 31 GB |
+
+**The firm has never promoted a strategy, and its research funnel has never
+admitted an item.** Everything else is plumbing that works.
+
+## What is next, in order
+
+1. **The archetype bar experiment** (timeline 1.4, spec in
+   `docs/research/archetype-bar-experiment.md`, PR #173). Prompt v4 has admitted
+   **nothing** across 2,472 verdicts, and the first shadow eval proved that is
+   not a model problem — five models across four usage tiers and four families
+   returned 0% relevant with zero disagreements. The remaining explanation is
+   the taxonomy, and this card produces the evidence Mike rules on. **Step 1
+   (the spec) is merged; step 2 is the harness, not yet built.**
+2. **Forward-test scoring.** Nothing evaluates a strategy *after* promotion.
+   More urgent under ADR-0016, not less.
+3. **The runtime gaps below** — cheap, and two of them are silently corrupting
+   results.
+4. **Intraday bars (2.8) → Runner firing intraday (2.9) → intraday equities
+   (2.10).**
+
+Risk Officer limits (2.7) are **done** (#146) and removed from this ordering.
+
+## Runtime gaps found 2026-07-31 — see KI-022 to KI-025
+
+- **Alerts reach nobody.** `discord_webhook_url: null`, `ntfy_url: ""`, and
+  `ops.alert-delivery-failed` holds 8 events. #167's freshness alarms fire into
+  nothing. Fix is one `.env` line and a recreate. **Mike's, not an agent's.**
+- **Nothing auto-ingests price bars.** `market-data` is `--profile tools`, so
+  bars only advance when a human runs the backfill. Every evaluation since
+  2026-07-29 ran on stale prices — which may explain some of the 13
+  `hold-for-data` verdicts.
+- **11,096 reconciliation discrepancies vs 9,161 clean passes.** Nobody has ever
+  read them.
+- **Streams grow unbounded.** `ops.health-tick` is at 80,509 and nothing trims.
+
+## The three findings that mattered this session
+
+1. **The taxonomy rejects everything, and it is not the model's fault.** Two
+   flagship tiers, four families, 0% relevant. KI-009 is a taxonomy problem with
+   a number behind it now, not an inference.
+2. **The instrument was lying twice before it told the truth.** The shadow eval
+   counted unparsed answers as agreement (#171), then scored fence-wrapped JSON
+   as an unparseable verdict (#172) — a defect in *production* code that made
+   `glm-5.2` look 25% competent. Both were caught by running the thing against
+   real models, not by the test suite.
+3. **Neither compute nor inference budget is a constraint.** The Ollama Pro
+   allowance ran at 1.2% of weekly for 3,320 requests, and the Dell is idle.
+   Two design hedges made on cost this session were wrong.
+
+## Standing constraints a new session must not rediscover
+
+- **Paper only.** Credentials live in gitignored `infra/.env`; never printed,
+  committed or pasted. Check presence and length only.
+- **The Dell is pull-only for git.** No write token on a production deploy box.
+  Never `sudo git` in the repo — it creates root-owned objects that break pulls.
+- **One card per PR, branched off `main`.** Never stack (KI-001).
+- **Do not append to the tail of a file another open PR touches** (KI-016). Two
+  correctly independent PRs doing that merged into a `SyntaxError` and left the
+  whole suite uncollectable on `main`. A note in a PR body is not a check — if
+  two cards interact, decouple the test rather than sequencing the merges.
+- **`docker compose run` never rebuilds.** Build first, and rebuild *every*
+  service whose source a change touched — `strategy-evaluator` and
+  `strategy-evaluator-trigger` share one Dockerfile.
+- **Restarting a stream consumer does not replay acked events.** `start_id`
+  applies at consumer-group creation only, so a logging or handling fix cannot be
+  verified against old events.
+- **The Risk Officer is a library, not a service.** No container to check; it
+  lives and dies with `pre-trade-checker`.
+- **`shraptasmaner` and `ib-gateway` are not Shrap's.** The Dell is not
+  dedicated to this project. `shraptasmaner` is Mike's earlier
+  convergence/divergence prototype and has been crash-looping on a missing
+  entrypoint for ~13 days; ignore it in any Shrap health reading.
+
+## Still unverified live
+
+- **#100's Librarian INFO fix** and **#103's Evaluator trigger** — both
+  unit-tested, neither observed in production.
+- **The three-account split.** Every `paper_order_events` row has a blank
+  `account_id` despite #124–#128. Either attribution is unwired or nothing has
+  flowed through it since.
+
+---
+
+# Prior handoff — 2026-07-28
+
+**Rulings below remain in force.** Only the "what is next" ordering has been
+superseded, by the section above.
+
+## Mike's rulings, 2026-07-28
 
 ### 1. Capital and risk appetite
 
@@ -112,97 +224,3 @@ than silently holding zero. Fractional shares would fix it and Alpaca supports
 them — that is its own card.
 
 ---
-
-## What is next, in order
-
-1. ~~**Wire notional sizing into the signal path.**~~ **Done — #117.** Entries are
-   `target_weight × equity / price`, floored, with equity read from
-   `ops.account_snapshots`.
-2. ~~**Apply the risk limits.**~~ **Done — the risk-limits card** (table above).
-   Together with #117 this is the point where the book starts expressing real
-   weights across 50 names rather than one share of six.
-3. **Forward-test scoring.** Nothing evaluates a strategy *after* promotion — the
-   Evaluator spec's Sunday re-evaluation was never built, so a promoted strategy
-   can decay silently. This is the missing half of "test them forward and back",
-   and with kills already autonomous under ADR-0015 a decayed strategy can be
-   retired without waiting on review. **ADR-0017 supplies the metric:** realised
-   account growth since deployment over max drawdown since deployment. It needs
-   item 4 first — the score is an account's equity curve, so the firm has to know
-   which account it is looking at. Do not annualise a three-week sample.
-4. ~~**Account identity.**~~ **Done — the account-identity card.**
-   `ops.account_snapshots` now carries `account_id` (the broker's own
-   `account_number`, so identity comes from the venue rather than a config value
-   someone could mistype), and the Runner reads equity scoped to
-   `STRATEGY_RUNNER_ACCOUNT_ID`.
-
-   **Operator step, required before the Runner will trade:** set
-   `STRATEGY_RUNNER_ACCOUNT_ID` in `infra/.env` to the Alpaca account number.
-   Unset refuses every pass — deliberately, since the alternative is sizing
-   against whichever account reported last.
-
-5. ~~**Per-strategy account routing**~~ **Done** (ADR-0017, cards A–D). Strategy
-   → account assignment (`shrap-strategy-stage assign-account`), an
-   account-aware Runner sizing each strategy against its own book, the account
-   carried on signals/intents so each Execution Agent claims only its own, and
-   three of each broker-facing agent in compose.
-
-   **Deploying it: `docs/runbooks/bringing-up-three-accounts.md`.** Order
-   matters — reconcilers first (they write the snapshots the Runner needs), then
-   assign each strategy an account, then the execution agents.
-6. Then, stocks first (ADR-0016 sequence, Mike 2026-07-29 — futures and crypto
-   later): intraday bars, a Runner that fires more than once a session, and the
-   intraday equities path. Futures/crypto cards stay parked.
-
-**On the Dell, after these merge:** rebuild both `pre-trade-checker` and
-`strategy-runner` (`docker compose run` never rebuilds), then confirm the new
-caps in the checker's startup log. Nothing needs to be loaded or migrated by
-hand — the `last_quantity` column migrates itself at startup.
-
----
-
-## The three findings that mattered this session
-
-Each was found by measuring rather than reasoning, and each would have produced
-a strategy that looked fine and wasn't.
-
-1. **The promote gate could not tell skill from market exposure** (#112). Naive
-   buy-and-hold with no timing rule scored Sharpe 1.03–1.16 through the engine on
-   drifting data, clearing the 1.0 floor purely by being invested. Fixed with
-   benchmark-relative evaluation: the gate is now the information ratio against
-   equal-weight buy-and-hold of the strategy's own universe.
-2. **Strategies could only trade one ticker** (#110). The engine was always
-   cross-sectional; one line in the factory discarded every ticker but the first.
-   This invalidated a claim I had repeated four times — that a daily-bar rule
-   *cannot* clear the 150-trade gate. True per instrument, false across a
-   universe: 89 trades on one ticker, 28,139 on fifty.
-3. **The Runner never sized positions** (#115). It emitted one share and never
-   read account equity, so a strategy evaluated as equal-weight would trade at
-   7.5% of book for a $750 name and 0.5% for a $50 one.
-
----
-
-## Standing constraints a new session must not rediscover
-
-- **Paper only.** Credentials live in gitignored `infra/.env`; never printed,
-  committed or pasted. Check presence and length only.
-- **The Dell is pull-only for git.** No write token on a production deploy box.
-  Never `sudo git` in the repo — it creates root-owned objects that break pulls.
-- **One card per PR, branched off `main`.** Never stack (KI-001).
-- **Do not append to the tail of a file another open PR touches** (KI-016). Two
-  correctly independent PRs doing that merged into a `SyntaxError` and left the
-  whole suite uncollectable on `main`. A note in a PR body is not a check — if
-  two cards interact, decouple the test rather than sequencing the merges.
-- **`docker compose run` never rebuilds.** Build first, and rebuild *every*
-  service whose source a change touched — `strategy-evaluator` and
-  `strategy-evaluator-trigger` share one Dockerfile.
-- **Restarting a stream consumer does not replay acked events.** `start_id`
-  applies at consumer-group creation only, so a logging or handling fix cannot be
-  verified against old events.
-
-## Still unverified live
-
-- **#100's Librarian INFO fix** and **#103's Evaluator trigger** — both
-  unit-tested, neither observed in production. Both need a fresh
-  `research.strategy.verdict`, which the momentum seed (#114) will produce on its
-  first evaluation.
-- **KI-014** — the Librarian and Runner were started but never confirmed running.

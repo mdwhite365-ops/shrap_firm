@@ -1,4 +1,4 @@
-.PHONY: install test lint fmt typecheck all deploy-drift
+.PHONY: install test lint fmt typecheck all deploy-drift doc-drift
 
 # `.[dev]` is tooling only and cannot collect the test suite: tests import agent
 # modules directly, so 13 files failed on a clean environment while a stale
@@ -27,3 +27,9 @@ all: install lint typecheck test
 # silently skips services that were never explicitly named (KI-014).
 deploy-drift:
 	sudo ./infra/check-deploy-drift.sh
+
+# Report status documents that have fallen behind `main`. Reads git, not
+# GitHub — no network, no auth. The same gap has opened three times (#72-80,
+# #92-101, #129-175); this is the check that should catch the fourth.
+doc-drift:
+	./scripts/check-doc-drift.sh

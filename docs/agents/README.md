@@ -72,7 +72,7 @@ via CLI (no trigger) · **Spec only** = spec written, no implementation ·
 | Deployment Agent | ~~Development~~ Operations | post-loop-closure | Not built — retained per ADR-0014 §2 (`no-llm`) |
 | Regime Classifier | Research | Month 2 | **Deployed** (lives under Intelligence in code) |
 | Regime Researcher | Research | Month 3 | Not built |
-| Hypothesis Generator | Research | Month 2 | Spec only — spec predates ADR-0013 and still allows only the two ADR-0007 archetypes |
+| Hypothesis Generator | Research | Month 2 | **Deployed** — spec corrected (#151), agent built (#156), autonomous trigger running (#163). The agent is `--profile tools`; `hypothesis-generator-trigger` is the always-on service |
 | Strategy Evaluator | Research | Month 2 | **Deployed** — on-demand CLI plus an interval-sweep trigger (ADR-0013 item 2); three verdicts produced |
 | Bayesian Updater | Research | Month 3 | Not built |
 | Strategy Librarian | Research | Month 2 | **Deployed** — converges on verdicts the Evaluator already applied; INFO path not yet exercised live |
@@ -88,7 +88,7 @@ via CLI (no trigger) · **Spec only** = spec written, no implementation ·
 | Debt and Credit Monitor | Structural Analysis | Month 4 | Not built |
 | Insider Behavior Tracker | Structural Analysis | Month 3 | Not built |
 | Watch List Curator | Structural Analysis | Month 3 | Not built |
-| Risk Officer | Risk and Compliance | Month 2 | Spec only |
+| Risk Officer | Risk and Compliance | Month 2 | **Built (#146), enforcing, essentially unexercised** — a library at `src/shrap/risk_compliance/risk_officer/` called inside the Pre-Trade Checker, **not a compose service**. One decision recorded ever; see KI-022 |
 | Pre-Trade Checker | Risk and Compliance | Month 1 | **Deployed** |
 | Compliance Monitor | Risk and Compliance | Month 1 | Not built |
 | Health Monitor | Operations | Month 1 | **Deployed** |
@@ -104,8 +104,15 @@ via CLI (no trigger) · **Spec only** = spec written, no implementation ·
 
 ### Built but not on the original roster
 
-These shipped during Phase 1 and were never added above. Counting them, the
-firm runs 19 agents, not 11.
+These shipped during Phase 1 and were never added above.
+
+**Verified against `docker compose ps` on 2026-07-31**, because the two rows
+corrected above had both read "Spec only" while the code was deployed. A roster
+entry is a claim about the running system and should be checked against it, not
+against memory. Four services are `--profile tools` — `market-data`,
+`strategy-evaluator`, `hypothesis-generator`, `infra-mapper` — so their absence
+from `docker compose ps` is by design, not a fault; the always-on triggers
+(`strategy-evaluator-trigger`, `hypothesis-generator-trigger`) invoke them.
 
 | Agent | Department | Status |
 |---|---|---|
