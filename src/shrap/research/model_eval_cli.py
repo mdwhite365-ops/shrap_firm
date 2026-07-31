@@ -289,8 +289,22 @@ def main() -> None:
     print("\n" + block)
     if args.out:
         path = Path(args.out)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write("\n" + block)
+        try:
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write("\n" + block)
+        except OSError as exc:
+            # The eval already ran, cost its share of the cap, and persisted to
+            # research.model_eval_* before anything printed. Raising here would
+            # end a completed run on a traceback and read like the eval failed
+            # — which is how the 2026-07-31 run ended, writing into the
+            # container's read-only /app. The block is on stdout above; say so.
+            print(
+                f"\ncould not append to {path}: {exc}\n"
+                "The run completed and is persisted in research.model_eval_runs — "
+                "the markdown block above is intact, copy it from there.",
+                file=sys.stderr,
+            )
+            return
         print(f"appended to {path}", file=sys.stderr)
 
 
