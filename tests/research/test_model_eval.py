@@ -10,6 +10,11 @@ import pytest
 
 from shrap.research import model_eval_cli
 from shrap.research.model_eval import (
+    FAILURE_EMPTY,
+    FAILURE_FENCED,
+    FAILURE_MALFORMED,
+    FAILURE_PROSE,
+    FAILURE_WRONG_SHAPE,
     STRATUM_NEGATIVE,
     STRATUM_POSITIVE,
     STRATUM_UNSCORED,
@@ -22,6 +27,10 @@ from shrap.research.model_eval import (
     collect_disagreements,
     compute_metrics,
     compute_pairwise,
+    diagnose_failure,
+    distinct_errors,
+    failure_breakdown,
+    recoverable_count,
     registry_for_model,
     render_markdown,
     run_one,
@@ -312,18 +321,27 @@ def test_errored_verdicts_are_not_counted_as_disagreement() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_report_warns_when_the_sample_has_no_positives() -> None:
-    plan = _plan(("a", "b"), (_item("n1"), _item("n2")))
-    results = [_result(m, i, False) for m in ("a", "b") for i in ("n1", "n2")]
+def test_report_warns_when_the_positive_class_is_too_thin_to_discriminate() -> None:
+    """The first real run had 2 positives and said nothing about it."""
+
+    plan = _plan(("a", "b"), (_item("p", STRATUM_POSITIVE), _item("n1"), _item("n2")))
+    results = [_result(m, i, False) for m in ("a", "b") for i in ("p", "n1", "n2")]
     report = build_report(plan, results, T0, T1)
-    assert any("no incumbent-relevant items" in n for n in report.notes)
+    assert any("incumbent-relevant item(s) in the sample" in n for n in report.notes)
+    assert any("floor, not a ranking" in n for n in report.notes)
 
 
-def test_report_warns_when_a_model_errored() -> None:
-    plan = _plan(("a", "b"), (_item("p", STRATUM_POSITIVE),))
-    results = [_result("a", "p", True), _result("b", "p", None, error="401")]
+def test_report_warns_when_a_model_errored_and_says_what_the_error_was() -> None:
+    plan = _plan(("a", "b"), (_item("p", STRATUM_POSITIVE), _item("n")))
+    results = [
+        _result("a", "p", True),
+        _result("a", "n", False),
+        _result("b", "p", True),
+        _result("b", "n", None, error="401 unauthorized"),
+    ]
     report = build_report(plan, results, T0, T1)
-    assert any("returned errors" in n for n in report.notes)
+    assert any("errored on 1 of 2 calls" in n for n in report.notes)
+    assert any("401 unauthorized" in n for n in report.notes)
 
 
 def test_rendered_block_refuses_to_call_a_winner() -> None:
@@ -407,3 +425,217 @@ def test_percentile_helpers_survive_degenerate_input(bad: int) -> None:
     assert metrics.latency_p50_ms == 0.0
     assert metrics.schema_adherence == 0.0
     assert bad <= 0
+
+
+# ---------------------------------------------------------------------------
+# a model must not be able to agree by failing (found in the first real run)
+# ---------------------------------------------------------------------------
+
+
+def _lopsided_plan(models: tuple[str, ...]) -> EvalPlan:
+    """The shape of the 2026-07-30 runs: 2 positives, 18 negatives."""
+
+    items = tuple(
+        [_item(f"p{i}", STRATUM_POSITIVE) for i in range(2)]
+        + [_item(f"n{i}", STRATUM_NEGATIVE) for i in range(18)]
+    )
+    return _plan(models, items)
+
+
+def test_unparsed_answers_are_excluded_from_agreement() -> None:
+    """glm-5.2 scored 10% schema and 90% "agreement" on the same 20 items.
+
+    The production parser turns junk into relevant=False, and the incumbent said
+    not-relevant on 18 of 20 — so a model that parses almost nothing agrees with
+    almost everything. That number was a property of the metric, not the model.
+    """
+
+    plan = _lopsided_plan(("junk",))
+    results = [
+        _result("junk", item.item_id, False, parsed_ok=False, raw="Sure! Here's my analysis:")
+        for item in plan.items
+    ]
+
+    metrics = compute_metrics(plan, results)[0]
+
+    assert metrics.schema_adherence == 0.0
+    assert metrics.judged_calls == 0
+    assert metrics.agreement_with_incumbent is None, "no parsed answers = no agreement to report"
+    assert metrics.relevant_rate is None
+
+
+def test_agreement_is_computed_only_over_answers_that_parsed() -> None:
+    plan = _plan(("m",), (_item("p", STRATUM_POSITIVE), _item("n1"), _item("n2"), _item("n3")))
+    results = [
+        _result("m", "p", True),
+        _result("m", "n1", False),
+        _result("m", "n2", False, parsed_ok=False),
+        _result("m", "n3", False, parsed_ok=False),
+    ]
+    metrics = compute_metrics(plan, results)[0]
+    assert metrics.judged_calls == 2
+    assert metrics.agreement_with_incumbent == 1.0
+    assert metrics.unparsed == 2
+
+
+def test_pairwise_agreement_ignores_items_either_model_failed_to_parse() -> None:
+    """Two models 'agreeing' on an item neither could parse is not agreement."""
+
+    plan = _plan(("a", "b"), (_item("i1"), _item("i2")))
+    results = [
+        _result("a", "i1", True),
+        _result("b", "i1", False),
+        _result("a", "i2", False, parsed_ok=False),
+        _result("b", "i2", False, parsed_ok=False),
+    ]
+    assert compute_pairwise(plan, results)[("a", "b")] == 0.0
+
+
+def test_disagreement_rows_contain_only_real_verdicts() -> None:
+    """The 2026-07-30 run printed 'unparseable filter response' as a verdict."""
+
+    plan = _plan(("a", "b"), (_item("i", STRATUM_POSITIVE),))
+    results = [_result("a", "i", True), _result("b", "i", False, parsed_ok=False)]
+    assert collect_disagreements(plan, results) == []
+
+
+def test_self_consistency_is_measured_only_on_parsed_pairs() -> None:
+    plan = _plan(("m",), (_item("a"), _item("b")), repeats=2)
+    results = [
+        _result("m", "a", True),
+        _result("m", "a", True, repeat=1),
+        _result("m", "b", False, parsed_ok=False),
+        _result("m", "b", True, parsed_ok=False, repeat=1),
+    ]
+    assert compute_metrics(plan, results)[0].self_consistency == 1.0
+
+
+# ---------------------------------------------------------------------------
+# failure diagnosis — is a failing model rescuable, or is it out?
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_fenced_json_is_recoverable() -> None:
+    """Our defect, not the model's: one strip in the parser would take it."""
+
+    assert diagnose_failure('```json\n{"relevant": false, "archetype": null}\n```') == (
+        FAILURE_FENCED,
+        True,
+    )
+
+
+def test_bare_fence_without_a_language_tag_is_recoverable() -> None:
+    assert diagnose_failure('```\n{"relevant": true}\n```') == (FAILURE_FENCED, True)
+
+
+def test_prose_wrapping_a_json_object_is_recoverable() -> None:
+    assert diagnose_failure('My verdict: {"relevant": false} — hope that helps') == (
+        FAILURE_PROSE,
+        True,
+    )
+
+
+def test_pure_prose_is_not_recoverable() -> None:
+    assert diagnose_failure("This item is not relevant to any archetype.") == (
+        FAILURE_PROSE,
+        False,
+    )
+
+
+def test_empty_and_malformed_are_distinguished() -> None:
+    assert diagnose_failure("   ") == (FAILURE_EMPTY, False)
+    assert diagnose_failure('{"relevant": fal') == (FAILURE_MALFORMED, False)
+
+
+def test_a_json_array_is_wrong_shape_not_prose() -> None:
+    assert diagnose_failure('[{"relevant": false}]') == (FAILURE_WRONG_SHAPE, False)
+
+
+def test_breakdown_and_recoverable_count_skip_healthy_and_errored_calls() -> None:
+    results = [
+        _result("m", "a", False),
+        _result("m", "b", False, parsed_ok=False, raw='```json\n{"relevant": false}\n```'),
+        _result("m", "c", False, parsed_ok=False, raw="I think not."),
+        _result("m", "d", None, error="timeout", parsed_ok=False, raw=""),
+    ]
+    assert failure_breakdown(results) == {FAILURE_FENCED: 1, FAILURE_PROSE: 1}
+    assert recoverable_count(results) == 1
+
+
+def test_low_schema_adherence_warns_and_says_whether_a_fix_would_help() -> None:
+    plan = _plan(("fenced",), (_item("a"), _item("b"), _item("c")))
+    results = [
+        _result("fenced", i, False, parsed_ok=False, raw='```json\n{"relevant": false}\n```')
+        for i in ("a", "b", "c")
+    ]
+    notes = build_report(plan, results, T0, T1).notes
+    assert any("parsed only 0%" in n for n in notes)
+    assert any("our defect, not the model's" in n for n in notes)
+
+
+def test_unrecoverable_failure_says_the_model_is_out() -> None:
+    plan = _plan(("prosey",), (_item("a"), _item("b"), _item("c")))
+    results = [
+        _result("prosey", i, False, parsed_ok=False, raw="Not relevant, in my view.")
+        for i in ("a", "b", "c")
+    ]
+    notes = build_report(plan, results, T0, T1).notes
+    assert any("cannot hold the strict-JSON contract" in n for n in notes)
+
+
+def test_rendered_table_shows_the_judged_denominator() -> None:
+    """A rate over 2 answers and a rate over 20 look identical as a percentage."""
+
+    plan = _lopsided_plan(("solid", "junk"))
+    results = [_result("solid", i.item_id, False) for i in plan.items]
+    results += [_result("junk", i.item_id, False, parsed_ok=False, raw="nope") for i in plan.items]
+    block = render_markdown(build_report(plan, results, T0, T1))
+    assert "| judged |" in block
+    assert "20/20" in block
+    assert "0/20" in block
+    assert "Unparsed answers, by cause:" in block
+
+
+def test_distinct_errors_dedupes_and_keeps_first_seen_order() -> None:
+    results = [
+        _result("m", "a", None, error="model 'qwen3.6' not found"),
+        _result("m", "b", None, error="model 'qwen3.6' not found"),
+        _result("m", "c", None, error="429 rate limited"),
+    ]
+    assert distinct_errors(results) == ("model 'qwen3.6' not found", "429 rate limited")
+
+
+def test_a_model_that_errors_on_every_call_is_named_a_routing_failure() -> None:
+    """kimi-k3:cloud and qwen3.6 both returned 20/20 errors and a row of zeroes.
+
+    A row of zeroes reads like a quality result. It is not one — no verdict was
+    ever produced — and the message says which of the two likely causes it was.
+    """
+
+    plan = _plan(("ghost",), (_item("a"), _item("b")))
+    results = [_result("ghost", i, None, error="model 'ghost' not found") for i in ("a", "b")]
+    notes = build_report(plan, results, T0, T1).notes
+    assert any("failed on every call" in n for n in notes)
+    assert any("routing failure, not a quality result" in n for n in notes)
+    assert any("ghost' not found" in n for n in notes)
+
+
+def test_error_messages_reach_the_rendered_block() -> None:
+    plan = _plan(("ghost", "ok"), (_item("a"),))
+    results = [
+        _result("ghost", "a", None, error="404 model not found"),
+        _result("ok", "a", False),
+    ]
+    block = render_markdown(build_report(plan, results, T0, T1))
+    assert "Call errors, by model:" in block
+    assert "404 model not found" in block
+
+
+def test_an_all_errored_model_gets_the_routing_note_and_not_a_schema_note() -> None:
+    """A model that never answered has no schema adherence to report."""
+
+    plan = _plan(("ghost",), (_item("a"), _item("b")))
+    results = [_result("ghost", i, None, error="404 not found") for i in ("a", "b")]
+    notes = build_report(plan, results, T0, T1).notes
+    assert any("routing failure" in n for n in notes)
+    assert not any("parsed only" in n for n in notes)

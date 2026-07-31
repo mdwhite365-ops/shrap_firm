@@ -45,7 +45,9 @@ whole point of this exercise is that model choices need evidence.
 
 from __future__ import annotations
 
+import json
 import random
+import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -337,8 +339,113 @@ async def run_plan(plan: EvalPlan, factory: ClientFactory) -> list[CallResult]:
 
 
 # ---------------------------------------------------------------------------
+# failure diagnosis
+# ---------------------------------------------------------------------------
+
+FAILURE_EMPTY = "empty"
+FAILURE_FENCED = "fenced-json"
+FAILURE_MALFORMED = "malformed-json"
+FAILURE_WRONG_SHAPE = "wrong-shape"
+FAILURE_PROSE = "prose"
+
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.+?)\s*```", re.DOTALL | re.IGNORECASE)
+_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def diagnose_failure(raw: str) -> tuple[str, bool]:
+    """Why one response failed to parse, and whether a client fix would rescue it.
+
+    The distinction is the whole point. A model wrapping correct JSON in
+    markdown fences fails today and would pass tomorrow for the price of one
+    ``strip`` in the production parser — that is a defect in *our* client. A
+    model answering in prose cannot do strict-JSON work at all, and no amount of
+    subscription fixes it. Reporting a single "80% unparsed" conflates the two
+    and would get a usable model rejected, or an unusable one retried forever.
+
+    Returns ``(kind, recoverable)``. ``recoverable`` means: some JSON object was
+    extractable from the response and it parses.
+    """
+
+    text = raw.strip()
+    if not text:
+        return FAILURE_EMPTY, False
+
+    fenced = _FENCE_RE.search(text)
+    if fenced is not None:
+        try:
+            data = json.loads(fenced.group(1))
+        except json.JSONDecodeError:
+            return FAILURE_MALFORMED, False
+        return (FAILURE_FENCED, True) if isinstance(data, dict) else (FAILURE_WRONG_SHAPE, False)
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    else:
+        # Parsed as JSON but the production parser still rejected it, so the
+        # top level is not an object.
+        return FAILURE_WRONG_SHAPE, False
+
+    embedded = _OBJECT_RE.search(text)
+    if embedded is not None:
+        try:
+            data = json.loads(embedded.group(0))
+        except json.JSONDecodeError:
+            return FAILURE_MALFORMED, False
+        return (FAILURE_PROSE, True) if isinstance(data, dict) else (FAILURE_WRONG_SHAPE, False)
+
+    if text.startswith(("{", "[")):
+        return FAILURE_MALFORMED, False
+    return FAILURE_PROSE, False
+
+
+def failure_breakdown(results: Sequence[CallResult]) -> dict[str, int]:
+    """Counts by failure kind across the unparsed, non-errored calls."""
+
+    counts: dict[str, int] = {}
+    for r in results:
+        if r.error or r.parsed_ok:
+            continue
+        kind, _ = diagnose_failure(r.raw)
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def recoverable_count(results: Sequence[CallResult]) -> int:
+    return sum(1 for r in results if not r.error and not r.parsed_ok and diagnose_failure(r.raw)[1])
+
+
+def distinct_errors(results: Sequence[CallResult], limit: int = 3) -> tuple[str, ...]:
+    """Deduplicated error messages, first-seen order.
+
+    A model erroring on every call reports as a row of zeroes and an errors
+    count, which says nothing about whether the tag was wrong, the usage tier
+    was outside the subscription, or the endpoint timed out. The message
+    distinguishes all three and costs nothing to carry.
+    """
+
+    seen: list[str] = []
+    for r in results:
+        if r.error and r.error not in seen:
+            seen.append(r.error)
+        if len(seen) >= limit:
+            break
+    return tuple(seen)
+
+
+# ---------------------------------------------------------------------------
 # metrics
 # ---------------------------------------------------------------------------
+
+# Below this, the judgement columns rest on too few answers to read as anything.
+# Set at two-thirds rather than something tidier because the first real run
+# produced 20% and 100% — the interesting range is "mostly worked but not
+# entirely", and a model under two-thirds is not a candidate anyway.
+SCHEMA_ADHERENCE_FLOOR = 0.67
+
+# Fewer positives than this and agreement is a statement about rejections.
+MIN_POSITIVES_TO_DISCRIMINATE = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,10 +454,21 @@ class ModelMetrics:
     calls: int
     errors: int
     schema_adherence: float
+    # The denominator behind every judgement column: parsed, non-errored calls.
+    # Carried explicitly because a rate over 4 answers and a rate over 20 read
+    # identically as a percentage and mean very different things.
+    judged_calls: int
+    unparsed: int
+    recoverable: int
+    failure_modes: Mapping[str, int]
+    # Distinct error messages, deduplicated. A model that errors on every call
+    # is usually a wrong tag or a usage tier outside the subscription, and both
+    # are one line of text away from obvious — but only if the text is shown.
+    error_samples: tuple[str, ...]
     self_consistency: float | None
     latency_p50_ms: float
     latency_p95_ms: float
-    relevant_rate: float
+    relevant_rate: float | None
     agreement_with_incumbent: float | None
 
 
@@ -403,10 +521,17 @@ def compute_metrics(plan: EvalPlan, results: Sequence[CallResult]) -> list[Model
         ok = [r for r in mine if not r.error]
         adherence = (sum(1 for r in ok if r.parsed_ok) / len(ok)) if ok else 0.0
 
+        # Every judgement column below is computed over PARSED answers only.
+        # The production parser turns junk into `relevant=False`, so counting
+        # unparsed calls lets a model agree with a mostly-negative incumbent by
+        # failing — which is exactly what the first real run reported (20%
+        # schema adherence beside 90% "agreement") before this was fixed.
+        judged = [r for r in ok if r.parsed_ok]
+
         consistency: float | None = None
         if plan.repeats > 1:
             by_item: dict[str, list[CallResult]] = {}
-            for r in ok:
+            for r in judged:
                 by_item.setdefault(r.item_id, []).append(r)
             comparable = [v for v in by_item.values() if len(v) > 1]
             if comparable:
@@ -414,8 +539,8 @@ def compute_metrics(plan: EvalPlan, results: Sequence[CallResult]) -> list[Model
                 consistency = consistent / len(comparable)
 
         latencies = [r.latency_ms for r in ok]
-        first = [r for r in ok if r.repeat == 0]
-        relevant_rate = (sum(1 for r in first if r.relevant) / len(first)) if first else 0.0
+        first = [r for r in judged if r.repeat == 0]
+        relevant_rate = (sum(1 for r in first if r.relevant) / len(first)) if first else None
 
         scored = [r for r in first if incumbent.get(r.item_id) is not None]
         agreement = (
@@ -430,6 +555,11 @@ def compute_metrics(plan: EvalPlan, results: Sequence[CallResult]) -> list[Model
                 calls=calls,
                 errors=errors,
                 schema_adherence=adherence,
+                judged_calls=len(first),
+                unparsed=sum(1 for r in ok if not r.parsed_ok),
+                recoverable=recoverable_count(ok),
+                failure_modes=failure_breakdown(ok),
+                error_samples=distinct_errors(mine),
                 self_consistency=consistency,
                 latency_p50_ms=_percentile(latencies, 0.50),
                 latency_p95_ms=_percentile(latencies, 0.95),
@@ -450,7 +580,13 @@ def compute_pairwise(plan: EvalPlan, results: Sequence[CallResult]) -> dict[tupl
                 for it in plan.items
                 if (a, it.item_id) in first and (b, it.item_id) in first
             ]
-            usable = [(x, y) for x, y in both if not x.error and not y.error]
+            # Both sides must have actually answered. Two models "agreeing" on
+            # an item neither could parse is not agreement about anything.
+            usable = [
+                (x, y)
+                for x, y in both
+                if not x.error and not y.error and x.parsed_ok and y.parsed_ok
+            ]
             if not usable:
                 continue
             agree = sum(1 for x, y in usable if x.relevant == y.relevant)
@@ -474,7 +610,9 @@ def collect_disagreements(
                 first[(m, item.item_id)].reason,
             )
             for m in plan.models
-            if (m, item.item_id) in first and not first[(m, item.item_id)].error
+            if (m, item.item_id) in first
+            and not first[(m, item.item_id)].error
+            and first[(m, item.item_id)].parsed_ok
         ]
         if len(verdicts) < 2:
             continue
@@ -503,13 +641,49 @@ def build_report(
     metrics = compute_metrics(plan, results)
     if plan.repeats < 2:
         notes.append("self-consistency not measured (--repeats 1)")
-    if plan.stratum_counts()[STRATUM_POSITIVE] == 0:
+
+    positives = plan.stratum_counts()[STRATUM_POSITIVE]
+    if positives < MIN_POSITIVES_TO_DISCRIMINATE:
         notes.append(
-            "no incumbent-relevant items in the sample — agreement here is agreement "
-            "on rejections, which every model finds easy; read this as a floor, not a ranking"
+            f"only {positives} incumbent-relevant item(s) in the sample — the agreement "
+            "column is therefore a statement about rejections, which every model finds "
+            "easy. Read it as a floor, not a ranking. (The corpus itself may be the "
+            "limit: check the relevant-count before blaming the sample size.)"
         )
-    if any(m.errors for m in metrics):
-        notes.append("one or more models returned errors; check auth and usage tier before reading")
+
+    for m in metrics:
+        # A model that errored on everything has no schema to adhere to. Saying
+        # it "parsed 0%" describes a response it never sent, and buries the
+        # routing failure that actually happened under a quality-shaped note.
+        if m.errors >= m.calls:
+            continue
+        if m.schema_adherence < SCHEMA_ADHERENCE_FLOOR:
+            modes = ", ".join(f"{k}={v}" for k, v in sorted(m.failure_modes.items())) or "unknown"
+            notes.append(
+                f"`{m.model}` parsed only {_pct(m.schema_adherence)} of its answers — every "
+                f"judgement column for it rests on {m.judged_calls} answer(s), not "
+                f"{m.calls}. Failure modes: {modes}. "
+                + (
+                    f"{m.recoverable} of {m.unparsed} carried extractable JSON, so a parser "
+                    "fix on our side would rescue them — that is our defect, not the model's."
+                    if m.recoverable
+                    else "None carried extractable JSON; this model cannot hold the "
+                    "strict-JSON contract for this tier."
+                )
+            )
+    for m in metrics:
+        if m.errors == m.calls and m.calls:
+            notes.append(
+                f"`{m.model}` failed on every call ({m.errors}/{m.calls}) and produced no "
+                "verdicts at all — this is a routing failure, not a quality result. Usually a "
+                "model tag that does not exist or a usage tier outside the subscription. "
+                + (f"First error: {m.error_samples[0]}" if m.error_samples else "")
+            )
+        elif m.errors:
+            notes.append(
+                f"`{m.model}` errored on {m.errors} of {m.calls} calls"
+                + (f" — {m.error_samples[0]}" if m.error_samples else "")
+            )
     return EvalReport(
         plan=plan,
         metrics=tuple(metrics),
@@ -545,17 +719,44 @@ def render_markdown(report: EvalReport) -> str:
     lines.append(f"**Strata:** {strata}")
     lines.append("")
     lines.append(
-        "| model | schema | self-consist | agrees w/ incumbent | says relevant "
+        "| model | schema | judged | self-consist | agrees w/ incumbent | says relevant "
         "| p50 ms | p95 ms | errors |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for m in report.metrics:
+        # `judged` is the denominator every column to its right is computed on.
+        # Without it, a rate over four answers and a rate over twenty look the
+        # same, which is how the first run reported a confident-looking 90%.
         lines.append(
-            f"| `{m.model}` | {_pct(m.schema_adherence)} | {_pct(m.self_consistency)} | "
-            f"{_pct(m.agreement_with_incumbent)} | {_pct(m.relevant_rate)} | "
+            f"| `{m.model}` | {_pct(m.schema_adherence)} | {m.judged_calls}/{m.calls} | "
+            f"{_pct(m.self_consistency)} | {_pct(m.agreement_with_incumbent)} | "
+            f"{_pct(m.relevant_rate)} | "
             f"{m.latency_p50_ms:.0f} | {m.latency_p95_ms:.0f} | {m.errors} |"
         )
     lines.append("")
+
+    errored = [m for m in report.metrics if m.error_samples]
+    if errored:
+        lines.append("**Call errors, by model:**")
+        lines.append("")
+        for m in errored:
+            for message in m.error_samples:
+                lines.append(f"- `{m.model}` ({m.errors}/{m.calls}): `{message}`")
+        lines.append("")
+
+    failing = [m for m in report.metrics if m.unparsed]
+    if failing:
+        lines.append("**Unparsed answers, by cause:**")
+        lines.append("")
+        for m in failing:
+            modes = ", ".join(f"{k} {v}" for k, v in sorted(m.failure_modes.items()))
+            verdict = (
+                f"{m.recoverable} recoverable (a parser fix on our side would take them)"
+                if m.recoverable
+                else "none recoverable"
+            )
+            lines.append(f"- `{m.model}`: {m.unparsed} unparsed — {modes}. {verdict}.")
+        lines.append("")
 
     if report.pairwise_agreement:
         lines.append("**Pairwise agreement on relevance:**")
@@ -598,6 +799,13 @@ def render_markdown(report: EvalReport) -> str:
 
 
 __all__ = [
+    "FAILURE_EMPTY",
+    "FAILURE_FENCED",
+    "FAILURE_MALFORMED",
+    "FAILURE_PROSE",
+    "FAILURE_WRONG_SHAPE",
+    "MIN_POSITIVES_TO_DISCRIMINATE",
+    "SCHEMA_ADHERENCE_FLOOR",
     "SELECT_EVAL_CORPUS_SQL",
     "STRATUM_NEGATIVE",
     "STRATUM_POSITIVE",
@@ -615,6 +823,10 @@ __all__ = [
     "collect_disagreements",
     "compute_metrics",
     "compute_pairwise",
+    "diagnose_failure",
+    "distinct_errors",
+    "failure_breakdown",
+    "recoverable_count",
     "registry_for_model",
     "render_markdown",
     "run_one",
