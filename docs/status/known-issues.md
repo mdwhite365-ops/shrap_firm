@@ -218,6 +218,58 @@ filter runs a model that does not fence, so the production corpus is probably
 unaffected — confirm with a `filter_verdict_history` count on the
 `'unparseable filter response'` reason before assuming it.
 
+### Measured 2026-07-31 — prompt v4 has admitted nothing, and the number is zero
+
+`research.filter_verdict_history`, the whole table:
+
+| prompt version | verdicts | relevant | models |
+|---|---|---|---|
+| 3 | 2,082 | **2** | 1 |
+| 4 | 2,472 | **0** | 2 |
+
+**Prompt v4 has produced zero relevant verdicts over 2,472 items.** Not a low
+rate — none. This replaces every previous estimate in this entry, which
+inferred the funnel's admit rate from cluster logs and eval samples.
+
+The two positives that exist are both from v3, and their provenance is the
+finding:
+
+| item | version | model | archetype | decided |
+|---|---|---|---|---|
+| `arxiv:2607.20349v1` | 3 | `qwen3.5:9b-q4_K_M` | `cost-curve` | 2026-07-23 |
+| `arxiv:2607.20083v1` | 3 | `qwen3.5:9b-q4_K_M` | `compute-substrate` | 2026-07-23 |
+
+Both were scored by **`qwen3.5:9b-q4_K_M`** — the local 9B this project
+replaced *because it could not perform the task* (DQ-006: it rejected a fourth
+reactor criticality for lacking "independent replication" and named fusion
+vocabulary for a fission item) — under **prompt v3**, which was replaced for
+the same reason. Both are arXiv, the one source class that can never satisfy
+triangulation. So the corpus's entire positive class was produced by a
+discredited model under a superseded prompt, on items that were unpromotable
+even if correct.
+
+**This corrects how every shadow eval's agreement column should be read.** The
+harness stratifies on `incumbent_relevant`, so the "2 incumbent-relevant items"
+in each eval sample are these two records. All five models in the 2026-07-31
+run rejected both, which the report renders as 90% agreement and 10%
+disagreement. The truer statement is that the five models agreed with each
+other on **everything v4 has ever judged**, and jointly overruled two stale
+records nobody would now defend. There is no disagreement to adjudicate,
+because there is no valid positive class to disagree about.
+
+**The fenced-JSON question above is answered: zero rows.** The defect fixed in
+#172 never cost production a single verdict — the live filter's model does not
+fence, as expected. No corpus repair is needed and none should be run. #172 is
+purely prospective, which is the right outcome and is now measured rather than
+assumed.
+
+**Do not re-filter the two v3 items before the bar experiment runs.** Their
+`filter_result` is stale by our own current standard and `refilter` would
+correctly flip them, but they are the only items any model has ever admitted
+and therefore the experiment's one natural control: a candidate bar that
+admits nothing *and* rejects these is failing differently from one that admits
+them. Correcting the record is cheap and can happen after.
+
 ## KI-010 — Ingest legs die silently
 
 **Status:** Open, found 2026-07-27.

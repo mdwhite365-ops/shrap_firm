@@ -392,6 +392,48 @@ choice. **Five model families spanning four usage tiers returning 0% relevant
 on the same corpus is the strongest evidence yet that the filter is not
 model-limited.**
 
+#### Correction — 2026-07-31, applies to Run 3
+
+Per editing rule 1 the entry above stands as written. This corrects one reading
+of it.
+
+Run 3 records "90% agreement with incumbent" for all five models and describes
+two incumbent-relevant items that every model rejected. A query of
+`filter_verdict_history` afterwards showed what those two records are:
+
+| item | prompt version | model | archetype | decided |
+|---|---|---|---|---|
+| `arxiv:2607.20349v1` | 3 | `qwen3.5:9b-q4_K_M` | `cost-curve` | 2026-07-23 |
+| `arxiv:2607.20083v1` | 3 | `qwen3.5:9b-q4_K_M` | `compute-substrate` | 2026-07-23 |
+
+They are the **only** relevant verdicts in the table's history. Prompt v4 has
+produced **0 relevant across 2,472 verdicts**; v3 produced 2 across 2,082. Both
+survivors were scored by the local 9B this project replaced *because it could
+not perform the task*, under a prompt replaced for the same reason, on the one
+source class that can never triangulate.
+
+**So the agreement column in Run 3 is measuring something other than what it
+appears to.** It reads as five models agreeing with a valid incumbent 90% of
+the time and disagreeing 10%. The accurate statement: the five models agreed
+with each other on every item v4 has ever judged, and jointly overruled two
+stale records from a discredited model. There was no disagreement to
+adjudicate because there is no valid positive class to disagree about.
+
+This does not change the verdict — the promotion rested on latency and usage
+tier, both unaffected. It changes what a future reader should conclude from the
+90%, which is the kind of thing this ledger exists to catch.
+
+**Consequence for the harness, not just this run.** `stratified_sample` selects
+its positive stratum on `incumbent_relevant`, so *every* eval on this corpus
+draws the same two fossils and will keep reporting a two-item positive class
+until the taxonomy admits something real. The thin-positive warning is firing
+correctly; the condition it warns about is not fixable by sampling.
+
+Separately confirmed the same day: **zero** rows in `filter_verdict_history`
+carry the reason `'unparseable filter response'`. The fenced-JSON defect fixed
+in PR #172 never cost production a verdict. Run 2's schema numbers were wrong;
+the production corpus was not affected. No repair run is needed.
+
 ---
 
 ## Cross-section principles
