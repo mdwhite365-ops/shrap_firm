@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     read_count: int = 100
     block_ms: int = 5000
     retry_delay_seconds: float = 5.0
+
+    # Stream retention. Trimming is maintenance, not delivery, so it runs on its
+    # own slow cadence; 0 disables it entirely, which is the escape hatch if a
+    # stream ever needs to be preserved in Redis for an investigation.
+    trim_interval_seconds: float = 3600.0
     log_level: str = "INFO"
 
     def redacted(self) -> dict[str, object]:
@@ -45,5 +50,6 @@ class Settings(BaseSettings):
             "read_count": self.read_count,
             "block_ms": self.block_ms,
             "retry_delay_seconds": self.retry_delay_seconds,
+            "trim_interval_seconds": self.trim_interval_seconds,
             "log_level": self.log_level,
         }

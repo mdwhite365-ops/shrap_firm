@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import time
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, cast
 
@@ -13,6 +14,7 @@ from redis.asyncio import Redis
 from shrap.agents.operations.audit_logger.config import Settings
 from shrap.agents.operations.audit_logger.db import PostgresAuditSink
 from shrap.agents.operations.audit_logger.records import record_from_envelope
+from shrap.agents.operations.audit_logger.retention import StreamTrimmer, trim_streams
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
 from shrap.events import ReceivedEvent
@@ -140,6 +142,10 @@ async def run(settings: Settings) -> None:
         consumer=settings.instance_id,
         start_id=settings.start_id,
     )
+    # Retention runs on its own slow cadence rather than per poll: the poll
+    # blocks on the bus and can fire many times a second, while trimming is
+    # maintenance that only needs to keep up with a stream's growth rate.
+    next_trim = 0.0
     try:
         while not stop.is_set():
             try:
@@ -153,6 +159,18 @@ async def run(settings: Settings) -> None:
                 )
                 if written:
                     log.info("audit_logger.batch", written=written, group=subscriber.group)
+
+                now = time.monotonic()
+                if settings.trim_interval_seconds > 0 and now >= next_trim:
+                    next_trim = now + settings.trim_interval_seconds
+                    # Trim what this poll just enumerated. Reusing discovery
+                    # means retention covers exactly the streams the audit trail
+                    # covers — a stream nobody is persisting is a stream nobody
+                    # should be silently discarding either.
+                    await trim_streams(
+                        cast(StreamTrimmer, redis),
+                        await discover_streams(cast(StreamRedis, redis), settings.stream_pattern),
+                    )
             except Exception:
                 log.exception("audit_logger.poll_failed")
                 await asyncio.sleep(settings.retry_delay_seconds)
