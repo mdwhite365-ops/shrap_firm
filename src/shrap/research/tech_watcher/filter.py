@@ -6,7 +6,9 @@ this is a yes/no/which-archetype call over hundreds of items, not a
 judgment turn. Items are marked ``filtered_at`` either way; relevant ones
 carry the archetype key and reason in ``filter_result`` for the clustering
 step. An unparseable model response counts as not-relevant and is logged —
-the funnel's bias is to drop, never to invent.
+the funnel's bias is to drop, never to invent. A response whose JSON is
+wrapped in a markdown code fence is unwrapped first, not dropped: see
+``_unwrap_code_fence`` for why that is a parser concern and not a model one.
 
 Every verdict is also appended to ``research.filter_verdict_history``,
 stamped with the prompt version (KI-007): a re-filter overwrites the item's
@@ -17,6 +19,7 @@ comparisons stay queryable after the fact.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -251,11 +254,34 @@ def _item_prompt(item: UnfilteredItem) -> str:
     )
 
 
+_CODE_FENCE_RE = re.compile(r"\A```[^\n`]*\n(.*?)\n?```\Z", re.DOTALL)
+
+
+def _unwrap_code_fence(content: str) -> str:
+    """Strip a markdown code fence wrapping the entire response.
+
+    Models under a strict-JSON contract routinely return correct JSON inside
+    ```` ```json ```` fences, and rejecting those cost us real verdicts. In the
+    2026-07-31 shadow eval ``glm-5.2`` failed 30 of 40 calls this way and every
+    one carried extractable JSON — a defect in this parser that read as a
+    deficiency in the model, and would have been recorded as one.
+
+    Deliberately narrow: only a fence enclosing the *whole* response is
+    unwrapped. There is no scan for an object embedded in prose, because a
+    thinking model that reasons in braces before answering would hand a greedy
+    match a span of its own scratch work, and scoring on that is worse than
+    dropping the item. The funnel's bias is to drop, never to invent.
+    """
+
+    match = _CODE_FENCE_RE.match(content.strip())
+    return match.group(1) if match is not None else content
+
+
 def parse_filter_response(item_id: str, content: str) -> FilterVerdict:
     """Parse the model's JSON verdict; anything unusable is not-relevant."""
 
     try:
-        data = json.loads(content)
+        data = json.loads(_unwrap_code_fence(content))
     except json.JSONDecodeError:
         return FilterVerdict(item_id, False, None, "unparseable filter response")
     if not isinstance(data, dict):

@@ -141,6 +141,46 @@ def test_parse_filter_response_garbage_is_irrelevant() -> None:
     assert "unparseable" in verdict.reason
 
 
+def test_parse_filter_response_accepts_json_in_a_markdown_fence() -> None:
+    """The 2026-07-31 shadow-eval defect: glm-5.2 lost 30 of 40 verdicts to this."""
+
+    verdict = parse_filter_response(
+        "arxiv:1",
+        '```json\n{"relevant": true, "archetype": "compute-substrate", "reason": "capex"}\n```',
+    )
+    assert verdict == FilterVerdict("arxiv:1", True, "compute-substrate", "capex")
+
+
+def test_parse_filter_response_accepts_a_bare_fence_and_surrounding_whitespace() -> None:
+    verdict = parse_filter_response(
+        "arxiv:1",
+        '\n\n```\n{"relevant": false, "archetype": null, "reason": "no signal"}\n```\n ',
+    )
+    assert verdict == FilterVerdict("arxiv:1", False, None, "no signal")
+
+
+def test_parse_filter_response_ignores_an_object_embedded_in_prose() -> None:
+    """Deliberate: unwrapping is fence-only, never a scan for a stray object.
+
+    A thinking model reasoning in braces before it answers would hand a greedy
+    match a span of its own scratch work. Dropping the item beats scoring on
+    that — the funnel's bias is to drop, never to invent.
+    """
+
+    verdict = parse_filter_response(
+        "arxiv:1",
+        'Let me consider the archetypes. {"relevant": true, "archetype": "compute-substrate"}',
+    )
+    assert verdict.relevant is False
+    assert "unparseable" in verdict.reason
+
+
+def test_parse_filter_response_fenced_garbage_is_still_irrelevant() -> None:
+    verdict = parse_filter_response("arxiv:1", "```json\nnot actually json\n```")
+    assert verdict.relevant is False
+    assert "unparseable" in verdict.reason
+
+
 async def test_filter_pass_scores_and_marks_each_item() -> None:
     pool = FakePool()
     from shrap.research.tech_watcher.filter import SELECT_UNFILTERED_SQL
