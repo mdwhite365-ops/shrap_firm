@@ -778,7 +778,8 @@ Not urgent while nothing trades; becomes urgent the moment anything does.
 
 ## KI-023 — Every paper order has a blank `account_id`
 
-**Status:** Open, found 2026-07-31 by the full systems check.
+**Status:** Closed 2026-07-31 — historical rows, not a defect. Found the same
+day by the full systems check.
 
 All 141 rows in `trading.paper_order_events` carry an empty `account_id`,
 across every status (`filled` 47, `accepted` 46, `new` 23, `pending_new` 23,
@@ -795,6 +796,30 @@ has flowed since. The last order is 2026-07-29 and the account cards merged
 **Diagnose before building:** place one order through the new path and check
 whether `account_id` lands. Do not repair historical rows until the writer is
 known good.
+
+### Resolved 2026-07-31 by reading the code, not by placing an order
+
+The second explanation is right, and it did not need a live order to establish.
+The field is carried at every hop — `research.strategies.account_id` → the
+Strategy Runner groups by it → the decision maker → the Execution Agent →
+`order_store.py`, which reads `payload.get("account_id")`. More decisively, the
+Runner **refuses to trade an unassigned strategy** rather than defaulting it:
+
+> `no account_id — assign one with shrap-strategy-stage assign-account, or it
+> will never trade` — logged at ERROR and dropped, "permanent until a human
+> acts."
+
+So under current code an order with a blank `account_id` **cannot be produced**.
+The 141 existing rows necessarily predate #124–#128, and the reason none have
+appeared since is simply that nothing is trading — the firm holds 0 promoted
+strategies against 12 killed.
+
+**No repair is planned.** The historical rows are an accurate record of orders
+placed before accounts existed; back-filling them with a guessed account would
+make the trail less true, not more. **This closes as a non-defect**, and the
+useful residue is the check itself: when the first strategy is promoted, confirm
+`account_id` lands on its first order. That is a one-query verification, not a
+card.
 
 ## KI-024 — Nothing automatically ingests price bars
 
@@ -854,7 +879,9 @@ only way to find out, and it is a separate card.
 
 ## KI-025 — Redis streams grow without bound
 
-**Status:** Open, found 2026-07-31 by the full systems check.
+**Status:** Both halves shipped 2026-07-31 — the producer fix (#178) and
+retention (this card); pending Dell deploy. Found 2026-07-31 by the full systems
+check.
 
 Nothing trims any stream. Measured lengths:
 
@@ -919,13 +946,29 @@ logged (`reconciliation.discrepancies_unchanged`) rather than silent — a quiet
 stream should be evidence that nothing changed, not evidence that the agent
 stopped looking.
 
-**Retention is still open, and is now the smaller half.** `ops.health-tick` at
-80,509 is legitimate one-per-tick liveness and wants a `MAXLEN ~` cap; the
-reconciliation streams will stop growing pathologically on their own once the
-fix deploys. Consumer-group lag was measured at **0 on every stream** with the
-Audit Logger 2 seconds behind and 118,344 rows persisted to `ops.audit_events`,
-so trimming Redis is safe whenever it is done — nothing would be lost that is
-not already durable in Postgres.
+**Retention shipped 2026-07-31 as the smaller half.** The Audit Logger now trims
+every stream it discovers to `MAXLEN ~ 25,000` on an hourly cadence
+(`AUDIT_LOGGER_TRIM_INTERVAL_SECONDS`, 0 disables).
+
+It lives there rather than in a monitor or a new service because the Audit
+Logger already enumerates every stream and is the component that moves events
+into `ops.audit_events`. That makes the framing explicit rather than implied:
+**under ADR-0006 the bus is how events travel and the audit table is where they
+are kept**, so trimming Redis discards a delivered copy, not the record.
+
+The cap is a growth bound, not a retention decision — 25,000 is ~8.7 days of
+`ops.health-tick` and ~9.6 days of `reconciliation-completed`, the two noisiest
+legitimate producers, and no other stream comes close. It deliberately does not
+trim to consumer position: `XTRIM` ignores group offsets, so a generous cap is
+safe without depending on lag staying at zero, and a consumer more than 25,000
+entries behind has a problem retention should not be papering over. Lag was
+measured at **0 on every stream** with the Audit Logger 2 seconds behind and
+118,344 rows persisted, so nothing trimmed is lost.
+
+**Retention does not fix a stream growing because a producer republishes
+forever.** That is a producer bug and trimming it hides the evidence, which is
+exactly what would have happened here had this shipped before the diagnosis.
+`operations.reconciliation-discrepancy` was fixed at the source in #178.
 
 **One thing this does not do:** resolve the underlying divergence. The broker
 still holds orders the store has no row for, and it always will — they were
