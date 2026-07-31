@@ -1140,6 +1140,40 @@ services:
   # Reads the bare ALPACA_* data-host credentials from .env (data-host
   # read-only, same names as the Regime Classifier / News Analyzer use).
   # -------------------------------------------------------------------------
+  # Market Data trigger - keeps market_data.daily_bars advancing without a
+  # human. The backfill below is a tools-profile CLI, so bars only ever moved
+  # when someone typed a command; on 2026-07-31 the table was two sessions
+  # stale and every evaluation since had read a frozen panel (KI-024).
+  #
+  # Tickers come from the Curator's Tier-3 launch list, not from config. The
+  # window is computed per ticker from what the store already has, so a sweep
+  # requests the gap rather than five years, and a newly added name still gets
+  # its full history. Shares market-data.Dockerfile with the backfill, so a
+  # change under src/shrap/market_data/ has TWO build targets.
+  market-data-trigger:
+    build:
+      context: ../
+      dockerfile: infra/market-data.Dockerfile
+    container_name: shrap_market_data_trigger
+    command: ["shrap-market-data-trigger"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MARKET_DATA_TRIGGER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      MARKET_DATA_TRIGGER_FEED: "iex"
+      MARKET_DATA_TRIGGER_ADJUSTMENT: "all"
+      # Six hours: daily bars change once per session, so the interval buys
+      # latency after the close rather than resolution.
+      MARKET_DATA_TRIGGER_SWEEP_INTERVAL_SECONDS: "21600"
+      MARKET_DATA_TRIGGER_RESTATE_DAYS: "5"
+      MARKET_DATA_TRIGGER_LOG_LEVEL: "INFO"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
   market-data:
     build:
       context: ../

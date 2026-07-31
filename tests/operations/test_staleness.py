@@ -166,10 +166,32 @@ def test_every_target_names_a_table_the_firm_actually_creates() -> None:
         )
 
 
-def test_backtest_corpus_is_deliberately_not_a_target() -> None:
-    """market_data.daily_bars is filled on demand and is meant to sit still."""
+def test_the_backtest_corpus_became_a_target_when_it_got_a_producer() -> None:
+    """This assertion is the exact inverse of the one it replaces, on purpose.
 
-    assert "market_data.daily_bars" not in {t.qualified_table for t in DEFAULT_TARGETS}
+    The original read *"market_data.daily_bars is filled on demand and is meant
+    to sit still"* and excluding it was correct: a freshness alarm on a table
+    only a human fills would have fired on every quiet weekend and taught the
+    operator to ignore it.
+
+    The premise changed rather than the reasoning. ``market-data-trigger`` now
+    sweeps the table on an interval, so "meant to sit still" stopped being true
+    and the exclusion inverted from prudent to a blind spot — one that cost two
+    stale sessions before a systems check found it (KI-024), while the Evaluator
+    went on returning ``hold-for-data`` against a frozen panel.
+
+    The rule this encodes, and the reason the test survives rather than being
+    deleted: **a table earns a freshness target exactly when something is
+    supposed to be writing to it on a schedule.** Not before, or the alarm is
+    noise; not after, or the silence is.
+    """
+
+    target = next(
+        (t for t in DEFAULT_TARGETS if t.qualified_table == "market_data.daily_bars"), None
+    )
+
+    assert target is not None, "daily_bars has a scheduled producer and must be watched"
+    assert target.producer == "market-data-trigger"
 
 
 # ---------------------------------------------------------------------------

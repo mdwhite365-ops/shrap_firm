@@ -164,6 +164,22 @@ DEFAULT_TARGETS: tuple[FreshnessTarget, ...] = (
         ),
     ),
     FreshnessTarget(
+        name="market_data.daily_bars",
+        schema="market_data",
+        table="daily_bars",
+        timestamp_column="fetched_at",
+        producer="market-data-trigger",
+        max_age=timedelta(hours=18),
+        rationale=(
+            "The trigger sweeps every six hours and its upsert sets fetched_at=now() on "
+            "conflict, so this measures sweep liveness and is unaffected by weekends — the "
+            "same reasoning as market_data.ohlcv_1d above. Eighteen hours is three missed "
+            "sweeps. The threshold exists because this table went two sessions stale on "
+            "2026-07-31 with nothing to notice (KI-024), while the Evaluator kept returning "
+            "hold-for-data against the frozen panel."
+        ),
+    ),
+    FreshnessTarget(
         name="research.evaluations",
         schema="research",
         table="evaluations",
