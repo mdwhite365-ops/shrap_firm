@@ -453,6 +453,8 @@ class BarSummary:
     admitted: tuple[BarCall, ...]
     admitted_by_source: Mapping[str, int]
     control_admitted: tuple[str, ...]
+    control_rejected: tuple[str, ...]
+    scored_by_source: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def admit_rate(self) -> float:
@@ -463,12 +465,35 @@ class BarSummary:
     def hard_source_admits(self) -> int:
         return sum(count for src, count in self.admitted_by_source.items() if src in HARD_SOURCES)
 
+    @property
+    def hard_source_scored(self) -> int:
+        """How many hard-leg items this bar actually saw.
+
+        Without this the hard-leg admit count is unreadable: zero admits out of
+        zero scored is not a result, and a limited run ordered by ``item_id``
+        sees only arXiv. The 2026-07-31 calibration reported ``hard-leg 0``
+        having never been shown a hard-leg item.
+        """
+
+        return sum(count for src, count in self.scored_by_source.items() if src in HARD_SOURCES)
+
+    @property
+    def controls_unseen(self) -> tuple[str, ...]:
+        """Control items this bar never scored, as distinct from ones it rejected."""
+
+        seen = set(self.control_admitted) | set(self.control_rejected)
+        return tuple(item_id for item_id in CONTROL_ITEM_IDS if item_id not in seen)
+
 
 def summarize(bar: Bar, calls: Sequence[BarCall]) -> BarSummary:
     admitted = tuple(c for c in calls if c.verdict is not None and c.verdict.admitted)
     by_source: dict[str, int] = {}
     for call in admitted:
         by_source[call.item.source] = by_source.get(call.item.source, 0) + 1
+    scored_by_source: dict[str, int] = {}
+    for call in calls:
+        scored_by_source[call.item.source] = scored_by_source.get(call.item.source, 0) + 1
+    admitted_ids = {c.item.item_id for c in admitted}
     return BarSummary(
         bar=bar.key,
         description=bar.description,
@@ -481,10 +506,57 @@ def summarize(bar: Bar, calls: Sequence[BarCall]) -> BarSummary:
         errors=sum(1 for c in calls if c.error is not None),
         admitted=admitted,
         admitted_by_source=by_source,
-        control_admitted=tuple(
-            c.item.item_id for c in admitted if c.item.item_id in CONTROL_ITEM_IDS
+        scored_by_source=scored_by_source,
+        control_admitted=tuple(item_id for item_id in CONTROL_ITEM_IDS if item_id in admitted_ids),
+        control_rejected=tuple(
+            c.item.item_id
+            for c in calls
+            if c.item.item_id in CONTROL_ITEM_IDS and c.item.item_id not in admitted_ids
         ),
     )
+
+
+def stratified_limit(
+    items: Sequence[UnfilteredItem], limit: int, *, always_include: Sequence[str] = CONTROL_ITEM_IDS
+) -> list[UnfilteredItem]:
+    """Take ``limit`` items proportionally across sources, preserving corpus shape.
+
+    A plain head-of-list slice is worse than useless here: the corpus is ordered
+    by ``item_id``, ``arxiv:`` sorts first, and the 2026-07-31 calibration
+    therefore scored 600 arXiv items and reported ``hard-leg 0`` without ever
+    having been shown a hard-leg item. The number looked like a finding and was
+    an artifact of the ordering.
+
+    Sources with few items keep all of them (``doe-newsroom`` has 18 in total —
+    proportional allocation would round it to nothing, and it is the source
+    carrying DQ-006's named false negative). The control items are always
+    included, because a run that silently omits its own control cannot report
+    on it.
+    """
+
+    if limit >= len(items):
+        return list(items)
+
+    by_source: dict[str, list[UnfilteredItem]] = {}
+    for item in items:
+        by_source.setdefault(item.source, []).append(item)
+
+    forced = [item for item in items if item.item_id in set(always_include)]
+    budget = max(limit - len(forced), 0)
+    total = len(items)
+
+    picked: list[UnfilteredItem] = []
+    for _source, source_items in sorted(by_source.items()):
+        share = round(budget * len(source_items) / total)
+        take = min(len(source_items), max(share, 1))
+        picked.extend(source_items[:take])
+
+    chosen: dict[str, UnfilteredItem] = {item.item_id: item for item in forced}
+    for item in picked:
+        if len(chosen) >= limit and item.item_id not in chosen:
+            continue
+        chosen.setdefault(item.item_id, item)
+    return [item for item in items if item.item_id in chosen]
 
 
 def cross_bar_agreement(summaries: Sequence[BarSummary]) -> dict[tuple[str, str], int]:
@@ -524,20 +596,33 @@ def render_markdown(report: ExperimentReport) -> str:
         f"**model** `{report.model}` · prompt v{FILTER_PROMPT_VERSION} for the control."
     )
     lines.append("")
-    lines.append("| bar | admitted | rate | hard-leg | parse fails | errors |")
+    lines.append("| bar | admitted | rate | hard-leg admits / scored | parse fails | errors |")
     lines.append("|---|---|---|---|---|---|")
     for summary in report.summaries:
         lines.append(
             f"| `{summary.bar}` | {len(summary.admitted)} | {summary.admit_rate:.1%} | "
-            f"{summary.hard_source_admits} | {summary.parse_failures} | {summary.errors} |"
+            f"{summary.hard_source_admits} / {summary.hard_source_scored} | "
+            f"{summary.parse_failures} | {summary.errors} |"
         )
     lines.append("")
     lines.append(
         "**The hard-leg column is the one KI-009 needs.** arXiv-only clusters fail "
         "triangulation on both conditions at once, so a bar that admits only arXiv "
-        "has not unblocked the funnel however good its rate looks."
+        "has not unblocked the funnel however good its rate looks. It is reported as "
+        "*admits / scored* because zero admits out of zero scored is not a result — "
+        "the 2026-07-31 calibration reported `hard-leg 0` having never been shown a "
+        "hard-leg item."
     )
     lines.append("")
+    starved = [s for s in report.summaries if s.hard_source_scored == 0]
+    if starved:
+        lines.append(
+            "> ⚠ **This run scored no hard-leg items at all** "
+            f"({', '.join('`' + s.bar + '`' for s in starved)}), so it says nothing about "
+            "KI-009. Re-run without `--limit`, or with a build that samples "
+            "proportionally across sources."
+        )
+        lines.append("")
 
     for summary in report.summaries:
         lines.append(f"#### `{summary.bar}` — {summary.description}")
@@ -578,8 +663,17 @@ def render_markdown(report: ExperimentReport) -> str:
     lines.append("both under v3 and both by a model replaced for being wrong):")
     lines.append("")
     for summary in report.summaries:
-        got = ", ".join(summary.control_admitted) if summary.control_admitted else "neither"
-        lines.append(f"- `{summary.bar}`: {got}")
+        parts: list[str] = []
+        if summary.control_admitted:
+            parts.append(f"admitted {', '.join(summary.control_admitted)}")
+        if summary.control_rejected:
+            parts.append(f"rejected {', '.join(summary.control_rejected)}")
+        if summary.controls_unseen:
+            # Distinct from a rejection, and the difference matters: a run that
+            # never scored its control cannot report on it, and "neither" would
+            # read as a verdict.
+            parts.append(f"**never scored** {', '.join(summary.controls_unseen)}")
+        lines.append(f"- `{summary.bar}`: {'; '.join(parts) if parts else 'none'}")
     lines.append("")
     lines.append(
         "> **An admit rate is not a score.** A bar that admits everything wins this "

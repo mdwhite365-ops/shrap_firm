@@ -47,6 +47,7 @@ from shrap.research.bar_experiment import (
     cross_bar_agreement,
     render_markdown,
     run_bar,
+    stratified_limit,
     summarize,
 )
 from shrap.research.tech_watcher.filter import EXCLUDED_SOURCES, UnfilteredItem
@@ -133,29 +134,22 @@ async def load_corpus(pool: Any, limit: int | None) -> list[UnfilteredItem]:
         )
         for row in rows
     ]
-    return items[:limit] if limit else items
+    # Proportional, never a head-of-list slice. The corpus is ordered by
+    # item_id and `arxiv:` sorts first, so `items[:600]` is 600 arXiv items and
+    # a hard-leg count taken from it is an artifact of the ordering.
+    return stratified_limit(items, limit) if limit else items
 
 
-async def persist(
-    pool: Any,
-    run_id: str,
-    report: ExperimentReport,
-    calls: Sequence[BarCall],
-    bars: Sequence[Bar],
-) -> None:
+async def persist_results(pool: Any, run_id: str, calls: Sequence[BarCall]) -> None:
+    """Write one bar's rows.
+
+    Separate from the run row so a long experiment can checkpoint: the full
+    corpus is ~5,200 items and a single bar takes hours, so persisting only at
+    the end would mean a dropped session at hour seven loses everything.
+    """
+
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute(
-                INSERT_RUN_SQL,
-                run_id,
-                report.tier,
-                report.model,
-                json.dumps([bar.key for bar in bars]),
-                report.corpus_size,
-                datetime.fromisoformat(report.started_at),
-                datetime.fromisoformat(report.finished_at),
-                render_markdown(report),
-            )
             for call in calls:
                 verdict = call.verdict
                 await conn.execute(
@@ -173,6 +167,25 @@ async def persist(
                     call.error,
                     call.raw[:4000],
                 )
+
+
+async def persist_run(
+    pool: Any, run_id: str, report: ExperimentReport, bars: Sequence[Bar]
+) -> None:
+    """Write the run row once every bar has finished and been checkpointed."""
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            INSERT_RUN_SQL,
+            run_id,
+            report.tier,
+            report.model,
+            json.dumps([bar.key for bar in bars]),
+            report.corpus_size,
+            datetime.fromisoformat(report.started_at),
+            datetime.fromisoformat(report.finished_at),
+            render_markdown(report),
+        )
 
 
 def render_plan(items: Sequence[UnfilteredItem], bars: Sequence[Bar]) -> str:
@@ -210,12 +223,25 @@ async def run(
         model = registry.resolve(tier).model
 
         started_at = datetime.now(UTC)
+        run_id = str(ULID())
         calls: list[BarCall] = []
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as http:
             client = TierLLMClient(registry, cast(Any, http))
             for bar in bars:
                 log.info("bar_experiment.bar_started", bar=bar.key, items=len(items))
-                calls.extend(await run_bar(bar, cast(Any, client), items, tier))
+                bar_calls = await run_bar(bar, cast(Any, client), items, tier)
+                calls.extend(bar_calls)
+                # Checkpoint per bar. The full corpus is ~5,200 items and a bar
+                # takes hours; persisting only at the end means a dropped
+                # session at hour seven loses everything. Rows land as each bar
+                # finishes, so a failure costs one bar, not three.
+                await persist_results(pool, run_id, bar_calls)
+                log.info(
+                    "bar_experiment.bar_persisted",
+                    bar=bar.key,
+                    run_id=run_id,
+                    rows=len(bar_calls),
+                )
 
         summaries = tuple(summarize(bar, [c for c in calls if c.bar == bar.key]) for bar in bars)
         report = ExperimentReport(
@@ -227,8 +253,7 @@ async def run(
             finished_at=datetime.now(UTC).isoformat(),
             _agreement=cross_bar_agreement(summaries),
         )
-        run_id = str(ULID())
-        await persist(pool, run_id, report, calls, bars)
+        await persist_run(pool, run_id, report, bars)
         return run_id, report, calls, bars
     finally:
         await pool.close()
