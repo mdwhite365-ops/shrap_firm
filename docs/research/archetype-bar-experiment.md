@@ -212,8 +212,8 @@ sources rather than taxonomy.
 
 | step | artifact |
 |---|---|
-| 1 | This spec, merged (accepting the experiment design) |
-| 2 | Harness card — bar variants + persistence + isolation test |
+| 1 | ~~This spec, merged (accepting the experiment design)~~ **DONE** (#173) |
+| 2 | ~~Harness card — bar variants + persistence + isolation test~~ **DONE** — `shrap-bar-experiment`, `src/shrap/research/bar_experiment.py` |
 | 3 | Run over the full corpus; admitted-item lists per bar |
 | 4 | Mike's ruling; `world-changer-archetypes.md` updated first, then the mirror and the prompt |
 | 5 | Re-filter the corpus under the ruled bar (KI-009 fix order step 3, still valid) |
