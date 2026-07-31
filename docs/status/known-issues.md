@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-07-28
+**Last updated:** 2026-07-31 (KI-022–KI-025 added by the full systems check)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -754,3 +754,94 @@ escalation, because paying twice for one opinion and recording it as two is
 worse than a single scored pass. Disabling is a spec change to both Intelligence
 agents (drift updates the spec, not the code), which is why it is a card and not
 a config tweak.
+
+## KI-022 — The Risk Officer is deployed and has never been exercised
+
+**Status:** Open, found 2026-07-31 by the full systems check.
+
+`risk.decisions` holds **one row** since the Officer shipped on 2026-07-30: an
+`UNKNOWN_STRATEGY` veto at 00:01 on 2026-07-31. That is not a fault in the
+Officer — it is the downstream consequence of no order flow. The last
+`trading.paper_order_events` row is **2026-07-29 13:32**, two days before the
+check, and the firm holds 0 promoted and 0 live strategies against 12 killed.
+
+Two things this makes easy to misread, both worth stating plainly:
+
+- **`risk.intent.approved` (28) and `risk.intent.vetoed` (14) are the Pre-Trade
+  Checker's streams, not the Risk Officer's.** Reading 42 events there as
+  evidence the Officer is working is wrong, and was nearly recorded as such.
+- **Built is not exercised.** The limits in the Officer are unruled first cuts
+  and no live decision has tested any of them. The roadmap listing 2.7 as
+  complete is accurate about the code and says nothing about the behaviour.
+
+Not urgent while nothing trades; becomes urgent the moment anything does.
+
+## KI-023 — Every paper order has a blank `account_id`
+
+**Status:** Open, found 2026-07-31 by the full systems check.
+
+All 141 rows in `trading.paper_order_events` carry an empty `account_id`,
+across every status (`filled` 47, `accepted` 46, `new` 23, `pending_new` 23,
+`rejected` 2). The three-account split shipped in #124–#128 and ADR-0017 rests
+on per-account attribution — *"per-strategy P&L becomes that account's equity
+curve."* With a blank column that derivation is not available for any order the
+firm has ever placed.
+
+Two candidate causes and they need different fixes: the writer never populates
+the field, or every recorded order predates the three-account work and nothing
+has flowed since. The last order is 2026-07-29 and the account cards merged
+2026-07-29, which makes the second explanation plausible and unproven.
+
+**Diagnose before building:** place one order through the new path and check
+whether `account_id` lands. Do not repair historical rows until the writer is
+known good.
+
+## KI-024 — Nothing automatically ingests price bars
+
+**Status:** Open, found 2026-07-31 by the full systems check.
+
+`market_data.daily_bars` held 50 tickers and 72,447 rows with
+`max(session_date) = 2026-07-29` — two sessions stale on 2026-07-31. The cause
+is structural rather than a failure: **`market-data` is a `--profile tools`
+service**, so bars advance only when a human runs the backfill.
+
+The consequence is quiet and compounding. Every evaluation, every Runner pass
+and every regime classification since 2026-07-29 read a panel that stopped
+advancing, and **the Evaluator's most common verdict is `hold-for-data`** — 13
+of 22 under protocol 0.2, against 9 kills. How many of those are a real data
+limit and how many are an un-run backfill is currently unknowable, which is the
+part that matters: a verdict that says "not enough data" is indistinguishable
+from one caused by nobody running a job.
+
+**Fix shape:** either an always-on ingest service or a scheduled trigger of the
+existing tool, plus a freshness check in the Health Monitor — #167 already
+implements output-freshness alarms and this is a natural subject for one.
+
+## KI-025 — Redis streams grow without bound
+
+**Status:** Open, found 2026-07-31 by the full systems check.
+
+Nothing trims any stream. Measured lengths:
+
+| stream | length |
+|---|---|
+| `ops.health-tick` | 80,509 |
+| `operations.reconciliation-discrepancy` | 11,096 |
+| `operations.reconciliation-completed` | 9,161 |
+| `intel.regime.tick` / `intel.regime.sizing-modifier` | 6,995 each |
+| `ingestion.heartbeat` | 2,471 |
+
+Redis persists to disk here (`appendonly yes`), so this is a slow capacity
+problem rather than a memory one, and it is not urgent today — the Dell runs
+every agent at 0.00% CPU and ~40 MB against 31 GB. It becomes urgent silently.
+
+**Two separate issues, and the second is the interesting one.** The first is
+retention: high-frequency heartbeat streams want `MAXLEN ~` on publish. The
+second is that **discrepancies outnumber clean reconciliations** — 11,096
+against 9,161, meaning a majority of reconciliation passes report a problem and
+**nobody has ever read one**. That is either real book drift or a check so noisy
+it cannot be acted on. Both are worth knowing; neither is currently visible.
+
+Diagnose before trimming: `XRANGE operations.reconciliation-discrepancy - + COUNT 5`
+answers which it is in one command, and trimming first would destroy the
+evidence.

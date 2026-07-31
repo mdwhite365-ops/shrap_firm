@@ -1,10 +1,19 @@
 # Current sprint status
 
-**Last updated:** 2026-07-28 (evening)
+**Last updated:** 2026-07-31 (pointer only — the narrative below still ends at #118)
 
 > **Start with `docs/status/session-handoff.md`.** It carries Mike's rulings on
-> capital, risk appetite and the growth target, plus what to pick up next. This
-> document is longer-form history and the sections below predate #102–#115.
+> capital, risk appetite and the growth target, plus the measured state of the
+> firm and what to pick up next.
+>
+> **This document is history, and it stops at #118.** The narrative below does
+> not cover #129–#175 — the Risk Officer, the research ledger, autonomous
+> strategy proposal, or the first shadow eval. Those are recorded as a list in
+> `docs/status/recent-changes.md` and as current state in the handoff.
+> Deliberately not backfilled in prose here: this file is a record of how the
+> sprint felt at the time, and rewriting it after the fact would destroy that
+> without making anything truer. Run `make doc-drift` before treating any
+> section below as current.
 **Phase:** Month 3 / Framework #1 funnel live
 **Operating mode:** Paper only. No real-money execution.
 

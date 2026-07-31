@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-28 (evening — #102–#115)
+**Last updated:** 2026-07-31 (#129–#175 backfilled; `main` at #175)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -683,6 +683,97 @@ the Infra Mapper flagged as unrepresented.
 will fix it; the Ollama auth mechanism; the re-filter selection key). The first
 two were hypotheses the data corrected. The last two were shipped without
 end-to-end verification, and both surfaced only when Mike ran them on the Dell.
+
+## The three-day gap — #129–#175, backfilled 2026-07-31
+
+**This is the third backfill of this section, and each gap has been larger than
+the last: #72–80 (nine), #92–101 (ten), now #129–175 (forty-six).** Three
+recurrences of the same failure is a missing mechanism, not three lapses of
+diligence — `make doc-drift` is added in this PR so the fourth is caught by a
+command rather than by an audit. Found on 2026-07-31 by a full systems check:
+every status document was stamped 2026-07-28 or earlier while `main` was at
+#175, and `CLAUDE.md` still named `session-handoff.md` as ground truth for what
+to pick up next.
+
+(There is no PR #137; it was closed unmerged.)
+
+### Three paper accounts, and the evaluation protocol grows teeth (2026-07-29)
+
+- PR #129 — Runbook for bringing up the three paper accounts.
+- PR #130 — psql commands fixed in two runbooks: `.env` vars are not in the
+  operator's shell.
+- PR #131 — Deploy ordering fixed — a reader outran its writer's migration
+  (KI-020).
+- PR #132 — A strategy shows its account, and says when it will not trade.
+- PR #133 — `--profile tools` is required on the build line, not just the run
+  line.
+- PR #134 — `load-momentum` wired into the seed CLI; the loader was unreachable.
+- PR #135 — Information ratio reported in the verdict summary.
+- PR #136 — Panel coverage reported in the verdict — how much history was
+  actually tested.
+- PR #138 — Ragged price panel: a cross-sectional universe that grows as names
+  list.
+- PR #139 — `window_years` is a cap, not a default. Use all available history.
+- PR #140 — `PROTOCOL_VERSION` bumped to 0.2; #138/#139 changed what the
+  numbers mean.
+- PR #141 — Strategy lineage: what a revision came from, why, and the size of
+  the search behind it.
+- PR #142 — Momentum stands down when the whole universe is falling.
+- PR #143 — Consistency across year-sets reported; six folds no longer hidden
+  behind one number.
+- PR #144 — A revision that loses to the strategy it revised is killed.
+- PR #145 — Momentum long-short: the half of the effect the rule was missing.
+
+### The Risk Officer, the research ledger, and autonomous proposal (2026-07-30)
+
+- PR #146 — **The Risk Officer** — the firm's veto authority, built. Note it is
+  a library enforced inside the Pre-Trade Checker, **not a compose service**.
+- PR #147 — Short-horizon reversal: the effect momentum steps around.
+- PR #148 — The promote bar rises with the size of the search behind it.
+- PR #149 — **The research ledger** — read across attempts, not just within one.
+- PR #150 — Four documented factor effects, each its own experiment.
+- PR #151 — The Hypothesis Generator's archetype set was two ADRs out of date.
+- PR #152 — The ledger crashed on its first real row: asyncpg returns jsonb as
+  text.
+- PR #153 — Fold consistency persisted, ledger counts corrected, two hazards
+  recorded.
+- PR #154 — The multiple-testing denominator counts draws, not rows.
+- PR #155 — The corpus says what to try next — and is forbidden from saying
+  more.
+- PR #156 — **The firm proposes its own strategies**, and reports what it
+  cannot test.
+- PR #157 — Tech Watcher reads arXiv q-fin; the proposer has a feed.
+- PR #158 — The axes are discovered from the engine, not from a list.
+- PR #159 — Importing the literature contract must not drag in numpy.
+- PR #160 — Everything the first live run exposed.
+- PR #161 — A dry run reports the gaps it found, not the empty store.
+- PR #162 — Network peripherality: the first effect the firm chose for itself.
+- PR #163 — **`hypothesis-generator-trigger`** — the proposer runs on its own.
+- PR #164 — `shrap-literature-refilter`: a prompt fix reaches the backlog.
+- PR #165 — The News Analyzer had never fetched a single item.
+- PR #166 — Calibration evidence, and the admission that the key data was
+  discarded.
+- PR #167 — Zero is an alarm: output-freshness checks in the Health Monitor.
+- PR #168 — EDGAR discovery: 8-Ks older than the Filing Processor's own
+  deployment.
+- PR #169 — Box-wide cloud routing; the local 9B is out of the judgement path.
+- PR #170 — Shadow-eval harness: settle model choice with evidence, not priors.
+
+### The first shadow eval, and what it found in our own code (2026-07-31)
+
+- PR #171 — The eval let a model agree by failing. Judgement columns counted
+  unparsed answers, so a model that parsed nothing "agreed" with a 90%-negative
+  incumbent 90% of the time.
+- PR #172 — The filter scored a markdown fence as an unparseable verdict.
+  `parse_filter_response` called `json.loads` on the raw completion, so fenced
+  JSON became a manufactured `relevant=False`. Confirmed afterwards to have cost
+  production **zero** verdicts — the fix is purely prospective.
+- PR #173 — KI-009 is the archetype bars asking an aggregate question of one
+  document. Card spec for the bar experiment (timeline 1.4).
+- PR #174 — The first shadow-eval verdict: `qwen3.5:397b` promoted on the Tech
+  Watcher filter binding, and the first entry in `calibration.md` §(e).
+- PR #175 — Prompt v4 has admitted nothing, and the number is zero: 0 relevant
+  across 2,472 verdicts.
 
 ## Security notes
 
