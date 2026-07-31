@@ -184,6 +184,40 @@ constraint.**
    items are sitting filtered-and-rejected, and KI-007's verdict history means
    a re-filter is now auditable.
 
+### Update 2026-07-31 — step 1 shipped and did not unblock it
+
+Prompt v4 is deployed. Hard-source items still do not pass, so step 3 has
+nothing to re-run *to* and is on hold until there is a bar that admits
+something.
+
+The ADR-0009 shadow eval (PRs #170–#172) then removed the other easy
+explanation. Four models scored the same corpus on v4 — `gpt-oss:20b-cloud`,
+`qwen3.5:397b`, `glm-5.2`, `deepseek-v4-pro:cloud`, spanning four families and
+two flagship usage tiers — and returned **0% relevant**, except one false
+positive from `deepseek-v4-pro` that admitted a routine 10-Q on the reasoning
+that "the filing's existence meets the attested bar." **The filter is not
+model-limited**; no model purchase changes this.
+
+The working hypothesis is now that **the archetype bars are aggregate-level
+predicates being evaluated against item-level evidence** — "unit cost declining
+on a learning-curve slope consistent across producers" is a statement about a
+series, and no single filing can satisfy it. Under that reading the rejections
+are all correct and the *question* is wrong, which also explains DQ-006's named
+false negative precisely: the DOE announcement was asked to be both a
+replication event and the survey proving replication was independent.
+
+That hypothesis is Mike's to rule on and is testable rather than arguable — see
+`docs/research/archetype-bar-experiment.md` (timeline card 1.4), which scores
+three candidate bar formulations over the full corpus and reports the admitted
+items rather than a rate. **KI-009 stays open until that ruling lands.**
+
+One consequence worth recording: the same eval found that
+`parse_filter_response` scored fence-wrapped JSON as an unparseable verdict
+(fixed in #172). It cost `glm-5.2` 30 of 40 answers in the eval. The live
+filter runs a model that does not fence, so the production corpus is probably
+unaffected — confirm with a `filter_verdict_history` count on the
+`'unparseable filter response'` reason before assuming it.
+
 ## KI-010 — Ingest legs die silently
 
 **Status:** Open, found 2026-07-27.
