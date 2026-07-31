@@ -215,6 +215,37 @@ async def test_dry_run_counts_without_calling_the_model_or_writing() -> None:
     assert report.render().startswith("[dry-run]")
 
 
+async def test_a_dry_run_reports_no_verdict_counts_it_did_not_compute() -> None:
+    """It returns before calling the model, so every count would be from ``()``.
+
+    Printing "0 verdict change(s)" reads as "the new model agrees with the old
+    one" when nothing was asked, and it was read exactly that way on
+    2026-07-31 — one message after the same class of defect had been fixed
+    twice elsewhere. A dry run knows one thing: how many items are eligible.
+    """
+
+    pool = _FakePool([_backlog_row(), _backlog_row()])
+
+    rendered = (await refilter_pass(pool, _FakeLLM([]), dry_run=True)).render()  # type: ignore[arg-type]
+
+    assert "eligible and NOT scored" in rendered
+    for fabricated in ("verdict change", "rescued", "dropped", "relevant after"):
+        assert fabricated not in rendered, f"dry run must not report {fabricated!r}"
+
+
+async def test_a_scored_run_still_reports_the_verdict_counts() -> None:
+    """The suppression is dry-run only; a real pass reports everything."""
+
+    pool = _FakePool([_backlog_row(relevant=False)])
+    llm = _FakeLLM(['{"relevant": true, "archetype": "cost-curve", "reason": "capex"}'])
+
+    rendered = (await refilter_pass(pool, llm)).render()  # type: ignore[arg-type]
+
+    assert "verdict change" in rendered
+    assert "rescued (false -> true): 1" in rendered
+    assert "[dry-run]" not in rendered
+
+
 async def test_refilter_reports_a_rescued_false_negative() -> None:
     # The DQ-006 case: v3 said false, v4 says cost-curve evidence.
     pool = _FakePool([_backlog_row(relevant=False)])

@@ -441,9 +441,22 @@ class RefilterReport:
         return tuple(v for v in self.verdicts if v.now_relevant)
 
     def render(self) -> str:
-        prefix = "[dry-run] " if self.dry_run else ""
+        if self.dry_run:
+            # A dry run returns before calling the model, so every count below
+            # would be derived from an empty tuple. Printing "0 verdict changes"
+            # reads as "the new model agrees with the old one" when nothing was
+            # asked — and it was read that way on 2026-07-31, one message after
+            # the same class of defect had been fixed twice elsewhere. A dry run
+            # knows exactly one thing: how many items are eligible.
+            return (
+                f"[dry-run] re-filter under prompt v{self.prompt_version}: "
+                f"{self.scored} item(s) eligible and NOT scored — the model was "
+                "not called, so nothing is known about verdicts.\n"
+                "  Re-run without --dry-run to score them. If this equals "
+                "--max-items, raise it to see the true eligible count."
+            )
         lines = [
-            f"{prefix}re-filter under prompt v{self.prompt_version}: "
+            f"re-filter under prompt v{self.prompt_version}: "
             f"{self.scored} item(s) scored, {len(self.flips)} verdict change(s)",
             f"  rescued (false -> true): {len(self.rescued)}   "
             f"dropped (true -> false): {len(self.dropped)}   "
