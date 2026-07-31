@@ -12,10 +12,13 @@ from shrap.research.tech_watcher.promotion import (
     SOURCE_CLASS_MIKE_SEED,
     STATUS_KILLED,
     STATUS_PROMOTED,
+    STREAM_WORLD_CHANGER_CRITERIA_AMENDED,
     STREAM_WORLD_CHANGER_KILLED,
     STREAM_WORLD_CHANGER_PROMOTED,
+    UPDATE_CRITERIA_SQL,
     UPDATE_DECISION_SQL,
     DecisionError,
+    amend_criteria,
     kill_candidate,
     promote_candidate,
     seed_candidate,
@@ -218,3 +221,151 @@ async def test_seed_refuses_unknown_archetype_and_empty_criteria() -> None:
             falsifier_horizon="2027",
         )
     assert redis.streams == []
+
+
+# --- amend-criteria -------------------------------------------------------
+#
+# The falsifier set is the only thing standing between a thesis and
+# unfalsifiability, so these tests are mostly about what the verb REFUSES.
+
+
+def _thesis_row(status: str, criteria: list[str]) -> dict[str, Any]:
+    return {
+        "candidate_id": "01TESTULID",
+        "name": "Mass-manufactured fission",
+        "archetype": "cost-curve",
+        "status": status,
+        "source_classes": json.dumps(["usaspending", "doe-newsroom"]),
+        "kill_criteria": json.dumps(criteria),
+    }
+
+
+async def test_amend_appends_and_leaves_existing_indices_untouched() -> None:
+    pool = FakePool(_thesis_row(STATUS_PROMOTED, ["first", "second"]))
+    redis = FakeRedis()
+
+    amendment = await amend_criteria(
+        pool,  # type: ignore[arg-type]
+        redis,  # type: ignore[arg-type]
+        "01TESTULID",
+        added=["third"],
+        reason="no criterion measured a competing technology",
+    )
+
+    # Recorded observations point at criteria by index. If an append ever
+    # reordered or dropped one, existing evidence would silently repoint.
+    assert amendment.criteria == ("first", "second", "third")
+    written = [args for sql, args in pool.conn.executed if sql == UPDATE_CRITERIA_SQL]
+    assert len(written) == 1
+    assert json.loads(str(written[0][1])) == ["first", "second", "third"]
+
+
+async def test_amend_publishes_before_and_after_counts() -> None:
+    pool = FakePool(_thesis_row(STATUS_PROMOTED, ["first"]))
+    redis = FakeRedis()
+
+    await amend_criteria(
+        pool,  # type: ignore[arg-type]
+        redis,  # type: ignore[arg-type]
+        "01TESTULID",
+        added=["second", "third"],
+        reason="blind spot",
+    )
+
+    assert redis.streams == [STREAM_WORLD_CHANGER_CRITERIA_AMENDED]
+    payload = _published_payload(redis)
+    # A thesis that keeps gaining criteria was less falsifiable than claimed.
+    # The rate of amendment has to be queryable, not buried in a column diff.
+    assert payload["criteria_before"] == 1
+    assert payload["criteria_after"] == 3
+    assert payload["added"] == ["second", "third"]
+    assert payload["reason"] == "blind spot"
+
+
+async def test_amend_refuses_a_killed_thesis() -> None:
+    pool = FakePool(_thesis_row(STATUS_KILLED, ["first"]))
+    redis = FakeRedis()
+
+    with pytest.raises(DecisionError, match="killed"):
+        await amend_criteria(
+            pool,  # type: ignore[arg-type]
+            redis,  # type: ignore[arg-type]
+            "01TESTULID",
+            added=["second"],
+            reason="r",
+        )
+    assert redis.streams == []
+
+
+async def test_amend_refuses_duplicate_criterion_case_insensitively() -> None:
+    pool = FakePool(_thesis_row(STATUS_PROMOTED, ["No unsubsidized PPA signed"]))
+    redis = FakeRedis()
+
+    # A duplicate would hold its own index while meaning the same thing, so an
+    # observation could bear on one and leave its twin reading UNTOUCHED.
+    with pytest.raises(DecisionError, match="already a kill criterion"):
+        await amend_criteria(
+            pool,  # type: ignore[arg-type]
+            redis,  # type: ignore[arg-type]
+            "01TESTULID",
+            added=["  no unsubsidized ppa signed  "],
+            reason="r",
+        )
+    assert redis.streams == []
+    assert not [args for sql, args in pool.conn.executed if sql == UPDATE_CRITERIA_SQL]
+
+
+async def test_amend_requires_a_reason_and_a_criterion() -> None:
+    pool = FakePool(_thesis_row(STATUS_PROMOTED, ["first"]))
+    redis = FakeRedis()
+
+    with pytest.raises(DecisionError, match="requires a reason"):
+        await amend_criteria(
+            pool,  # type: ignore[arg-type]
+            redis,  # type: ignore[arg-type]
+            "01TESTULID",
+            added=["second"],
+            reason="   ",
+        )
+    with pytest.raises(DecisionError, match="kill criterion"):
+        await amend_criteria(
+            pool,  # type: ignore[arg-type]
+            redis,  # type: ignore[arg-type]
+            "01TESTULID",
+            added=["  "],
+            reason="r",
+        )
+    assert redis.streams == []
+
+
+async def test_amend_missing_candidate_refuses() -> None:
+    pool = FakePool(row=None)
+    redis = FakeRedis()
+
+    with pytest.raises(DecisionError, match="does not exist"):
+        await amend_criteria(
+            pool,  # type: ignore[arg-type]
+            redis,  # type: ignore[arg-type]
+            "nope",
+            added=["second"],
+            reason="r",
+        )
+    assert redis.streams == []
+
+
+async def test_amend_render_marks_only_the_new_criteria() -> None:
+    pool = FakePool(_thesis_row(STATUS_PROMOTED, ["first", "second"]))
+    redis = FakeRedis()
+
+    amendment = await amend_criteria(
+        pool,  # type: ignore[arg-type]
+        redis,  # type: ignore[arg-type]
+        "01TESTULID",
+        added=["third"],
+        reason="r",
+    )
+
+    rendered = amendment.render()
+    assert "[0]     first" in rendered
+    assert "[2] NEW third" in rendered
+    assert "NEW first" not in rendered

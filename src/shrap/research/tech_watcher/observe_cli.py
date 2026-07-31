@@ -19,15 +19,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
 from ulid import ULID
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.events import EventPublisher
+from shrap.research.tech_watcher.candidates import loaded_criteria
 from shrap.research.tech_watcher.observations import (
     BEARINGS,
     ObservationError,
@@ -44,16 +44,6 @@ STREAM_WORLD_CHANGER_OBSERVED = "research.world-changer-observed"
 
 class _RedisXAdd(Protocol):
     async def xadd(self, stream: str, fields: dict[str, str]) -> str: ...
-
-
-def _loaded_criteria(raw: Any) -> list[str]:
-    """``kill_criteria`` is JSONB; asyncpg may hand back str or list."""
-    if isinstance(raw, str):
-        parsed = json.loads(raw)
-        return [str(c) for c in parsed] if isinstance(parsed, list) else []
-    if isinstance(raw, list):
-        return [str(c) for c in raw]
-    return []
 
 
 def parse_observed_at(value: str) -> datetime:
@@ -79,7 +69,7 @@ async def add_observation(
     if thesis is None:
         raise ObservationError(f"no world-changer with candidate_id '{world_changer_id}'")
 
-    kill_criteria = _loaded_criteria(thesis.get("kill_criteria"))
+    kill_criteria = loaded_criteria(thesis.get("kill_criteria"))
     validate_observation(
         observation=observation,
         evidence_ref=evidence_ref,
@@ -125,7 +115,7 @@ async def list_observations(store: PostgresObservationStore, world_changer_id: s
     thesis = await store.get_thesis(world_changer_id)
     if thesis is None:
         raise ObservationError(f"no world-changer with candidate_id '{world_changer_id}'")
-    kill_criteria = _loaded_criteria(thesis.get("kill_criteria"))
+    kill_criteria = loaded_criteria(thesis.get("kill_criteria"))
     rows = await store.observations_for(world_changer_id)
     return render_summary(str(thesis["name"]), summarize(rows, kill_criteria), rows)
 

@@ -304,3 +304,28 @@ def _json_or_none(value: object) -> str | None:
     if value is None:
         return None
     return json.dumps(value, separators=(",", ":"))
+
+
+def loaded_criteria(raw: object) -> list[str]:
+    """Decode the ``kill_criteria`` JSONB column into a list of strings.
+
+    asyncpg hands JSONB back as ``str`` or ``list`` depending on whether a
+    codec is registered on the connection, and both CLIs that read this column
+    have to cope with either. Shared rather than duplicated because the two
+    copies had already drifted — one guarded a decode error and one did not.
+
+    Returns ``[]`` for anything unrecognisable. A thesis with unreadable
+    criteria reads as *zero* criteria, which surfaces in the observation
+    summary as "0 of N bear on a kill criterion" — visibly wrong, rather than
+    a crash that hides the row.
+    """
+
+    if isinstance(raw, str):
+        try:
+            parsed: object = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        raw = parsed
+    if isinstance(raw, list):
+        return [str(c) for c in raw]
+    return []
