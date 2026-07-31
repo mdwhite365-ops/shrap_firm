@@ -32,6 +32,7 @@ from shrap.research.bar_experiment import (
     run_bar,
     signal_catalogue,
     signal_prompt_block,
+    stratified_limit,
     summarize,
 )
 from shrap.research.tech_watcher.archetypes import ARCHETYPES
@@ -312,3 +313,102 @@ def test_the_report_lists_admitted_items_rather_than_only_counting_them() -> Non
 def test_an_unknown_bar_key_is_refused() -> None:
     with pytest.raises(ValueError, match="unknown bar"):
         bars_by_key(["D-invented"])
+
+
+# --- what the 2026-07-31 calibration exposed ------------------------------------
+
+
+def _corpus() -> list[UnfilteredItem]:
+    """A corpus shaped like the real one: arXiv-heavy, sorted so arXiv leads."""
+
+    items = [_item(f"arxiv:{i:04d}", "arxiv") for i in range(1262)]
+    items += [_item(f"doe-newsroom:{i:04d}", "doe-newsroom") for i in range(18)]
+    items += [_item(f"federal-register:{i:04d}", "federal-register") for i in range(117)]
+    items += [_item(f"sec-edgar:{i:04d}", "sec-edgar") for i in range(3699)]
+    items += [_item(f"usaspending:{i:04d}", "usaspending") for i in range(125)]
+    return sorted(items, key=lambda i: i.item_id)
+
+
+def test_a_head_slice_would_have_been_all_arxiv() -> None:
+    """The defect itself, pinned so nobody reintroduces items[:limit]."""
+
+    assert {item.source for item in _corpus()[:600]} == {"arxiv"}
+
+
+def test_a_limited_run_keeps_every_source() -> None:
+    picked = stratified_limit(_corpus(), 600)
+
+    assert {item.source for item in picked} == {
+        "arxiv",
+        "doe-newsroom",
+        "federal-register",
+        "sec-edgar",
+        "usaspending",
+    }
+    assert len(picked) <= 600
+
+
+def test_the_hard_legs_dominate_a_limited_run_because_they_dominate_the_corpus() -> None:
+    """sec-edgar is 71% of the corpus, so it should be ~71% of any sample."""
+
+    picked = stratified_limit(_corpus(), 600)
+    edgar = sum(1 for item in picked if item.source == "sec-edgar")
+
+    assert 0.6 <= edgar / len(picked) <= 0.8
+
+
+def test_a_tiny_source_is_not_rounded_out_of_existence() -> None:
+    """doe-newsroom has 18 items and carries DQ-006's named false negative."""
+
+    picked = stratified_limit(_corpus(), 100)
+
+    assert any(item.source == "doe-newsroom" for item in picked)
+
+
+def test_the_control_items_are_always_in_a_limited_run() -> None:
+    """A run that silently omits its own control cannot report on it."""
+
+    corpus = sorted(
+        [*_corpus(), *[_item(cid, "arxiv") for cid in CONTROL_ITEM_IDS]],
+        key=lambda i: i.item_id,
+    )
+
+    picked = {item.item_id for item in stratified_limit(corpus, 50)}
+
+    assert set(CONTROL_ITEM_IDS) <= picked
+
+
+def test_a_limit_above_the_corpus_returns_everything() -> None:
+    corpus = _corpus()
+
+    assert stratified_limit(corpus, 99_999) == corpus
+
+
+def test_a_run_that_saw_no_hard_leg_items_says_so_loudly() -> None:
+    """`hard-leg 0` out of 0 scored is not a result, and read like one."""
+
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    summary = summarize(bar, [_call(bar.key, "a", "arxiv", False, None)])
+    report = ExperimentReport(
+        corpus_size=1,
+        tier="local-classification",
+        model="qwen3.5:397b",
+        summaries=(summary,),
+        started_at="2026-08-01T00:00:00+00:00",
+        finished_at="2026-08-01T00:05:00+00:00",
+    )
+
+    assert summary.hard_source_scored == 0
+    assert "scored no hard-leg items at all" in render_markdown(report)
+
+
+def test_a_scored_and_rejected_control_reads_differently_from_an_unseen_one() -> None:
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+
+    rejected = summarize(bar, [_call(bar.key, CONTROL_ITEM_IDS[0], "arxiv", False, None)])
+    assert rejected.control_rejected == (CONTROL_ITEM_IDS[0],)
+    assert rejected.controls_unseen == (CONTROL_ITEM_IDS[1],)
+
+    unseen = summarize(bar, [_call(bar.key, "unrelated", "arxiv", False, None)])
+    assert unseen.controls_unseen == CONTROL_ITEM_IDS
+    assert unseen.control_rejected == ()
