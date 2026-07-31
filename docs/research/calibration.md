@@ -278,16 +278,119 @@ Record which tier the run was for.
 
 ### Runs
 
-*(none yet — this section was created empty on 2026-07-30 with the harness.
-The first run should compare the `local-classification` incumbent
-`gpt-oss:20b-cloud` against at least one higher-tier candidate, and its result
-belongs here whether it promotes anything or not.)*
+Three runs took place before the first decision was recorded. All three are
+here. The first two produced numbers that were wrong, and deleting them would
+be the curated-ledger failure this file's editing rules forbid — the
+denominator is never hidden, including when the thing being counted is our own
+defective instrument.
 
-**[MIKE INPUT REQUIRED]** Which candidates to run first, and confirmation that
-their Ollama **usage tier** is inside the current subscription. An
-`OLLAMA_API_KEY` in `.env` establishes that requests authenticate, not that
-they are permitted — conflating the two is what got `kimi-k3:cloud` reverted
-once already.
+#### Run 1 — 2026-07-30 · `local-classification` / `filter` · **superseded, do not cite**
+
+Six candidates against `gpt-oss:20b-cloud`, 20 items. **Its judgement columns
+were invalid and no decision was taken from it.** `compute_metrics` excluded
+calls that *raised* but not calls that failed to *parse*, and
+`parse_filter_response` turns an unparseable response into `relevant=False`. On
+a corpus that is ~90% negative, a model that parsed nothing therefore "agreed"
+with the incumbent ~90% of the time. `glm-5.2` scored 10% schema adherence and
+90% agreement; `kimi-k2.5` scored 20% and 90%. Both figures were properties of
+the metric.
+
+What survived the correction: `nemotron-3-super` at 34s p95, disqualifying for
+bulk work at any quality. Fixed in PR #171.
+
+#### Run 2 — 2026-07-31 (morning) · `local-classification` / `filter` · **superseded**
+
+Same six candidates on the corrected harness. Judgement columns valid, but the
+**schema** column was not, for a reason the run itself diagnosed:
+`parse_filter_response` called `json.loads` on the raw completion, so JSON
+wrapped in a markdown fence was scored as an unparseable verdict.
+
+| model | schema | unparsed | cause | recoverable |
+|---|---|---|---|---|
+| `glm-5.2` | 25% | 30/40 | fenced-json | 30 of 30 |
+| `deepseek-v4-pro:cloud` | 95% | 2/40 | fenced-json | 2 of 2 |
+
+The harness named it correctly — *"that is our defect, not the model's"* —
+which is the first thing it has caught that the test suite did not. Fixed in
+PR #172.
+
+Two candidates never produced a verdict, and the distinct-error reporting added
+in #171 said why rather than rendering a row of zeroes: **`kimi-k2.5` → HTTP
+410, retired 2026-07-31 00:00 PDT**; **`kimi-k3` → HTTP 402, "this model uses
+extra usage only (not included plan usage) and your extra usage balance is
+empty."** Neither was a tag error, which is what both had previously been
+assumed to be. `kimi-k3` is not callable under the Pro subscription without a
+separately funded balance — the third time that model has been proposed and
+blocked.
+
+#### Run 3 — 2026-07-31 (afternoon) · `local-classification` / `filter` · **the decision run**
+
+Five models, 20 items, seed 7, 2 repeats, 200 completions, prompt v4. Strata:
+incumbent-relevant 2, incumbent-not-relevant 18, never-scored 0.
+
+| model | schema | judged | self-consist | agrees w/ incumbent | says relevant | p50 ms | p95 ms | errors | usage tier |
+|---|---|---|---|---|---|---|---|---|---|
+| `gpt-oss:20b-cloud` (incumbent) | 100% | 20/40 | 100% | 90% | 0% | 6980 | 12769 | 0 | low |
+| `qwen3.5:397b` | 100% | 20/40 | 100% | 90% | 0% | **2114** | **2539** | 0 | **medium** |
+| `deepseek-v4-pro:cloud` | 100% | 20/40 | 100% | 90% | 0% | 1193 | 1596 | 0 | extra high |
+| `glm-5.2` | 100% | 20/40 | 100% | 90% | 0% | 2327 | 6869 | 0 | high |
+| `kimi-k2.6` | 100% | 20/40 | 100% | 90% | 0% | 1577 | 2574 | 0 | high |
+
+Pairwise agreement on relevance: **100% across all ten pairs. Zero
+disagreements.** There was nothing to adjudicate.
+
+**Verdict: promote `qwen3.5:397b`** on the Tech Watcher filter binding.
+Approved by Mike White, 2026-07-31.
+
+The five models are **indistinguishable on judgement** — identical schema
+adherence, self-consistency, incumbent agreement and says-relevant rate, with
+no disagreement anywhere in the sample. That makes this a decision about
+latency and usage tier only, and criterion 4 (Mike's read of the disagreements)
+never engages because there are none. `qwen3.5:397b` is the lowest usage tier
+among the fast models and its p95 is effectively tied with the best of them,
+against an incumbent five times slower at p95.
+
+**The cost gate is cleared on measurement, not waived.** The week of
+2026-07-31 spent 3,320 requests across all models — 2,941 of them the
+production filter — for **1.2% of the Pro weekly allowance**. A one-tier move
+on the bulk filter does not bind at roughly 80x headroom. Ollama bills
+GPU-time, and the promoted model is ~3.3x faster at p50, so the move may be
+cheaper in the billed unit; that is not the basis for the decision and has not
+been measured directly.
+
+**Rejected candidates and why** (recorded, per the editing rules):
+
+- `deepseek-v4-pro:cloud` — extra-high usage tier for output identical to a
+  medium-tier model. Its Run-2 false positive (a routine 10-Q admitted as
+  `platform-shift` because "the filing's existence meets the attested bar")
+  **did not reproduce here**; it was a single non-repeating sample, consistent
+  with that run's 95% self-consistency, and it is not part of this rejection.
+- `kimi-k2.6` — high usage tier, no advantage over the promoted model.
+- `glm-5.2` — high usage tier, and the slowest p95 of the four candidates.
+  Note that its Run-2 p95 of 22.5s **did not reproduce** (6.9s here), so its
+  earlier apparent latency disqualification was run-to-run variance rather than
+  a property of the model.
+- `nemotron-3-super` — 34s p95 in Run 1. Not re-run.
+- `kimi-k2.5` — retired by the provider.
+- `kimi-k3` — outside the subscription's included usage.
+
+**Scope of this promotion.** The eval measured the **filter** task only, so
+only `SHRAP_FILTER_MODEL` moves. `SHRAP_INTEL_BULK_MODEL` — the News Analyzer
+and Filing Processor materiality calls, which resolve the same tier alias —
+stays on `gpt-oss:20b-cloud` until a run measures *that* task. Extending an
+unmeasured conclusion across tasks is the exact habit this section exists to
+end.
+
+**What this run does not show.** Only 2 incumbent-relevant items were available
+in the whole sampled corpus, and **all five models rejected both**. The
+agreement column is therefore a statement about rejections, which every model
+finds easy — a floor, not a ranking. More sample would not fix this: the
+stratified sampler already takes every available positive, so the positive
+class is starved by the corpus, not the budget. That is KI-009, and it is the
+subject of `docs/research/archetype-bar-experiment.md` rather than of any model
+choice. **Five model families spanning four usage tiers returning 0% relevant
+on the same corpus is the strongest evidence yet that the filter is not
+model-limited.**
 
 ---
 

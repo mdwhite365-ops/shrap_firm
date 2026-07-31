@@ -903,7 +903,13 @@ services:
       SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
       OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
       SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
-      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_FILTER_MODEL:-gpt-oss:20b-cloud}"
+      # Was gpt-oss:20b-cloud. Promoted 2026-07-31 on the first real shadow eval
+      # (calibration.md §(e) Run 3): five models were indistinguishable on
+      # judgement — 100% schema, 100% self-consistency, zero disagreements — so
+      # the call reduced to latency and usage tier, where this is the lowest
+      # tier among the fast models at p95 2539ms vs the incumbent's 12769ms.
+      # Filter task only; the Intelligence agents' binding below is unchanged.
+      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_FILTER_MODEL:-qwen3.5:397b}"
       SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
       # Was kimi-k3:cloud. That model requires a paid Ollama subscription this
       # account does not have and returns HTTP 403 (verified 2026-07-30 while
