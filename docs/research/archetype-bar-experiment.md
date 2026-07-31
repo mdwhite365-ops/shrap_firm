@@ -28,6 +28,22 @@ Two flagship tiers, four model families, one answer. **The filter is not model-
 limited.** No purchase fixes it, and the remaining explanation is the taxonomy
 itself — which is a Mike-owned decision, not an implementation detail.
 
+**Measured 2026-07-31, and the number is exact.** `filter_verdict_history` over
+its whole history:
+
+| prompt version | verdicts | relevant |
+|---|---|---|
+| 3 | 2,082 | 2 |
+| **4** | **2,472** | **0** |
+
+**Prompt v4 has admitted nothing across 2,472 verdicts.** The two v3 positives
+were both scored by `qwen3.5:9b-q4_K_M` — the local 9B replaced *because it
+could not perform the task* — and both are arXiv, the one source class that can
+never satisfy triangulation. The corpus has no valid positive class at all.
+
+This sharpens the premise from "the filter rejects nearly everything" to a
+statement with no rate in it. Whatever is wrong is not a matter of degree.
+
 This card does not propose a taxonomy. It proposes the experiment that lets
 Mike rule on one with evidence instead of argument.
 
@@ -127,6 +143,13 @@ Per bar, over the corpus:
   by reading them.
 - **agreement between bars** on the items all three see, to localize where the
   reformulation changes the reading rather than just the volume.
+- **what each bar does with `arxiv:2607.20349v1` and `arxiv:2607.20083v1`** —
+  the only two items any model has ever admitted, both under v3 and both by a
+  model since replaced for being wrong. They are the experiment's one natural
+  control. A bar that admits them is not thereby correct — the original
+  verdicts are not trustworthy — but a bar that admits *nothing* is failing
+  differently from one that admits these, and the distinction is free to
+  measure. Their `filter_result` should stay un-refiltered until this runs.
 
 An admit rate is not a success metric. A bar that admits everything scores
 best on volume and is worthless. The deliverable Mike rules on is the
