@@ -1144,6 +1144,14 @@ services:
   #     shrap-market-data-backfill --tickers AAPL,MSFT --since 2021-01-01
   # Reads the bare ALPACA_* data-host credentials from .env (data-host
   # read-only, same names as the Regime Classifier / News Analyzer use).
+  #
+  # The SAME container also runs the intraday backfill (timeline 2.8), which
+  # writes market_data.intraday_bars rather than daily_bars:
+  #   docker compose --profile tools run --rm market-data \
+  #     shrap-market-data-intraday-backfill --launch-list --dry-run
+  # Mind the grain difference before dropping --dry-run: one ticker-day of
+  # 1Min bars is ~390 rows, so the launch list over the default 30 days is
+  # ~410k rows against the daily backfill's ~50 per ticker-year.
   # -------------------------------------------------------------------------
   # Market Data trigger - keeps market_data.daily_bars advancing without a
   # human. The backfill below is a tools-profile CLI, so bars only ever moved
