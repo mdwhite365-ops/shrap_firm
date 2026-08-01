@@ -316,6 +316,19 @@ and never provides the hard leg.
    evidence trails. Mike's promotion action causes the agent to emit
    `research.world-changer-promoted`, which the Infrastructure Mapper
    subscribes to.
+9b. **Kill criteria are append-only after creation.** Mike may append
+    criteria to any candidate that is not `killed`
+    (`shrap-tech-watcher-promote amend-criteria`), with a mandatory reason,
+    emitting `research.world-changer-criteria-amended`. There is no verb to
+    edit, reorder, or remove a criterion, for two reasons. **Falsifiability:**
+    a thesis that can rewrite its falsifiers as it approaches one has none.
+    **Index stability:** observations reference criteria by position, so a
+    reorder would silently repoint recorded evidence at a different criterion.
+
+    Appending is not neutral, and the event carries before/after counts so the
+    rate is queryable — a thesis that keeps gaining criteria is one that was
+    less falsifiable than it claimed. The path exists because evidence is what
+    exposes a missing falsifier, and evidence only accumulates after promotion.
 10. **Daily summary.** End-of-day rollup event with N ingested, N filtered,
     N clustered, N proposed, N killed, N promoted-by-Mike, kill-rate
     trailing-90d. Surfaces in the Daily Briefing.
