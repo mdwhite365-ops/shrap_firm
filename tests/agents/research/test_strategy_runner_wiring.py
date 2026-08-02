@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import tomllib
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from shrap.agents.research.strategy_runner.config import Settings
@@ -100,6 +100,7 @@ def test_reference_factory_seam_emits_a_buy_end_to_end() -> None:
 
     plans = plan_session(
         session_date=date(2026, 7, 24),
+        now=datetime(2026, 7, 24, 14, 30, tzinfo=UTC),
         strategies=[item],
         stored_state={},
         factory=_default_strategy_factory,

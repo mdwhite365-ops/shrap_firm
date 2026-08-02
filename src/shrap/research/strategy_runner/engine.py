@@ -30,10 +30,17 @@ Invariants enforced in this module (the service enforces the delivery ones):
   of that budget, so its weights are fractions of its own allocation. Sizing
   every strategy against the *whole* account is how a book silently levers: two
   strategies at full investment order 200% of equity, four order 400%.
-- **Idempotent per session.** A strategy whose stored ``last_session_date``
-  already equals this session's date is skipped, so a re-delivered / startup /
-  catch-up market-phase event (or a restart) never produces a second pass. At
-  most one action per ``(strategy_id, session_date)``.
+- **Idempotent per session AND slot.** A strategy whose stored state already
+  carries this session's date *and* its current decision slot is skipped, so a
+  re-delivered / startup / catch-up market-phase event (or a restart) never
+  produces a second pass. At most one action per
+  ``(strategy_id, session_date, slot)``.
+
+  The slot comes from the strategy's own declared cadence
+  (:mod:`shrap.research.strategy_runner.cadence`) and defaults to the constant
+  ``session``. So a daily strategy still gets at most one action per session
+  however often the Runner wakes, while an intraday one gets one per interval —
+  same guard, no second code path.
 - **Fail-safe.** Any per-strategy error (bad spec, factory error, missing or
   insufficient bars) skips *that* strategy with a recorded reason. It never
   raises out of :func:`plan_session` and never emits a partial signal.
@@ -50,11 +57,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 from shrap.research.strategy_evaluator.strategy import BarSample, PanelWindow, PricePanel
 from shrap.research.strategy_registry import StrategyRecord
+from shrap.research.strategy_runner.cadence import SESSION_SLOT, read_cadence, slot_for
 from shrap.research.strategy_runner.sizing import SizingRefused, size_position
 
 if TYPE_CHECKING:
@@ -144,6 +152,12 @@ class TargetState:
     last_side: str | None
     last_session_date: date | None
     last_quantity: int = 0
+    last_slot: str = SESSION_SLOT
+    """The decision slot this row was last stamped in (:mod:`.cadence`).
+
+    Defaults to ``session`` so every row written before intraday cadence existed
+    reads as "the whole session", which is what those passes actually meant.
+    """
 
 
 FLAT_TARGET = TargetState(last_target=0.0, last_side=None, last_session_date=None, last_quantity=0)
@@ -183,6 +197,7 @@ class PlannedStateWrite:
     last_side: str | None
     last_session_date: date
     last_quantity: int = 0
+    last_slot: str = SESSION_SLOT
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,25 +339,33 @@ def _latest_close(window: PanelWindow, ticker: str) -> float:
     return float(closes[-1])
 
 
-def _already_ran(
+def already_ran(
     strategy_id: str,
     tickers: Sequence[str],
     stored_state: Mapping[tuple[str, str], TargetState],
     session_date: date,
+    slot: str,
 ) -> bool:
-    """True if this strategy already ran this session (idempotency guard).
+    """True if this strategy already ran in this ``(session_date, slot)``.
 
-    A strategy is considered done for the session as soon as *any* of its
-    ``(strategy_id, ticker)`` rows carries this ``session_date``. After a
+    A strategy is considered done as soon as *any* of its
+    ``(strategy_id, ticker)`` rows carries this session AND this slot. After a
     completed pass every processed ticker is stamped, so this is exact for the
     single-ticker reference rule; for a partially-stamped multi-ticker strategy
     it errs toward not re-running (never double-emitting), which is the safe
     choice on the trading path.
+
+    ``slot`` is what lets the Runner wake many times a session without a daily
+    strategy acting many times: a daily strategy's slot is the constant
+    ``session``, so the first stamp of the day closes it out. See
+    :mod:`shrap.research.strategy_runner.cadence`.
     """
 
     for ticker in tickers:
         state = stored_state.get((strategy_id, ticker))
-        if state is not None and state.last_session_date == session_date:
+        if state is None:
+            continue
+        if state.last_session_date == session_date and state.last_slot == slot:
             return True
     return False
 
@@ -360,6 +383,7 @@ def _skip(strategy_id: str, reason: str) -> StrategyPlan:
 def _plan_strategy(
     *,
     session_date: date,
+    now: datetime,
     item: StrategyInput,
     stored_state: Mapping[tuple[str, str], TargetState],
     factory: StrategyFactory,
@@ -369,9 +393,13 @@ def _plan_strategy(
     account_id: str,
 ) -> StrategyPlan:
     strategy_id = item.record.strategy_id
+    # Each strategy resolves its OWN slot from its OWN declared cadence, so one
+    # pass can serve a daily rule and a five-minute rule without either knowing
+    # the other exists. Absence of a cadence means daily (see `.cadence`).
+    slot = slot_for(read_cadence(item.record.spec), now)
     try:
-        if _already_ran(strategy_id, item.tickers, stored_state, session_date):
-            return _skip(strategy_id, "already ran this session")
+        if already_ran(strategy_id, item.tickers, stored_state, session_date, slot):
+            return _skip(strategy_id, f"already ran this session at slot {slot}")
         if not item.tickers:
             return _skip(strategy_id, "no tickers declared")
 
@@ -484,6 +512,7 @@ def _plan_strategy(
                     last_side=side or prev.last_side,
                     last_session_date=session_date,
                     last_quantity=stored_quantity,
+                    last_slot=slot,
                 )
             )
 
@@ -502,6 +531,7 @@ def _plan_strategy(
 def plan_session(
     *,
     session_date: date,
+    now: datetime,
     strategies: Sequence[StrategyInput],
     stored_state: Mapping[tuple[str, str], TargetState],
     factory: StrategyFactory,
@@ -529,6 +559,7 @@ def plan_session(
     return [
         _plan_strategy(
             session_date=session_date,
+            now=now,
             item=item,
             stored_state=stored_state,
             factory=factory,
@@ -561,5 +592,6 @@ __all__ = [
     "StrategyPlan",
     "TargetState",
     "allocate_equity",
+    "already_ran",
     "plan_session",
 ]

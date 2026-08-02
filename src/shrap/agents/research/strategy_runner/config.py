@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     count: int = 100
     block_ms: int = 5000
     retry_delay_seconds: float = 1.0
+
+    # How often the loop offers a pass while the market is open (2.9). This is
+    # an OPPORTUNITY, not a trade rate: each strategy's own declared cadence
+    # decides whether it acts, and a strategy with no cadence acts once a
+    # session however small this gets. 60s is finer than any sane strategy
+    # interval, so the strategy's cadence is the binding constraint rather
+    # than this. 0 disables interval firing and restores pure event-driven
+    # behaviour.
+    intraday_tick_seconds: float = 60.0
     log_level: str = "INFO"
 
     def signal_config(self) -> RunnerSignalConfig:
@@ -84,6 +93,7 @@ class Settings(BaseSettings):
             "start_id": self.start_id,
             "count": self.count,
             "block_ms": self.block_ms,
+            "intraday_tick_seconds": self.intraday_tick_seconds,
             "retry_delay_seconds": self.retry_delay_seconds,
             "log_level": self.log_level,
         }
