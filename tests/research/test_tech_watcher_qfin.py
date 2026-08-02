@@ -445,7 +445,18 @@ async def test_a_dry_run_counts_without_calling_the_model_or_writing() -> None:
     assert report.scored == 1
     assert report.verdicts == ()
     assert pool.conn.executed == []
-    assert report.render().startswith("[dry-run]")
+
+    rendered = report.render()
+    assert rendered.startswith("[dry-run]")
+    # The counts below `scored` are all derived from `verdicts`, which a dry run
+    # leaves empty. Printing "0 verdict change(s)" reports agreement that was
+    # never measured — and this report exists precisely to tell "the prompt
+    # never reached the model" apart from "the model disagreed". Ran live on
+    # 2026-08-01 against 111 q-fin items and read as a real result.
+    assert "NOT scored" in rendered
+    assert "verdict change" not in rendered
+    assert "rescued" not in rendered
+    assert "dropped" not in rendered
 
 
 async def test_the_refilter_reports_a_dropped_false_accept() -> None:

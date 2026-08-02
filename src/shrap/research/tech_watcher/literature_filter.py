@@ -486,9 +486,25 @@ class LiteratureRefilterReport:
         return tuple(v for v in self.flips if v.now_accepted)
 
     def render(self) -> str:
-        prefix = "[dry-run] " if self.dry_run else ""
+        if self.dry_run:
+            # A dry run returns before calling the model, so `verdicts` is empty
+            # and every count below it would be a zero derived from nothing —
+            # printed in the exact shape of a measurement. This class's own
+            # docstring says it exists to separate "the prompt never reached the
+            # model" from "the model read it and disagreed", and reporting
+            # "0 verdict change(s)" here is the first of those wearing the
+            # second's clothes. Same defect as the world-changer re-filter's,
+            # fixed in #183 and missed here because the two reports are separate
+            # classes.
+            return (
+                f"[dry-run] literature re-filter under prompt v{self.prompt_version}: "
+                f"{self.scored} item(s) eligible and NOT scored — the model was "
+                "not called, so nothing is known about verdicts.\n"
+                "  Re-run without --dry-run to score them. If this equals "
+                "--limit, raise it to see the true eligible count."
+            )
         lines = [
-            f"{prefix}literature re-filter under prompt v{self.prompt_version}: "
+            f"literature re-filter under prompt v{self.prompt_version}: "
             f"{self.scored} scored, {len(self.flips)} verdict change(s)",
             f"  rescued: {len(self.rescued)}   dropped: {len(self.dropped)}   "
             f"accepted after this pass: {sum(1 for v in self.verdicts if v.now_accepted)}",
