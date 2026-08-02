@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from typing import Any, Protocol
 
+from shrap.research.strategy_runner.cadence import SESSION_SLOT
 from shrap.research.strategy_runner.engine import PlannedStateWrite, TargetState
 
 CREATE_RESEARCH_SCHEMA_SQL = "CREATE SCHEMA IF NOT EXISTS research"
@@ -49,21 +50,35 @@ ALTER TABLE research.strategy_runner_state
 ADD COLUMN IF NOT EXISTS last_quantity INTEGER NOT NULL DEFAULT 1
 """.strip()
 
+# Same reasoning as the quantity migration: the table exists in production, so
+# CREATE TABLE IF NOT EXISTS will not add this. The default is `session` — every
+# row written before cadence existed was stamped by a once-a-day pass, and
+# `session` is exactly what that pass meant. Any other default would make those
+# rows compare unequal to the slot a daily strategy computes today, and every
+# one of them would trade a second time on the first pass after deploy.
+ALTER_RUNNER_STATE_ADD_SLOT_SQL = """
+ALTER TABLE research.strategy_runner_state
+ADD COLUMN IF NOT EXISTS last_slot TEXT NOT NULL DEFAULT 'session'
+""".strip()
+
 SELECT_RUNNER_STATE_SQL = """
-SELECT strategy_id, ticker, last_target, last_side, last_session_date, last_quantity
+SELECT strategy_id, ticker, last_target, last_side, last_session_date,
+       last_quantity, last_slot
 FROM research.strategy_runner_state
 """.strip()
 
 UPSERT_RUNNER_STATE_SQL = """
 INSERT INTO research.strategy_runner_state (
-    strategy_id, ticker, last_target, last_side, last_session_date, last_quantity, updated_at
+    strategy_id, ticker, last_target, last_side, last_session_date,
+    last_quantity, last_slot, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, now())
+VALUES ($1, $2, $3, $4, $5, $6, $7, now())
 ON CONFLICT (strategy_id, ticker) DO UPDATE SET
     last_target = EXCLUDED.last_target,
     last_side = EXCLUDED.last_side,
     last_session_date = EXCLUDED.last_session_date,
     last_quantity = EXCLUDED.last_quantity,
+    last_slot = EXCLUDED.last_slot,
     updated_at = now()
 """.strip()
 
@@ -117,6 +132,7 @@ class PostgresStrategyRunnerStateStore:
             await conn.execute(CREATE_RESEARCH_SCHEMA_SQL)
             await conn.execute(CREATE_RUNNER_STATE_TABLE_SQL)
             await conn.execute(ALTER_RUNNER_STATE_ADD_QUANTITY_SQL)
+            await conn.execute(ALTER_RUNNER_STATE_ADD_SLOT_SQL)
 
     async def read_state(self) -> dict[tuple[str, str], TargetState]:
         """Read every stored target, keyed by ``(strategy_id, ticker)``.
@@ -133,11 +149,13 @@ class PostgresStrategyRunnerStateStore:
             ticker = str(row["ticker"])
             last_side = row["last_side"]
             last_quantity = row["last_quantity"]
+            last_slot = row["last_slot"]
             state[(strategy_id, ticker)] = TargetState(
                 last_target=float(row["last_target"]),
                 last_side=None if last_side is None else str(last_side),
                 last_session_date=_as_date(row["last_session_date"]),
                 last_quantity=0 if last_quantity is None else int(last_quantity),
+                last_slot=SESSION_SLOT if last_slot is None else str(last_slot),
             )
         return state
 
@@ -180,6 +198,7 @@ class PostgresStrategyRunnerStateStore:
                 write.last_side,
                 write.last_session_date,
                 write.last_quantity,
+                write.last_slot,
             )
 
 
@@ -193,6 +212,7 @@ def _as_date(value: object) -> date | None:
 
 __all__ = [
     "ALTER_RUNNER_STATE_ADD_QUANTITY_SQL",
+    "ALTER_RUNNER_STATE_ADD_SLOT_SQL",
     "CREATE_RUNNER_STATE_TABLE_SQL",
     "SELECT_LATEST_EQUITY_SQL",
     "SELECT_RUNNER_STATE_SQL",

@@ -24,6 +24,7 @@ from typing import Any
 from shrap.agents.research.strategy_runner.runner import (
     STREAM_MARKET_PHASE,
     PassResult,
+    SessionTracker,
     poll_once,
     run_pass,
 )
@@ -353,3 +354,103 @@ async def test_an_unassigned_strategy_does_not_wedge_the_consumer() -> None:
     await _poll([_record("s1", None)], store, redis)
 
     assert redis.acked == ["1-0"]
+
+
+# --- session tracking and interval firing (2.9) --------------------------------
+
+
+async def test_the_tracker_remembers_open_between_events() -> None:
+    # market-phase publishes transitions, not ticks, so the loop's only way to
+    # know it is inside `open` between boundaries is to remember it.
+    tracker = SessionTracker()
+    assert tracker.open_session is None
+
+    tracker.observe("open", SESSION)
+    assert tracker.open_session == SESSION
+
+
+async def test_any_non_open_phase_stops_interval_firing() -> None:
+    tracker = SessionTracker(open_session=SESSION)
+
+    tracker.observe("closed", None)
+    assert tracker.open_session is None
+
+
+async def test_an_unrecognised_phase_reads_as_not_open() -> None:
+    # A phase added later must not be able to leave the Runner firing into a
+    # market that is shut.
+    tracker = SessionTracker(open_session=SESSION)
+
+    tracker.observe("some-future-phase", SESSION)
+    assert tracker.open_session is None
+
+
+async def test_poll_once_updates_the_tracker_from_the_phase_stream() -> None:
+    redis = FakeRedis(_open_phase_entries())
+    store = FakeStateStore({ACCOUNT_A: _fresh()})
+    tracker = SessionTracker()
+    subscriber = GroupEventSubscriber(redis, group="strategy-runner", start_id="0")  # type: ignore[arg-type]
+
+    await poll_once(
+        redis,  # type: ignore[arg-type]
+        subscriber,
+        registry=FakeRegistry([_record("s1", ACCOUNT_A)]),  # type: ignore[arg-type]
+        reader=FakeReader(),  # type: ignore[arg-type]
+        state_store=store,  # type: ignore[arg-type]
+        config=UNCAPPED,
+        adjustment="all",
+        lookback_buffer_days=10,
+        lookback_max_days=1200,
+        count=10,
+        block_ms=0,
+        tracker=tracker,
+    )
+
+    assert tracker.open_session == SESSION
+
+
+async def test_a_pass_with_nothing_due_reads_no_bars() -> None:
+    """The 'must stay cheap' property from the timeline, measured.
+
+    Under a one-minute tick this pass runs ~390 times a session and is a no-op
+    for almost all of them. If the guard ran after `_build_input` the Runner
+    would read a trailing window per ticker per tick to compute a skip it had
+    already decided.
+    """
+
+    class CountingReader(FakeReader):
+        def __init__(self) -> None:
+            self.reads = 0
+
+        async def read_bars(
+            self, ticker: str, start: date, end: date, adjustment: str
+        ) -> list[BarSample]:
+            self.reads += 1
+            return await super().read_bars(ticker, start, end, adjustment)
+
+    class StampedStore(FakeStateStore):
+        async def read_state(self) -> dict[tuple[str, str], TargetState]:
+            return {
+                ("s1", "NVDA"): TargetState(
+                    last_target=1.0,
+                    last_side="buy",
+                    last_session_date=SESSION,
+                    last_quantity=10,
+                )
+            }
+
+    reader = CountingReader()
+    result = await run_pass(
+        session_date=SESSION,
+        redis=FakeRedis(),  # type: ignore[arg-type]
+        registry=FakeRegistry([_record("s1", ACCOUNT_A)]),  # type: ignore[arg-type]
+        reader=reader,  # type: ignore[arg-type]
+        state_store=StampedStore({ACCOUNT_A: _fresh()}),  # type: ignore[arg-type]
+        config=UNCAPPED,
+        adjustment="all",
+        lookback_buffer_days=10,
+        lookback_max_days=1200,
+    )
+
+    assert result.emitted == 0
+    assert reader.reads == 0

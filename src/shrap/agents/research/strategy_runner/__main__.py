@@ -32,6 +32,7 @@ def main() -> None:
             start_id=settings.start_id,
             count=settings.count,
             block_ms=settings.block_ms,
+            intraday_tick_seconds=settings.intraday_tick_seconds,
             retry_delay_seconds=settings.retry_delay_seconds,
         )
     )

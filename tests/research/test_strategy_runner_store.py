@@ -36,7 +36,15 @@ class FakeConn:
     async def execute(self, sql: str, *args: object) -> object:
         self.executed.append(sql)
         if sql == UPSERT_RUNNER_STATE_SQL:
-            strategy_id, ticker, last_target, last_side, last_session_date, last_quantity = args
+            (
+                strategy_id,
+                ticker,
+                last_target,
+                last_side,
+                last_session_date,
+                last_quantity,
+                last_slot,
+            ) = args
             self.rows[(str(strategy_id), str(ticker))] = {
                 "strategy_id": strategy_id,
                 "ticker": ticker,
@@ -44,6 +52,7 @@ class FakeConn:
                 "last_side": last_side,
                 "last_session_date": last_session_date,
                 "last_quantity": last_quantity,
+                "last_slot": last_slot,
             }
         return "OK"
 

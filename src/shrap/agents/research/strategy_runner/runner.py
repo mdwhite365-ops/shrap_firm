@@ -1,24 +1,41 @@
 """Paper-strategy runner service loop.
 
-Long-running consumer of ``operations.market-phase``. On each entry into phase
-``open`` it runs one evaluation pass: for every active *paper-stage* strategy in
-the registry it reads a trailing daily-bar window, computes today's flat/invested
-target through the reused Strategy Evaluator factory seam, and emits a
-``trading.strategy.signal`` for each target *transition* (flat -> invested = buy,
-invested -> flat = sell). It emits **signals only** — the Decision Maker ->
-Pre-Trade Checker -> Execution chain owns everything downstream. PAPER ONLY: no
-intents, no broker calls, no real money.
+Long-running consumer of ``operations.market-phase``. It runs an evaluation
+pass: for every active *paper-stage* strategy in the registry it reads a
+trailing daily-bar window, computes the flat/invested target through the reused
+Strategy Evaluator factory seam, and emits a ``trading.strategy.signal`` for
+each target *transition* (flat -> invested = buy, invested -> flat = sell). It
+emits **signals only** — the Decision Maker -> Pre-Trade Checker -> Execution
+chain owns everything downstream. PAPER ONLY: no intents, no broker calls, no
+real money.
 
-Delivery / idempotency (KI-006 consumer group + a per-session state guard):
+**Two things trigger a pass** (timeline 2.9). Entry into phase ``open``, as
+before — and, while that session remains open, a timer every
+``intraday_tick_seconds``. market-phase publishes transitions rather than ticks,
+so :class:`SessionTracker` holds the "we are inside open" state between events
+and no second scheduler is needed.
+
+The timer offers an *opportunity*, never a trade rate. Whether a strategy acts
+is decided by its own declared cadence
+(:mod:`shrap.research.strategy_runner.cadence`), and **a strategy with no
+declared cadence acts once per session no matter how often the loop wakes**.
+That default is what makes interval firing safe to switch on with strategies
+already in the registry.
+
+Delivery / idempotency (KI-006 consumer group + a per-session-and-slot guard):
 
 - Offsets live in the ``strategy-runner`` consumer group, so restarts resume
   where the group left off. ``start_id`` defaults to ``"$"`` (new events only);
   a market-phase event published while the runner was down is not replayed.
-- The pass is idempotent on ``(strategy_id, session_date)``: a strategy already
-  stamped for the session is skipped by the pure planner, so a re-delivered
-  ``open`` event, a ``startup``/catch-up event, or a restart mid-session never
-  double-emits. We do *not* gate on ``reason``; the session-date guard is the
-  guard.
+- The pass is idempotent on ``(strategy_id, session_date, slot)``: a strategy
+  already stamped for its current slot is skipped by the pure planner, so a
+  re-delivered ``open`` event, a ``startup``/catch-up event, an interval tick,
+  or a restart mid-session never double-emits. We do *not* gate on ``reason``;
+  the state guard is the guard.
+- The guard is applied *before* bars are read. Under a one-minute tick the pass
+  runs hundreds of times a session and is a no-op for nearly all of them;
+  reading a trailing window per ticker per tick to compute a skip already
+  decided is the difference between "cheap" and "quietly expensive".
 - Poison discipline: a malformed phase payload (bad ``session_date``) is acked
   and skipped; a systemic error (DB/Redis down) is *not* acked, so the event
   stays pending and the pass is retried in full next cycle.
@@ -72,6 +89,7 @@ from shrap.research.strategy_registry import (
     PostgresStrategyRegistry,
     StrategyRecord,
 )
+from shrap.research.strategy_runner.cadence import read_cadence, slot_for
 from shrap.research.strategy_runner.engine import (
     PRODUCED_BY,
     SCHEMA_VERSION,
@@ -80,6 +98,7 @@ from shrap.research.strategy_runner.engine import (
     RunnerSignalConfig,
     StrategyInput,
     TargetState,
+    already_ran,
     plan_session,
 )
 from shrap.research.strategy_runner.sizing import SizingRefused, assert_equity_usable
@@ -143,6 +162,40 @@ class StateStore(Protocol):
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]: ...
 
     async def upsert(self, write: PlannedStateWrite) -> None: ...
+
+
+@dataclass
+class SessionTracker:
+    """Which session, if any, the market is currently ``open`` for.
+
+    The Runner's only clock is ``operations.market-phase``, and that stream
+    publishes *transitions*, not ticks — it sleeps until the next boundary. So
+    acting more than once a session means remembering, between events, that we
+    are inside ``open``. This is that memory, and it is the whole reason the
+    loop can fire on an interval without a second scheduler.
+
+    Mutable and owned by :func:`run_loop`, deliberately outside :func:`poll_once`
+    so the state survives a batch that returned no events — which is the normal
+    case, because a session has two boundaries and hundreds of ticks.
+
+    A restart mid-session clears it, and the next phase event restores it. The
+    cost of that gap is bounded: slots are floored wall-clock, so a Runner that
+    comes back at 14:22 resolves the same slot it would have had it never left,
+    and the state guard still refuses a second action in that slot.
+    """
+
+    open_session: date | None = None
+
+    def observe(self, phase: str, session_date: date | None) -> None:
+        """Fold in one market-phase event."""
+
+        if phase == Phase.OPEN:
+            self.open_session = session_date
+        else:
+            # Any other phase ends the session for our purposes. Explicitly
+            # including `closed`, `pre`, `post` and anything added later: the
+            # safe reading of an unrecognised phase is "not open".
+            self.open_session = None
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
@@ -284,14 +337,37 @@ async def run_pass(
             session_date=session_date.isoformat(),
         )
 
-    grouped = _group_by_account(records)
+    stored_state = await state_store.read_state()
+    now = datetime.now(UTC)
+
+    # Apply the idempotency guard BEFORE reading any bars. Under intraday
+    # cadence this pass runs every tick of the session, and all but a handful
+    # of those ticks are no-ops for every strategy: a daily rule is stamped for
+    # the whole session after its first pass, and an intraday one between its
+    # intervals. Letting those reach `_build_input` would read a trailing bar
+    # window per ticker per tick — hundreds of times a session — to compute a
+    # skip the planner had already decided. The planner still re-checks; this
+    # only avoids paying for the answer twice.
+    due = [
+        record
+        for record in records
+        if not already_ran(
+            record.strategy_id,
+            _extract_tickers(record.tickers),
+            stored_state,
+            session_date,
+            slot_for(read_cadence(record.spec), now),
+        )
+    ]
+    if not due:
+        return PassResult(emitted=0)
+
+    grouped = _group_by_account(due)
     if not grouped:
         return PassResult(emitted=0)
 
-    stored_state = await state_store.read_state()
     regime_label = await latest_regime_label(cast(FixtureRedis, redis))  # informational only
     publisher = EventPublisher(cast(RedisPublisher, redis))
-    now = datetime.now(UTC)
 
     emitted = 0
     deferred: list[str] = []
@@ -330,6 +406,7 @@ async def run_pass(
         # strategy per account (ADR-0017) that gives it the whole book.
         plans = plan_session(
             session_date=session_date,
+            now=now,
             strategies=inputs,
             stored_state=stored_state,
             factory=_default_strategy_factory,
@@ -400,10 +477,16 @@ async def poll_once(
     lookback_max_days: int,
     count: int,
     block_ms: int,
+    tracker: SessionTracker | None = None,
     retry_delay_seconds: float = 0.0,
     produced_by: str = PRODUCED_BY,
 ) -> int:
-    """Process one batch of market-phase events; returns signals emitted."""
+    """Process one batch of market-phase events; returns signals emitted.
+
+    ``tracker``, when given, is updated with every phase observed so the caller
+    knows whether the market is currently open. Optional so the existing
+    event-driven tests construct this unchanged.
+    """
 
     try:
         events = await subscriber.read(
@@ -428,10 +511,15 @@ async def poll_once(
                 continue
             phase = str(payload.get("phase", ""))
             if phase != Phase.OPEN:
-                # Only entry into `open` triggers a pass; ack every other phase.
+                # Not open: record that fact so the interval firing stops, then
+                # ack. Every non-open phase is otherwise uninteresting here.
+                if tracker is not None:
+                    tracker.observe(phase, None)
                 await subscriber.ack(event)
                 continue
             session_date = _parse_session_date(payload)
+            if tracker is not None:
+                tracker.observe(phase, session_date)
             result = await run_pass(
                 session_date=session_date,
                 redis=redis,
@@ -519,11 +607,23 @@ async def run_loop(
     start_id: str = "$",
     count: int = 100,
     block_ms: int = 5000,
+    intraday_tick_seconds: float = 60.0,
     retry_delay_seconds: float = 1.0,
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
 ) -> None:
-    """Run the runner consumer loop until ``stop`` is set."""
+    """Run the runner consumer loop until ``stop`` is set.
+
+    Two things wake a pass. A market-phase ``open`` event, as before — and,
+    while that session stays open, a timer every ``intraday_tick_seconds``.
+
+    The timer does not decide *whether* anything trades; it only offers the
+    opportunity. Each strategy's own cadence resolves its slot and the state
+    guard does the rest, so a tick with nothing due costs one registry read and
+    one state read and emits nothing. Setting ``intraday_tick_seconds`` to 0
+    disables interval firing entirely and restores the pure event-driven
+    behaviour.
+    """
 
     subscriber = GroupEventSubscriber(
         cast(RedisGroupClient, redis),
@@ -531,6 +631,8 @@ async def run_loop(
         consumer=consumer,
         start_id=start_id,
     )
+    tracker = SessionTracker()
+    last_tick = 0.0
     while not stop.is_set():
         try:
             emitted = await poll_once(
@@ -545,8 +647,40 @@ async def run_loop(
                 lookback_max_days=lookback_max_days,
                 count=count,
                 block_ms=block_ms,
+                tracker=tracker,
                 retry_delay_seconds=retry_delay_seconds,
             )
+            now = asyncio.get_running_loop().time()
+            session = tracker.open_session
+            if (
+                intraday_tick_seconds > 0
+                and session is not None
+                and now - last_tick >= intraday_tick_seconds
+            ):
+                last_tick = now
+                # No event backs this pass, so there is nothing to ack or leave
+                # pending: a deferred account simply gets another chance on the
+                # next tick, which is the same retry the phase-event path buys
+                # by withholding an ack.
+                result = await run_pass(
+                    session_date=session,
+                    redis=redis,
+                    registry=registry,
+                    reader=reader,
+                    state_store=state_store,
+                    config=config,
+                    adjustment=adjustment,
+                    lookback_buffer_days=lookback_buffer_days,
+                    lookback_max_days=lookback_max_days,
+                )
+                emitted += result.emitted
+                if result.emitted or result.deferred:
+                    log.info(
+                        "strategy_runner.intraday_tick",
+                        session_date=session.isoformat(),
+                        emitted=result.emitted,
+                        deferred=list(result.deferred),
+                    )
             if emitted:
                 log.info("strategy_runner.batch", emitted=emitted, group=group)
             else:
@@ -569,6 +703,7 @@ async def run(
     start_id: str = "$",
     count: int = 100,
     block_ms: int = 5000,
+    intraday_tick_seconds: float = 60.0,
     retry_delay_seconds: float = 1.0,
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
@@ -613,6 +748,7 @@ async def run(
             start_id=start_id,
             count=count,
             block_ms=block_ms,
+            intraday_tick_seconds=intraday_tick_seconds,
             retry_delay_seconds=retry_delay_seconds,
             group=group,
             consumer=consumer,

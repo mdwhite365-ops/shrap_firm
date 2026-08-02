@@ -19,8 +19,8 @@ Fabricated strategies + bar panels + stored state exercise every branch of
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import date, timedelta
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -44,6 +44,9 @@ from shrap.research.strategy_runner.sizing import SizingRefused
 from shrap.trading_floor.decision_maker_stub import DEFAULT_CONFIDENCE_THRESHOLD
 
 SESSION = date(2026, 7, 24)
+# Any wall-clock instant works: every strategy in these tests has no declared
+# cadence, so each resolves to the constant `session` slot regardless of NOW.
+NOW = datetime(2026, 7, 24, 14, 30, tzinfo=UTC)
 YESTERDAY = SESSION - timedelta(days=1)
 EQUITY = 10_000.0
 
@@ -131,6 +134,7 @@ def _plan_one(
 ):
     plans = plan_session(
         session_date=SESSION,
+        now=NOW,
         strategies=[item],
         stored_state=stored,
         factory=_factory_returning(strategy),
@@ -243,6 +247,7 @@ def test_factory_error_skips_only_that_strategy() -> None:
 
     plans = plan_session(
         session_date=SESSION,
+        now=NOW,
         strategies=[_input("bad", "AAPL", 5), _input("good", "NVDA", 5)],
         stored_state={},
         factory=factory,
@@ -439,6 +444,7 @@ def _plan_many(
 
     plans = plan_session(
         session_date=SESSION,
+        now=NOW,
         strategies=items,
         stored_state={},
         factory=lambda rec, tks: fakes[rec.strategy_id],
@@ -578,3 +584,117 @@ async def test_payload_schema_is_identical_to_the_fixture() -> None:
     strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 1.0})
     plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored={})
     assert set(plan.signals[0].payload) == fixture_keys
+
+
+# --- cadence: firing more than once per session (2.9) -------------------------
+#
+# The risk this section guards is not "can an intraday strategy trade often".
+# It is "does turning intraday firing on make the twelve daily strategies
+# already in the registry trade on every wake". So the daily case is tested
+# first and hardest.
+
+
+def _cadence_input(strategy_id: str, ticker: str, cadence: object) -> StrategyInput:
+    record = _make_record(strategy_id, [ticker])
+    spec = dict(record.spec)
+    if cadence is not None:
+        spec["cadence"] = cadence
+    return StrategyInput(
+        record=replace(record, spec=spec),
+        tickers=[ticker],
+        bars_by_ticker={ticker: _bars(5)},
+    )
+
+
+def _plan_at(item: StrategyInput, stored: dict[tuple[str, str], TargetState], now: datetime):
+    plans = plan_session(
+        session_date=SESSION,
+        now=now,
+        strategies=[item],
+        stored_state=stored,
+        factory=_factory_returning(FakeStrategy(name="cadence", warmup=1, weights={"NVDA": 1.0})),
+        config=UNCAPPED,
+        regime_label="risk-on",
+        equity=EQUITY,
+        account_id=ACCOUNT,
+    )
+    return plans[0]
+
+
+def _apply(stored: dict[tuple[str, str], TargetState], plan) -> None:
+    for write in plan.state_writes:
+        stored[(write.strategy_id, write.ticker)] = TargetState(
+            last_target=write.last_target,
+            last_side=write.last_side,
+            last_session_date=write.last_session_date,
+            last_quantity=write.last_quantity,
+            last_slot=write.last_slot,
+        )
+
+
+def test_a_daily_strategy_acts_once_however_many_times_the_runner_wakes() -> None:
+    item = _cadence_input("daily-1", "NVDA", None)
+    stored: dict[tuple[str, str], TargetState] = {}
+    emitted = 0
+
+    # Seventy-eight wakes: a full session at a five-minute tick.
+    for minute in range(0, 390, 5):
+        now = datetime(2026, 7, 24, 13, 30, tzinfo=UTC) + timedelta(minutes=minute)
+        plan = _plan_at(item, stored, now)
+        emitted += len(plan.signals)
+        _apply(stored, plan)
+
+    # Exactly one. This is the regression that would empty an account.
+    assert emitted == 1
+
+
+def test_an_intraday_strategy_acts_once_per_interval() -> None:
+    item = _cadence_input("intraday-1", "NVDA", {"kind": "intraday", "interval_minutes": 30})
+    stored: dict[tuple[str, str], TargetState] = {}
+    slots: list[str] = []
+
+    for minute in range(0, 120, 5):
+        now = datetime(2026, 7, 24, 14, 0, tzinfo=UTC) + timedelta(minutes=minute)
+        plan = _plan_at(item, stored, now)
+        _apply(stored, plan)
+        if not plan.skipped:
+            slots.append(stored[("intraday-1", "NVDA")].last_slot)
+
+    # Four thirty-minute slots across two hours, each entered exactly once —
+    # not twenty-four, which is how often the planner was asked.
+    assert slots == ["14:00", "14:30", "15:00", "15:30"]
+
+
+def test_a_stored_row_from_before_cadence_existed_does_not_re_trade() -> None:
+    # Rows written by the pre-cadence Runner carry no slot; the column default
+    # backfills them to `session`. If that default were anything else, every one
+    # of them would compare unequal to today's slot and trade a second time on
+    # the first pass after deploy.
+    item = _cadence_input("legacy-1", "NVDA", None)
+    stored = {
+        ("legacy-1", "NVDA"): TargetState(
+            last_target=1.0,
+            last_side="buy",
+            last_session_date=SESSION,
+            last_quantity=10,
+        )
+    }
+
+    plan = _plan_at(item, stored, NOW)
+
+    assert plan.skipped
+    assert plan.signals == ()
+
+
+def test_a_malformed_cadence_trades_daily_rather_than_every_tick() -> None:
+    item = _cadence_input("typo-1", "NVDA", {"kind": "intrday", "interval_minutes": 1})
+    stored: dict[tuple[str, str], TargetState] = {}
+    emitted = 0
+
+    for minute in range(0, 60, 5):
+        now = datetime(2026, 7, 24, 14, 0, tzinfo=UTC) + timedelta(minutes=minute)
+        plan = _plan_at(item, stored, now)
+        emitted += len(plan.signals)
+        _apply(stored, plan)
+
+    assert emitted == 1
