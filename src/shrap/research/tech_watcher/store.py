@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS research.raw_source_items (
 """.strip()
 
 # Idempotent migration for tables created by the slice-A deploy.
+# KI-026. The EDGAR feed's `summary` is index metadata — a file size and an
+# accession number — so the filter has never seen a filing's contents. This
+# column holds the dereferenced body; see `edgar_text.py`. Nullable, because
+# every other source's summary IS the content and needs nothing here.
+ADD_DOCUMENT_TEXT_COLUMN_SQL = """
+ALTER TABLE research.raw_source_items
+ADD COLUMN IF NOT EXISTS document_text TEXT
+""".strip()
+
 ADD_FILTER_RESULT_COLUMN_SQL = """
 ALTER TABLE research.raw_source_items
 ADD COLUMN IF NOT EXISTS filter_result JSONB
@@ -143,6 +152,7 @@ class PostgresRawItemStore:
             await conn.execute(CREATE_RAW_ITEMS_SOURCE_INDEX_SQL)
             await conn.execute(CREATE_RAW_ITEMS_UNPROCESSED_INDEX_SQL)
             await conn.execute(ADD_FILTER_RESULT_COLUMN_SQL)
+            await conn.execute(ADD_DOCUMENT_TEXT_COLUMN_SQL)
             await conn.execute(CREATE_FILTER_VERDICT_HISTORY_TABLE_SQL)
             await conn.execute(CREATE_FILTER_VERDICT_HISTORY_INDEX_SQL)
             await conn.execute(CREATE_INGEST_CURSORS_TABLE_SQL)

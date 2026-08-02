@@ -235,6 +235,7 @@ Measured 2026-08-01 with the 1d check:
 | `shrap-tech-watcher-promote` | pure | `exec tech-watcher` |
 | `shrap-world-changer-observe` | pure | `exec tech-watcher` |
 | `shrap-tech-watcher-refilter` | pure | `exec tech-watcher` |
+| `shrap-tech-watcher-edgar-text` | pure | `exec tech-watcher` |
 | `shrap-literature-refilter` | pure | `exec tech-watcher` |
 | `shrap-market-data-*backfill` | pure | `--profile tools run --rm market-data` |
 

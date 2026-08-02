@@ -25,9 +25,11 @@ from redis.asyncio import Redis
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher
+from shrap.intelligence.filing_processor.client import EdgarFilingClient
 from shrap.llm import TierLLMClient, TierRegistry
 from shrap.research.hypothesis_generator.literature import PostgresLiteratureStore
 from shrap.research.tech_watcher.candidates import PostgresCandidateStore
+from shrap.research.tech_watcher.edgar_text import edgar_text_pass
 from shrap.research.tech_watcher.filter import filter_pass
 from shrap.research.tech_watcher.literature_filter import literature_pass
 from shrap.research.tech_watcher.sources import (
@@ -162,6 +164,7 @@ async def run_loop(
     interval_seconds: float = 3600.0,
     timeout: float = 30.0,
     llm_stages: LLMStages | None = None,
+    fetch_documents: Callable[[], Awaitable[object]] | None = None,
 ) -> None:
     """Run pipeline passes on a simple interval until ``stop`` is set.
 
@@ -176,6 +179,18 @@ async def run_loop(
             log.info("tech_watcher.pass_complete", inserted=counts)
         except Exception:
             log.exception("tech_watcher.pass_failed")
+        # Between ingest and filter, deliberately (KI-026). The EDGAR feed's
+        # summary is an accession number and a file size, so a filing filtered
+        # before its body is fetched is judged on metadata — which is the defect
+        # this stage exists to end, and it would recur on every new item.
+        # Outside `llm_stages` because it calls SEC, not a model: turning the
+        # LLM kill switch off must not silently stop documents arriving.
+        if fetch_documents is not None:
+            try:
+                report = await fetch_documents()
+                log.info("tech_watcher.edgar_text_complete", report=str(report))
+            except Exception:
+                log.exception("tech_watcher.edgar_text_failed")
         if llm_stages is not None:
             try:
                 verdicts = await llm_stages.run_filter()
@@ -206,6 +221,7 @@ async def run(
     redis_url: str,
     postgres_dsn: str,
     sec_user_agent: str,
+    edgar_text_max_items: int = 50,
     edgar_forms: tuple[str, ...] = ("10-K", "10-Q", "8-K"),
     arxiv_categories: tuple[str, ...] = ("cs.AI", "cs.LG", "cond-mat", "q-bio.NC"),
     qfin_enabled: bool = True,
@@ -320,6 +336,16 @@ async def run(
                 synthesis_due=_synthesis_due,
                 run_literature=_run_literature if qfin_enabled else None,
             )
+
+        # Reuses `sec_user_agent`: SEC identifies a client by it and bans on
+        # abuse, so the firm presents one identity to that host, not two.
+        edgar_client = EdgarFilingClient(sec_user_agent)
+
+        async def _fetch_documents() -> object:
+            return await edgar_text_pass(
+                pool, edgar_client, cast(Any, http), max_items=edgar_text_max_items
+            )
+
         try:
             await run_loop(
                 sources,
@@ -330,6 +356,7 @@ async def run(
                 interval_seconds=interval_seconds,
                 timeout=http_timeout,
                 llm_stages=llm_stages,
+                fetch_documents=_fetch_documents,
             )
         finally:
             await redis.aclose()
