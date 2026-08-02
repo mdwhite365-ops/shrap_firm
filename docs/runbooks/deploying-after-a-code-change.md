@@ -195,6 +195,75 @@ print(sorted({m.split('.')[0] for m in new} & {'numpy','pandas'}), len(new))"
 `tests/research/test_import_weight.py` pins the boundary for the modules that
 cross it. Adding a new cross-image import means adding a case there.
 
+## 1e. Which container to run a CLI in follows its imports, not its subject
+
+1d is about a container that crash-loops after a deploy. This is the same
+dependency boundary hit from the other side, and it looks nothing like a deploy
+problem: **you pick the wrong container for a one-shot CLI**, and it dies at
+import before doing anything.
+
+Hit on 2026-08-01 running `shrap-strategy-stage` in `tech-watcher`:
+
+```
+File ".../shrap/research/strategy_stage_cli.py", line 46, in <module>
+    from shrap.research.strategy_evaluator.pipeline import DEFERRED_RULES, _rule_name
+  ...
+ModuleNotFoundError: No module named 'numpy'
+```
+
+The reasoning that produced it was subject-matter reasoning: every other
+`shrap-*` CLI Mike runs by hand lives in `tech-watcher`, and staging a strategy
+is a research action, so `tech-watcher` looked right. It is the wrong question.
+`strategy_stage_cli` imports the Evaluator pipeline for its deferred-rules
+check, so it needs numpy, so it needs an image that has numpy — **regardless of
+what the command is about**.
+
+**There is a second half to the trap.** `strategy-runner` also carries numpy, so
+it survives the import — and then reads the wrong DSN. `_default_dsn()` looks
+for `STRATEGY_SEED_POSTGRES_DSN` or `STRATEGY_EVALUATOR_POSTGRES_DSN` and falls
+back to a hardcoded `shrap:shrap`. `strategy-runner` sets neither, so it lands
+on the fallback and connects with credentials that may not be this deployment's.
+A container has to satisfy **both** constraints: the imports and the env.
+
+Measured 2026-08-01 with the 1d check:
+
+| CLI | heavy deps | run it in |
+|---|---|---|
+| `shrap-strategy-stage` | numpy | `--profile tools run --rm strategy-evaluator` |
+| `shrap-hypothesis-generate` | numpy | `--profile tools run --rm hypothesis-generator` |
+| `shrap-strategy-evaluate` | numpy | `--profile tools run --rm strategy-evaluator` |
+| `shrap-tech-watcher-promote` | pure | `exec tech-watcher` |
+| `shrap-world-changer-observe` | pure | `exec tech-watcher` |
+| `shrap-tech-watcher-refilter` | pure | `exec tech-watcher` |
+| `shrap-literature-refilter` | pure | `exec tech-watcher` |
+| `shrap-market-data-*backfill` | pure | `--profile tools run --rm market-data` |
+
+Regenerate that column rather than trusting it — **one fresh interpreter per
+module**:
+
+```bash
+for m in shrap.research.strategy_stage_cli shrap.research.tech_watcher.promotion; do
+  uv run python -c "
+import sys, importlib
+importlib.import_module('$m')
+print('$m', sorted({k.split('.')[0] for k in sys.modules} & {'numpy','pandas'}) or 'pure')"
+done
+```
+
+**Do not loop inside one interpreter.** The obvious version of this check —
+import each module in turn and diff `sys.modules` — is wrong, and wrong in the
+direction that hides the problem. The first module to pull numpy leaves it
+loaded, so every module measured after it reports `pure` no matter what it
+imports. Written that way on 2026-08-01 it cleared `hypothesis_generator.cli`,
+which the compose file has documented as numpy-dependent since 2026-07-30. The
+result was an artifact of the loop order, not a property of the code.
+
+**The rule:** before running a CLI in a container, ask what it *imports* and
+what env vars its defaults *read* — never what it is about. A `pure` CLI runs
+anywhere; a numpy one runs only in an image built from
+`strategy-evaluator.Dockerfile` or `strategy-runner.Dockerfile`, and only where
+the DSN it looks for is actually set.
+
 ## 2. Do not override the container user
 
 Tools containers run as `USER shrap` (uid **10001**), and bind-mounted output

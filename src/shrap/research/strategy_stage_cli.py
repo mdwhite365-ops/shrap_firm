@@ -338,10 +338,17 @@ async def assign_account(
     now = updated.account_id or "(unassigned)"
     lines = [f"{record.name} ({strategy_id}): account {current} -> {now}"]
     if updated.account_id is not None:
+        # This used to say "set STRATEGY_RUNNER_ACCOUNT_ID to this value", which
+        # was correct when one runner served one account and false from ADR-0017
+        # onward: the runner groups strategies by the account on their registry
+        # row, one instance serves every account, and nothing reads that
+        # variable any more. It survived because the CLI's own output is not
+        # something a test or a type checker reads — an operator following it
+        # would set a dead env var and believe an account had been configured.
         lines.append(
-            "Set STRATEGY_RUNNER_ACCOUNT_ID to this value for the runner that "
-            "trades it, or the pass will refuse rather than size against the "
-            "wrong book."
+            "The Strategy Runner reads this from research.strategies (ADR-0017) — "
+            "one runner serves every account and no env var needs setting. It "
+            "takes effect on the next pass."
         )
     else:
         lines.append(

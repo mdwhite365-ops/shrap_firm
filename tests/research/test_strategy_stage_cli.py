@@ -375,8 +375,14 @@ async def test_assign_account_reports_the_move_and_the_operator_step() -> None:
 
     assert registry.calls == [("01S", "PA3ABCDEF")]
     assert "(unassigned) -> PA3ABCDEF" in out
-    # The assignment alone does not make the runner trade it.
-    assert "STRATEGY_RUNNER_ACCOUNT_ID" in out
+    # This asserted the presence of "set STRATEGY_RUNNER_ACCOUNT_ID", and was
+    # right when one runner served one account. ADR-0017 made the runner read
+    # each strategy's account from its registry row and nothing reads that
+    # variable now — so the test had gone from pinning the operator's next step
+    # to pinning a dead one. Inverted rather than deleted: the CLI must still
+    # say what happens next, it just must not name a variable that does nothing.
+    assert "STRATEGY_RUNNER_ACCOUNT_ID" not in out
+    assert "ADR-0017" in out
 
 
 async def test_clearing_says_positions_outlive_the_assignment() -> None:
