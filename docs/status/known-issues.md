@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-07-31 (KI-026 added; KI-009 diagnosis corrected by the bar experiment)
+**Last updated:** 2026-08-01 (KI-026 shipped; KI-009 now waits only on the re-score)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -310,7 +310,21 @@ summary states a recipient, an amount and a purpose. Length was never the
 discriminator; content type is. The Filing Processor already fetches EDGAR full
 text into `intelligence.filings.full_text` and scores per item code with priors
 — the Tech Watcher ingests the same filings and keeps only the index entry.
-Tracked as **KI-026**.
+Tracked as **KI-026**, **shipped 2026-08-01**: `research.raw_source_items`
+gained a `document_text` column, `shrap-tech-watcher-edgar-text` backfills it by
+dereferencing the filing link, and the ingest loop now fetches bodies between
+ingest and filter so new filings never reach the model as metadata. The filter
+prompt carries `Document:` in place of `Summary:` when a body exists.
+
+Reuses the Filing Processor's `EdgarFilingClient` rather than adding a second
+fetcher — its own docstring named this gap. `intelligence.filings` could not
+simply be joined: it holds only registrants matched to the Tier 3 roster by CIK,
+and the world-changer funnel looks for patterns anywhere in the economy.
+
+**The backfill and the re-score are two steps.** Fetching text does not change
+any existing verdict; those ~3,700 were formed against metadata and stay stale
+until `shrap-tech-watcher-refilter --force`. `FILTER_PROMPT_VERSION` is
+deliberately unbumped — the prompt did not change, the content did.
 
 **2. The filter is partly model-limited after all.** Both admitted items had
 been scored under the *same* prompt v4 by `gpt-oss:20b-cloud` and marked

@@ -41,7 +41,20 @@ log = structlog.get_logger(__name__)
 
 # Bump on any behavior-relevant prompt change; stamped into filter_result so
 # calibration reviews know which prompt scored each item.
+#
+# Deliberately NOT bumped for KI-026's document body. The prompt text is
+# unchanged; what changed is the *content* an EDGAR item carries into it. Using
+# the version to mean "re-score everything" would make it stop meaning "this is
+# which prompt ran", and the calibration ledger reads it as the latter. The
+# corpus-wide re-score after a backfill is `shrap-tech-watcher-refilter --force`,
+# which says what it is doing.
 FILTER_PROMPT_VERSION = 4
+
+# How much of a stored document body reaches the prompt. Matches
+# `edgar_text.DEFAULT_MAX_CHARS`, and is applied again here because the column
+# is a store other passes may fill with a different budget — the prompt's cost
+# must be bounded by the prompt builder, not by whoever wrote the row.
+DOCUMENT_PROMPT_CHARS = 6_000
 
 # Evidence class — the filter's evidentiary bar, keyed on who is asserting the
 # fact. This is NOT the triangulation hardness rule in ``synthesis.py``, and the
@@ -143,6 +156,15 @@ class UnfilteredItem:
     kind: str | None
     title: str
     summary: str | None
+    document_text: str | None = None
+    """The filing body, for sources whose feed summary is metadata (KI-026).
+
+    Defaults to None so every non-EDGAR source and every row predating the
+    backfill constructs unchanged. When present it REPLACES the summary in the
+    prompt rather than joining it: the EDGAR summary is a file size and an
+    accession number, and appending that to a document adds noise to the one
+    part of the prompt the model is supposed to weigh.
+    """
 
 
 class CompletionClient(Protocol):
@@ -173,7 +195,7 @@ EXCLUDED_SOURCES: frozenset[str] = frozenset({SOURCE_ARXIV_QFIN})
 _EXCLUDED_SOURCE_LIST = sorted(EXCLUDED_SOURCES)
 
 SELECT_UNFILTERED_SQL = """
-SELECT item_id, source, kind, title, summary
+SELECT item_id, source, kind, title, summary, document_text
 FROM research.raw_source_items
 WHERE filtered_at IS NULL
   AND NOT (source = ANY($2::text[]))
@@ -196,7 +218,7 @@ LIMIT $1
 # to re-score. `$4` forces a pass regardless, for when neither changed but the
 # verdicts are suspect anyway.
 SELECT_FOR_REFILTER_SQL = """
-SELECT item_id, source, kind, title, summary,
+SELECT item_id, source, kind, title, summary, document_text,
        COALESCE((filter_result->>'relevant')::boolean, false) AS was_relevant,
        COALESCE((filter_result->>'prompt_version')::int, 0) AS scored_version,
        COALESCE(filter_result->>'model', '') AS scored_model
@@ -244,13 +266,22 @@ class AsyncPool(Protocol):
 
 
 def _item_prompt(item: UnfilteredItem) -> str:
-    summary = (item.summary or "")[:1500]
+    body = (item.document_text or "").strip()
+    if body:
+        # Labelled `Document` rather than `Summary` on purpose. The two are not
+        # the same kind of evidence, and a model told "Summary:" ahead of six
+        # thousand characters of filing text is being told something false about
+        # what it is reading.
+        content = f"Document:\n{body[:DOCUMENT_PROMPT_CHARS]}"
+    else:
+        summary = (item.summary or "")[:1500]
+        content = f"Summary: {summary or '(none)'}"
     return (
         f"Recognition grammar:\n{archetype_filter_prompt_block()}\n\n"
         f"Item (source={item.source}, kind={item.kind or 'unknown'}, "
         f"evidence_class={evidence_class(item.source)}):\n"
         f"Title: {item.title}\n"
-        f"Summary: {summary or '(none)'}"
+        f"{content}"
     )
 
 
@@ -325,6 +356,7 @@ def _row_to_item(row: Mapping[str, Any]) -> UnfilteredItem:
         kind=None if row["kind"] is None else str(row["kind"]),
         title=str(row["title"]),
         summary=None if row["summary"] is None else str(row["summary"]),
+        document_text=(None if row.get("document_text") is None else str(row["document_text"])),
     )
 
 
