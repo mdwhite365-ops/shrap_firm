@@ -158,3 +158,62 @@ def test_pretrade_checker_consumes_card_2_size_hint() -> None:
     assert decision.requested_quantity == 3
     assert decision.approved_quantity == 2
     assert decision.reason_code == "SCALED_DOWN_MAX_QUANTITY"
+
+
+# --- strategy attribution ------------------------------------------------------
+#
+# `strategy_ids` was a hardcoded `[]` from Card 2, when the only producer was
+# the Strategy Fixture and nothing downstream read it. The Risk Officer (#146)
+# made it load-bearing and nothing pinned it, so the firm's first forward-test
+# session emitted 20 signals and had all 20 vetoed UNKNOWN_STRATEGY
+# (2026-08-03). These are the tests that would have caught it.
+
+
+def test_the_strategy_rides_through_to_the_intent() -> None:
+    from shrap.trading_floor.decision_maker_stub import build_stub_intent
+
+    intent = build_stub_intent(
+        {
+            "ticker": "AAPL",
+            "side": "buy",
+            "size_hint": 3,
+            "confidence": 0.8,
+            "strategy_id": "01KYNH9VKXVQXJ48T4MF306PHE",
+            "account_id": "PA3HEG2CLXLU",
+        }
+    )
+
+    # Without this the Risk Officer cannot resolve the intent to an account and
+    # vetoes before evaluating a single limit.
+    assert intent["strategy_ids"] == ["01KYNH9VKXVQXJ48T4MF306PHE"]
+    assert intent["account_id"] == "PA3HEG2CLXLU"
+
+
+def test_a_signal_with_no_strategy_still_yields_an_empty_list() -> None:
+    """The veto is the RIGHT answer for an unattributable order.
+
+    Inventing a placeholder id here would route it to a book nobody chose,
+    which is worse than refusing it.
+    """
+
+    from shrap.trading_floor.decision_maker_stub import build_stub_intent
+
+    intent = build_stub_intent({"ticker": "AAPL", "side": "buy", "size_hint": 3, "confidence": 0.8})
+
+    assert intent["strategy_ids"] == []
+
+
+def test_a_blank_strategy_id_is_not_an_attribution() -> None:
+    from shrap.trading_floor.decision_maker_stub import build_stub_intent
+
+    intent = build_stub_intent(
+        {
+            "ticker": "AAPL",
+            "side": "buy",
+            "size_hint": 3,
+            "confidence": 0.8,
+            "strategy_id": "   ",
+        }
+    )
+
+    assert intent["strategy_ids"] == []
