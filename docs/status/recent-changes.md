@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-07-31 (#129–#175 backfilled; `main` at #175)
+**Last updated:** 2026-08-03 (`main` at #190 — KI-009 resolved, the funnel's first admits)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -774,6 +774,48 @@ to pick up next.
   Watcher filter binding, and the first entry in `calibration.md` §(e).
 - PR #175 — Prompt v4 has admitted nothing, and the number is zero: 0 relevant
   across 2,472 verdicts.
+
+## THE 2026-08-01/03 SESSION — #176 to #190
+
+The session that closed KI-009 and got the firm to a live forward test.
+
+- PR #176 — `make doc-drift`. The status set had gone 46 PRs stale for the third
+  time; this compares the highest PR number in each doc against `git log`.
+- PR #177 — Nothing automatically ingested price bars (KI-024). Every evaluation
+  since 2026-07-29 had read a frozen panel.
+- PR #178 — 11,096 reconciliation "discrepancies" were a re-report count, not an
+  incident count: 8 orders x 3 agents x 288 passes/day. Fixed at the source by
+  making the stream edge-triggered.
+- PR #179 — Redis streams grew without bound (KI-025). Trimming lives in the
+  Audit Logger: Redis is the transport, Postgres is the record.
+- PR #180/#181 — The three-bar archetype harness (timeline 1.4), then a
+  stratification fix: a head-of-list `--limit` had produced 600 arXiv items and
+  measured a hard-leg admit rate of zero without ever scoring a hard-leg item.
+- PR #182 — Correction: the filter *was* partly model-limited. The shadow eval's
+  "five models, zero disagreements" was measured on 20 items containing no
+  USASpending awards at all.
+- PR #183 — A dry run reported verdict counts it never computed.
+- PR #184 — A falsifier set you can only add to. The promoted fission thesis had
+  collected two hard observations bearing on none of its three kill criteria,
+  because all three measured nuclear against itself and none against a
+  competitor. Append-only: a thesis that can rewrite its falsifiers has none.
+- PR #185 — Intraday 1-min bars (timeline 2.8), Alpaca IEX. Separate table:
+  50 names x 390 minutes is ~19,500 rows/day against daily's 50.
+- PR #186 — The Runner can act more than once a session (2.9). Cadence is
+  declared per strategy and **absence means daily**, so nothing already in the
+  registry changed behaviour.
+- PR #187 — The *other* dry run was lying too. Same defect as #183, missed
+  because the two reports are separate classes.
+- PR #188 — Two pieces of operator guidance that were wrong: which container a
+  CLI runs in follows its imports, not its subject; and `assign-account` told
+  operators to set an env var ADR-0017 had removed.
+- **PR #189 — EDGAR full text. The one that closed KI-009.** The feed's summary
+  was a file size; with document bodies the corpus admitted 46 items against
+  zero, and the funnel proposed its first pipeline candidate the next day.
+- PR #190 — The intent forgot which strategy asked for it. The forward test's
+  first session emitted 20 signals and had all 20 vetoed `UNKNOWN_STRATEGY`,
+  because `strategy_ids` was a Card 2 placeholder that #146 had quietly made
+  load-bearing.
 
 ## Security notes
 
