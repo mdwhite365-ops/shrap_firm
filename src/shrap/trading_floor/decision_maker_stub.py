@@ -85,6 +85,21 @@ def build_stub_intent(
     # intent with no account is executed by none of them.
     account_id = str(signal.get("account_id", "")).strip()
 
+    # And so does the strategy. This was a hardcoded `[]` from Card 2, written
+    # when the only producer was the Strategy Fixture and nothing downstream
+    # read it. The Risk Officer (#146) then made it load-bearing: an intent
+    # with no `strategy_ids` cannot be resolved to an account, so it is vetoed
+    # UNKNOWN_STRATEGY before any limit is even evaluated.
+    #
+    # Measured 2026-08-03, the forward test's first session: all 20 signals
+    # emitted, all 20 vetoed, zero orders. The Risk Officer was correct every
+    # time — it was handed intents that could not be attributed to anything.
+    #
+    # A signal without one still yields `[]` rather than a placeholder, because
+    # the veto is the right answer for an unattributable order and inventing an
+    # id here would route it to a book nobody chose.
+    strategy_id = str(signal.get("strategy_id", "")).strip()
+
     return {
         "ticker": ticker,
         "account_id": account_id,
@@ -99,7 +114,7 @@ def build_stub_intent(
         ),
         "expiry": expiry,
         "mode": "paper",
-        "strategy_ids": [],
+        "strategy_ids": [strategy_id] if strategy_id else [],
         "regime_label": "unknown",
         "structural_bias": "neutral",
         "intel_refs": [],
