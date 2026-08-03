@@ -1,84 +1,98 @@
-# Session handoff — 2026-07-31
+# Session handoff — 2026-08-03
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
-**Run `make doc-drift` before you trust this file.** It was 58 PRs behind on
-2026-07-31 while `CLAUDE.md` named it ground truth — the third and worst
-recurrence of that failure. `main` is at **#175**.
+**Run `make doc-drift` before you trust this file.** It has fallen behind `main`
+three times, the worst by 58 PRs.
 
-The prior handoff (2026-07-28) is preserved below the line: its rulings on
-capital, the growth target and risk limits are still in force and were never
-superseded. What changed is everything after them.
+The **2026-07-28 rulings** are preserved below the second divider and remain in
+force. The 2026-07-31 measured state was **replaced, not kept** — two of its
+headline claims are now false and leaving them adjacent to current numbers would
+be worse than losing them. It is in `git log` if the history is wanted.
 
 ---
 
-## State of the firm, measured 2026-07-31
+## The two things that changed
 
-Not inferred from documents. This is a full systems check against the running
-Dell and the database.
+**KI-009 is resolved, and it was an ingest defect.** The Tech Watcher had been
+storing EDGAR's Atom *index entry* — a filed date, an accession number and a
+file size — rather than the filing. 72% of the corpus was document metadata.
+After #189 fetched the bodies and `--force` re-scored them, `sec-edgar` admitted
+**46 items** where it had admitted **zero** in two months. Firm-wide: 2 fossils
+to 49. On 2026-08-02 the funnel synthesized and proposed its first pipeline
+candidate, `haleu-cost-curve` — ingest through proposal, six stages, no human in
+the path.
+
+The previous handoff's sentence *"The firm has never promoted a strategy, and
+its research funnel has never admitted an item"* is half false and worth
+dwelling on. Three independent rounds of evidence — a five-model shadow eval, a
+three-bar archetype experiment, 2,472 v4 verdicts — all pointed at the taxonomy.
+Every one was measured on a corpus that was mostly file sizes. **A denominator
+made of metadata makes every rate a statement about the metadata.**
+
+**The forward test is live and has not traded yet.** Two `technical-catalyst`
+strategies were staged to `paper` on 2026-08-01 as deliberate systems tests
+rather than promotions — neither has cleared the promote gate, and the
+transition reasons say so. On 2026-08-03 both computed real targets and emitted
+20 buy signals; all 20 were vetoed `UNKNOWN_STRATEGY` because the Decision Maker
+hardcoded an empty `strategy_ids` (KI-029, fixed same day in #190). **The next
+market open is the first end-to-end test of the order path.**
+
+## State of the firm, measured 2026-08-03
 
 | | |
 |---|---|
-| Always-on containers | **34**, all `running` |
-| Unhealthy | `langfuse`, `qdrant` |
-| Ingest | six legs, `sec-edgar` 8 minutes old; `doe-newsroom` **2 days** stale |
-| Filter backlog | **0** — 5,177 of 5,177 items scored |
-| Items ever judged relevant | **2**, both fossils (see KI-009) |
-| Clusters ever synthesized | **0** — 16 rows, all `held-single-source` |
-| Strategies | 12 killed, 2 hypothesis, **0 promoted, 0 live** |
-| Evaluations | 26; the most common verdict is `hold-for-data` (13), not `kill` (9) |
-| Orders | none since **2026-07-29 13:32**; all 141 rows have a blank `account_id` |
-| Risk Officer decisions | **1**, ever |
-| Market data | 50 tickers, **2 days stale**, no automated ingest |
-| Box load | every agent at 0.00% CPU, ~40 MB, against 31 GB |
-
-**The firm has never promoted a strategy, and its research funnel has never
-admitted an item.** Everything else is plumbing that works.
+| EDGAR items with a document body | **3,696 / 3,696**, avg 5,834 chars (was 179) |
+| Items ever judged relevant | **49** — 46 `sec-edgar`, 2 `usaspending`, 1 `federal-register` |
+| World-changer candidates | 1 promoted (fission), **1 proposed by the pipeline** |
+| Strategies | 12 killed, **2 at `paper` with accounts**, 0 promoted by verdict |
+| Evaluations | 26 — 14 `hold-for-data`, 12 `kill` (see KI-027) |
+| Orders | **none yet**; 20 signals emitted and vetoed 2026-08-03 |
+| Paper accounts | `PA3HEG2CLXLU`, `PA3KQN57WVXY` assigned; `PA3YPMG9AD4Z` idle |
 
 ## What is next, in order
 
-1. **The archetype bar experiment** (timeline 1.4, spec in
-   `docs/research/archetype-bar-experiment.md`, PR #173). Prompt v4 has admitted
-   **nothing** across 2,472 verdicts, and the first shadow eval proved that is
-   not a model problem — five models across four usage tiers and four families
-   returned 0% relevant with zero disagreements. The remaining explanation is
-   the taxonomy, and this card produces the evidence Mike rules on. **Step 1
-   (the spec) is merged; step 2 is the harness, not yet built.**
-2. **Forward-test scoring.** Nothing evaluates a strategy *after* promotion.
-   More urgent under ADR-0016, not less.
-3. **The runtime gaps below** — cheap, and two of them are silently corrupting
-   results.
-4. **Intraday bars (2.8) → Runner firing intraday (2.9) → intraday equities
-   (2.10).**
+1. **Watch the next open.** #190 is deployed; the chain has never carried an
+   order end to end. Read `pre-trade-checker` logs before the order table — a
+   silent session with a stated reason is a working system.
+2. **Rule on `haleu-cost-curve`.** `shrap-tech-watcher-review` renders it. The
+   question is whether it is a distinct thesis or a rung of the promoted fission
+   one; a duplicate kill is a legitimate and useful outcome.
+3. **KI-027** — `hold-for-data` cannot resolve, and 14 evaluations sit in it.
+   A rename or an expiry, not a calibration change.
+4. **Intraday bar *reading*.** #185 ingests 1-min bars and #186 lets the Runner
+   act on a cadence, but `BarSample.session_date` is a `date` and that type runs
+   through `PanelWindow`, `PricePanel`, the Evaluator and every strategy. That
+   grain change is the remaining piece of day trading.
 
-Risk Officer limits (2.7) are **done** (#146) and removed from this ordering.
+## Rulings made 2026-08-01/03
 
-## Runtime gaps found 2026-07-31 — see KI-022 to KI-025
+- **Intraday feed: Alpaca IEX 1-min.** Free, reuses the existing client. The
+  documented IEX volume bias is survivable at daily grain and materially worse
+  at 1-min — a strategy that looks good on it must be re-checked against SIP
+  before it means anything.
+- **Both tracks in parallel:** stage the two strategies for a forward test *and*
+  run the search. The search half turned out to be blocked upstream, not at the
+  Generator: 6 of 111 q-fin papers were accepted and all 6 already consumed.
+- **IR floor stays at 0.5.** See KI-027 for why lowering it would promote
+  strategies a leverage dial beats.
 
-- **Alerts reach nobody.** `discord_webhook_url: null`, `ntfy_url: ""`, and
-  `ops.alert-delivery-failed` holds 8 events. #167's freshness alarms fire into
-  nothing. Fix is one `.env` line and a recreate. **Mike's, not an agent's.**
-- **Nothing auto-ingests price bars.** `market-data` is `--profile tools`, so
-  bars only advance when a human runs the backfill. Every evaluation since
-  2026-07-29 ran on stale prices — which may explain some of the 13
-  `hold-for-data` verdicts.
-- **11,096 reconciliation discrepancies vs 9,161 clean passes.** Nobody has ever
-  read them.
-- **Streams grow unbounded.** `ops.health-tick` is at 80,509 and nothing trims.
+## Things that were believed and turned out false
 
-## The three findings that mattered this session
+Recorded because each cost real time and the shape recurs.
 
-1. **The taxonomy rejects everything, and it is not the model's fault.** Two
-   flagship tiers, four families, 0% relevant. KI-009 is a taxonomy problem with
-   a number behind it now, not an inference.
-2. **The instrument was lying twice before it told the truth.** The shadow eval
-   counted unparsed answers as agreement (#171), then scored fence-wrapped JSON
-   as an unparseable verdict (#172) — a defect in *production* code that made
-   `glm-5.2` look 25% competent. Both were caught by running the thing against
-   real models, not by the test suite.
-3. **Neither compute nor inference budget is a constraint.** The Ollama Pro
-   allowance ran at 1.2% of weekly for 3,320 requests, and the Dell is idle.
-   Two design hedges made on cost this session were wrong.
+- *"The literature filter is the bottleneck, like the world-changer one."* It is
+  not. It accepted 5% of 111 papers and the Generator consumed all of them — the
+  corpus is exhausted, not the filter. The two funnels have different prompts
+  and different corpora and keep not behaving alike.
+- *"qwen3.5:397b will rescue rejected q-fin papers."* It dropped 3 of the 6
+  previously accepted and rescued none. Stricter, not more permissive — the
+  opposite of its behaviour on the world-changer corpus.
+- *"Two of the four unused papers justify the EDGAR card."* Both were among the
+  three qwen then dropped. KI-026's own justification stood on its own; the
+  extra argument did not.
+- *"A dry run that reports zero changes measured something."* Twice (#183, #187).
+  Both printed counts derived from an empty tuple in the shape of a result.
 
 ## Standing constraints a new session must not rediscover
 

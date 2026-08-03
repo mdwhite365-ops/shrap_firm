@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-08-01 (KI-026 shipped; KI-009 now waits only on the re-score)
+**Last updated:** 2026-08-03 (**KI-009 and KI-026 RESOLVED** — the funnel's first 46 admits; KI-027/028/029 added)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -148,8 +148,27 @@ cannot see a Valar.
 
 ## KI-009 — The funnel is structurally incapable of promoting anything
 
-**Status:** Open, found 2026-07-27 by the KI-008 diagnostic. This is a hard
-block, not a slowness problem.
+**Status: RESOLVED 2026-08-03 by KI-026's fix (#189).** It was an ingest
+defect, not a taxonomy one. Diagnosis history preserved below because it was
+wrong twice and the reasons are worth keeping.
+
+After EDGAR filings were re-scored with their document bodies instead of their
+index entries, `sec-edgar` admitted **46 items** — 17 `compute-substrate`,
+15 `cost-curve`, 12 `bio-mechanism`, 2 `physical-realization` — against **zero**
+in the two months prior. Firm-wide the corpus went from 2 fossil admits to 49.
+`bio-mechanism` split 12 admitted / 8 rejected, so the model is testing filings
+against the grammar rather than keyword-matching.
+
+On 2026-08-02 the funnel synthesized and proposed its first pipeline candidate
+(`haleu-cost-curve`, 01KZ0N02M48XF8WP29T6F2H7KR) — ingest through proposal, six
+stages, no human in the path.
+
+**The heading was never true.** The funnel could always promote; it had never
+been shown anything promotable. Three rounds of evidence pointed at the
+taxonomy — a shadow eval across five models, a three-bar archetype experiment,
+and 2,472 v4 verdicts — and every one of them was measured on a corpus that was
+72% file sizes. A denominator that is mostly metadata makes every rate a
+statement about the metadata.
 
 `research.tech_watcher_cluster_log` holds 8 rows. All 8 are
 `held-single-source`. **Every one has `source_classes = ["arxiv"]`** — two
@@ -1047,7 +1066,18 @@ acknowledgement workflow for a single self-clearing case would be scaffolding.
 
 ## KI-026 — The Tech Watcher reads EDGAR's index, not its filings
 
-**Status:** Open, found 2026-07-31 by the archetype bar experiment.
+**Status: RESOLVED 2026-08-03 (#189).** All 3,696 EDGAR items carry a document
+body; average length went from 179 characters to 5,834, and 3,689 of 3,696
+parsed into labelled item sections. The re-score under `--force` produced the
+46 admits that closed KI-009.
+
+Two limitations recorded rather than hidden: **86% of bodies hit the 6,000-char
+cap**, and truncation is logged but not stored, so a verdict on a clipped filing
+cannot be told from one on a whole filing by reading the row. Raising
+`--max-chars` and re-scoring is a cheap second experiment if a result ever turns
+on it.
+
+Original diagnosis below.
 
 `research.raw_source_items` holds 3,740 `sec-edgar` items — **72% of the whole
 corpus** — and every one stores the Atom *index entry* rather than the filing:
@@ -1090,3 +1120,101 @@ document.
 *before* re-running the bar experiment or drawing further conclusions about the
 taxonomy, because every rate measured so far has a denominator that is 72%
 metadata.
+
+## KI-027 — `hold-for-data` is a verdict that cannot resolve
+
+**Status:** Open, measured 2026-08-01.
+
+Fourteen of twenty-six evaluations sit at `hold-for-data` / `below-sharpe-floor`.
+The verdict means "a real-looking but sub-floor edge — wait for more data." On a
+five-year daily-bar window that grows five bars a week, the metrics will not
+move. The status reads *not yet* and functions as *never*.
+
+The re-evaluation floor in `trigger_service.py` prevents duplicate rows, so this
+costs nothing operationally. What it costs is honesty: the registry's most
+common verdict describes a wait with no exit condition, and a reader counting
+"live candidates" will count fourteen strategies that are not candidates.
+
+**What the numbers actually say** (2026-08-01, `research.evaluations`):
+
+| verdict | reason | n | sharpe | benchmark | IR |
+|---|---|---|---|---|---|
+| hold-for-data | below-sharpe-floor | 14 | 0.792 | 0.876 | 0.306 |
+| kill | no-active-edge | 6 | 0.666 | 0.758 | -0.156 |
+| kill | insufficient-trades | 3 | 0.334 | — | — |
+| kill | no-edge | 2 | -0.379 | 0.936 | -0.964 |
+| kill | worse-than-parent | 1 | 0.690 | 0.772 | 0.158 |
+
+The 14 hold-for-data strategies earn a *higher mean return* than their benchmark
+(positive IR) with proportionally more volatility (lower absolute Sharpe). They
+add return by taking risk.
+
+**Priced against the trivial alternative:** a strategy that is the benchmark
+levered by *k* has an active series of `(k-1) x benchmark`, so its information
+ratio is `mean_b/sd_b` — the benchmark's own Sharpe, **0.876**, at any leverage.
+These score **0.306**. They are not marginal-but-real; they are worse than
+turning up position size on the basket they already trade. (Real leverage costs
+borrow and the Risk Officer bounds it, so 0.876 is an idealised ceiling. It does
+not survive being off by a factor of three.)
+
+**The gate is therefore honest and tradability is a build problem.** Lowering
+either floor would promote strategies a leverage dial beats. Recorded because
+the opposite conclusion is the tempting one when nothing has ever passed.
+
+**Fix:** rename the verdict to something that does not promise a resolution
+(`measured-insufficient`), or give it an explicit expiry after which it becomes
+a kill. Not a calibration change.
+
+## KI-028 — The Sharpe floor is checked before the information-ratio floor
+
+**Status:** Open, latent, found 2026-08-01. Mislabelling nothing today.
+
+`verdict.py` tests `base_sharpe < sharpe_floor` **before**
+`information_ratio < information_ratio_floor`. `required_information_ratio`'s own
+docstring argues the case against that ordering:
+
+> Sharpe measures the market plus the strategy; on a window where the benchmark
+> itself returned 0.772 a long-only equity rule inherits most of its Sharpe from
+> beta … The information ratio is the part that is actually the strategy's.
+
+So a strategy with IR 2.0 and Sharpe 0.95 is held on `below-sharpe-floor` —
+penalised for the market's mediocrity rather than its own, which is the exact
+failure the IR gate was added to prevent, still live one line above it.
+
+**Latent, not active.** No strategy in the current 26 has that shape: the 14
+holds fail *both* floors (IR 0.306 against a 0.5 floor), so removing the Sharpe
+check would change the reason string and not one verdict. Recorded so the first
+genuinely good low-volatility strategy does not get a reason that points at the
+wrong gate.
+
+## KI-029 — The Decision Maker dropped the strategy from every intent
+
+**Status:** RESOLVED 2026-08-03 (#190), same day it was found.
+
+The forward test's first session: both strategies computed targets, 20 buy
+signals were emitted, **all 20 were vetoed `UNKNOWN_STRATEGY`**, zero orders
+reached the broker.
+
+`strategy_ids` was a hardcoded `[]` in `decision_maker_stub.py` — a Card 2
+placeholder from when the only producer was the Strategy Fixture and nothing
+downstream read the field. #146 made it load-bearing: an intent with no
+`strategy_ids` cannot be resolved to an account, so the Risk Officer refuses it
+before evaluating a single limit. `"account_id": null` on every veto line is the
+tell — that field is populated only after the registry lookup those intents
+never reached.
+
+The Runner had always sent `strategy_id`. The Decision Maker read `account_id`
+off the same payload three lines above, under a comment explaining why dropping
+*that* would unroute every order, and dropped the strategy.
+
+**Why 1503 tests passed against a chain that could not place an order.** The
+integration test named for the path — `test_signal_to_risk_path` — exercises
+`RiskPolicy`'s universe and quantity checks, not the Risk Officer's attribution,
+because it predates #146. The seam had no coverage and the field's value was
+never asserted anywhere.
+
+**The general lesson, and it is not about this field.** A placeholder written
+when nothing reads it becomes a defect the moment something does, and nothing in
+the type system, the linter or the suite marks that transition. When a card
+makes a previously-ignored field load-bearing, its *producers* are part of that
+card's scope. Grep for the field, not just for the consumer.

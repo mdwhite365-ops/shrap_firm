@@ -15,11 +15,33 @@ block that could not run (2026-07-27). One ordered list, dependency-first.
 
 ---
 
-## Status, 2026-07-31
+## Status, 2026-08-03
+
+**Phase 1 item 1.4 is done and it closed KI-009.** The archetype bar experiment
+ran (#180/#181), and its finding was not the one anyone expected: the taxonomy
+was never the constraint. 72% of the corpus was EDGAR *index metadata* — a
+filed date, an accession number and a file size. #189 fetched the documents and
+the re-score admitted **46 items against zero in the two months prior**, then
+the funnel proposed its first pipeline candidate on 2026-08-02.
+
+**Landed #176–#190:** `make doc-drift` · automated bar ingest (KI-024) ·
+edge-triggered reconciliation · stream retention (KI-025) · the three-bar
+archetype harness · **intraday 1-min bars (2.8)** · **the Runner acting on a
+per-strategy cadence (2.9)** · **EDGAR full text, closing KI-009 and KI-026** ·
+the intent attribution fix that unblocked trading (KI-029).
 
 **Phase 0 and Phase 1 are done. Phase 2 Track A is done. Track B is partly
 done.** See `docs/status/session-handoff.md` for Mike's rulings and what a fresh
 session should pick up.
+
+**Two strategies are staged at `paper`** as deliberate forward tests rather than
+promotions — neither cleared the promote gate, and KI-027 explains why that gate
+is honest rather than tight. The order path has still never carried an order end
+to end; the next open is the first real test.
+
+**Remaining for day trading:** 2.8 and 2.9 shipped, so what is left is the bar
+*grain* change — `BarSample.session_date` is a `date`, and that type runs
+through `PanelWindow`, `PricePanel`, the Evaluator and every strategy.
 
 Landed #102–#118: archetype-conditional gates · the Evaluator trigger with
 ADR-0015's kill-asymmetric autonomy · CI on every push · the full-firm audit ·
