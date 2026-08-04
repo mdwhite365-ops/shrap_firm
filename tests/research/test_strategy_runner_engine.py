@@ -406,9 +406,7 @@ def test_a_short_position_is_refused_rather_than_doubled() -> None:
 
     strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.0})
 
-    plan = _plan_one(
-        strategy=strategy, item=_input("s1", "NVDA", 5), stored={}, held={"NVDA": -12}
-    )
+    plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored={}, held={"NVDA": -12})
 
     assert plan.signals == ()
     assert any("short" in note for note in plan.sizing_notes)

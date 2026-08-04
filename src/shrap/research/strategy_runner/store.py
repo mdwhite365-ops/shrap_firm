@@ -184,9 +184,7 @@ class PostgresStrategyRunnerStateStore:
             )
         return state
 
-    async def latest_positions(
-        self, account_id: str
-    ) -> tuple[dict[str, float], datetime | None]:
+    async def latest_positions(self, account_id: str) -> tuple[dict[str, float], datetime | None]:
         """What ``account_id`` actually holds, per the newest reconciliation pass.
 
         Returns ``({}, None)`` when no pass has ever run for this account — the

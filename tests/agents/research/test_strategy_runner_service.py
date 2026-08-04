@@ -114,9 +114,7 @@ class FakeStateStore:
     async def read_state(self) -> dict[tuple[str, str], TargetState]:
         return {}
 
-    async def latest_positions(
-        self, account_id: str
-    ) -> tuple[dict[str, float], datetime | None]:
+    async def latest_positions(self, account_id: str) -> tuple[dict[str, float], datetime | None]:
         """Default: a reconciled but flat account.
 
         `at` is set and the mapping is empty — the pass ran and found nothing.
@@ -477,7 +475,7 @@ async def test_a_pass_with_nothing_due_reads_no_bars() -> None:
 
 
 async def test_an_account_with_no_reconciliation_pass_defers() -> None:
-    """"No rows" must never be read as "flat".
+    """ "No rows" must never be read as "flat".
 
     That reading is what let the Runner sell stock it did not own. An account
     whose positions cannot be established is deferred on the same terms as one
@@ -501,9 +499,7 @@ async def test_a_reconciled_flat_account_trades() -> None:
     never ran is an absence of information. They must not behave alike.
     """
 
-    store = FakeStateStore(
-        {ACCOUNT_A: _fresh()}, positions={ACCOUNT_A: ({}, datetime.now(UTC))}
-    )
+    store = FakeStateStore({ACCOUNT_A: _fresh()}, positions={ACCOUNT_A: ({}, datetime.now(UTC))})
 
     result = await _run([_record("s1", ACCOUNT_A)], store)
 
