@@ -219,6 +219,10 @@ async def test_poll_order_status_once_publishes_status_update_for_open_order() -
         payload={
             "risk_event_id": "01KRISK0000000000000000",
             "broker": "alpaca-paper",
+            # Stamped, as every submitted event has been since #fcf8d90. An
+            # unstamped one is another account's problem or nobody's, and the
+            # status loop now skips it rather than claiming it.
+            "account_id": "PA3TESTACCT",
             "broker_order_id": "paper-order-123",
             "status": "accepted",
             "submitted_order": {"symbol": "AAPL", "qty": "2", "side": "buy"},
@@ -269,6 +273,10 @@ async def test_poll_order_status_once_publishes_filled_event_for_filled_order() 
         payload={
             "risk_event_id": "01KRISK0000000000000000",
             "broker": "alpaca-paper",
+            # Stamped, as every submitted event has been since #fcf8d90. An
+            # unstamped one is another account's problem or nobody's, and the
+            # status loop now skips it rather than claiming it.
+            "account_id": "PA3TESTACCT",
             "broker_order_id": "paper-order-123",
             "status": "accepted",
             "submitted_order": {"symbol": "AAPL", "qty": "2", "side": "buy"},

@@ -107,6 +107,24 @@ def is_duplicate_order_error(exc: Exception) -> bool:
     return "client order id" in message
 
 
+def is_unknown_order_error(exc: Exception) -> bool:
+    """True when the broker says it has never heard of this order id.
+
+    The one broker failure that carries information about the *future*: every
+    other error might clear on the next attempt, and a 404 will not. Either the
+    order belongs to another account's book — every agent reads every submitted
+    event, so this is routine — or it aged out of the broker's history. Neither
+    is fixed by asking again.
+
+    Deliberately narrow, like its sibling above. A 401, 429 or 5xx is genuinely
+    transient and must keep its retry; widening this to "any HTTP error" would
+    silently drop orders during an outage, which is the failure the no-ack
+    branch exists to prevent.
+    """
+
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404
+
+
 class AccountMismatchError(Exception):
     """Configured account does not match the account the credentials open."""
 
@@ -503,7 +521,18 @@ async def repoll_pending_once(
             continue
         try:
             broker_response = await broker.get_order(broker_order_id)
-        except Exception:
+        except Exception as exc:
+            if is_unknown_order_error(exc):
+                # Drop it rather than re-check forever. Unlike the status loop
+                # this one never stalled — a pending entry that keeps 404ing
+                # only wastes a broker call per interval — but it would have
+                # kept doing so for the life of the process.
+                log.warning(
+                    "execution_agent.repoll_unknown_dropped",
+                    broker_order_id=broker_order_id,
+                )
+                del pending[broker_order_id]
+                continue
             log.exception(
                 "execution_agent.repoll_failed",
                 broker_order_id=broker_order_id,
@@ -570,7 +599,20 @@ async def poll_order_status_once(
         try:
             submitted = event.envelope.payload or {}
             order_account = str(submitted.get("account_id", "")).strip()
-            if order_account and order_account != account_id:
+            if order_account != account_id:
+                # Strict equality, and the empty case is the whole point. This
+                # read `order_account and order_account != account_id`, so an
+                # event carrying no account at all fell through as "mine".
+                # Every submitted event published before #fcf8d90 (2026-07-29)
+                # is exactly that, and the firm's very first order — stream id
+                # 1783203414014-0, 2026-07-04 — jammed all three agents for a
+                # month: each claimed it, two 404ed, and the batch never
+                # advanced past it. Today's fills were queued behind it.
+                #
+                # Safe because the running account_id is never empty:
+                # resolve_account_id derives it from the broker and raises
+                # rather than returning blank, so no live event can be skipped
+                # by this branch for want of configuration.
                 await subscriber.ack(event)
                 continue
             result = await process_order_status_event(redis, broker, event)
@@ -594,7 +636,23 @@ async def poll_order_status_once(
             )
             await subscriber.ack(event)
             continue
-        except Exception:
+        except Exception as exc:
+            if is_unknown_order_error(exc):
+                # Permanent, not systemic. The no-ack branch below exists for
+                # errors a retry can clear — broker down, network, bad
+                # credentials. A 404 is not one: an order this account has
+                # never heard of will still be unknown on the ten thousandth
+                # attempt, and retrying forever stalls every later event
+                # behind it.
+                log.warning(
+                    "execution_agent.order_status_unknown_skipped",
+                    stream=event.stream,
+                    redis_stream_id=event.redis_stream_id,
+                    submitted_event_id=event.envelope.event_id,
+                    account_id=account_id,
+                )
+                await subscriber.ack(event)
+                continue
             # Systemic error: no ack, so the same event is redelivered next cycle.
             log.exception(
                 "execution_agent.order_status_failed",
@@ -769,6 +827,7 @@ __all__ = [
     "build_paper_order",
     "is_duplicate_order_error",
     "is_terminal_order_status",
+    "is_unknown_order_error",
     "poll_once",
     "poll_order_status_once",
     "process_order_status_event",
