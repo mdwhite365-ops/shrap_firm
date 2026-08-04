@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-08-04 (**KI-030** — the Runner sold positions it never held; first fills and first real defect on the same day)
+**Last updated:** 2026-08-04 (**KI-030** — the Runner sold positions it never held; **KI-031** — the status loop jammed a month on the firm's first order. First fills and two real defects on the same day)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -1282,3 +1282,60 @@ Officer shipped, it silently stopped, with no type change, no test failure and
 no error. When a card inserts a stage into an existing pipeline, the question is
 not only "does the new stage work" but "what did anything downstream already
 believe about what reaches it."
+
+## KI-031 — The status loop stalled a month on the firm's first order
+
+**Status:** RESOLVED 2026-08-04 in #193; found the same evening as KI-030.
+
+`trading.paper_order_events` recorded all six of 2026-08-04's orders as
+`pending_new` with no `filled_quantity`, while Alpaca showed all six **filled**
+hours earlier. The firm's own record of what happened to its orders had been
+frozen since 2026-07-29.
+
+**Not where it looked.** The Order Store was the obvious suspect and was
+blameless: its row counts match the Redis streams exactly — 33 `submitted`, 67
+`status-updated`, 47 `filled` — so it had persisted every event ever published.
+The Execution Agent had simply stopped publishing two of the three.
+
+**Mechanism, and it is two bugs stacked.**
+
+1. **The account filter read "unstamped" as "mine."** It was
+   `if order_account and order_account != account_id`, so an event carrying no
+   `account_id` fell through the guard entirely. Every submitted event published
+   before `fcf8d90` (2026-07-29, account stamping) is exactly that.
+2. **A 404 was classified as systemic.** `HTTPStatusError` is not `ValueError`,
+   so it landed in the branch that deliberately does **not** ack — correct for a
+   broker outage, fatal here. The event was redelivered every ~6 seconds
+   forever, and the `break` meant the batch never advanced past it.
+
+Together: the three-agent split created fresh consumer groups that replayed
+`execution.order.submitted` from the start. Each agent immediately reached the
+firm's first-ever order — stream id `1783203414014-0`, **2026-07-04 22:16:54**,
+matching `min(occurred_at)` in the table to the millisecond — claimed it for
+want of a stamp, 404ed on a book it did not own, and jammed there. Every later
+event, including six real fills, sat behind it.
+
+**Fix (#193).** Strict account equality, so an unstamped event is skipped by
+every agent rather than claimed by all of them; and `is_unknown_order_error`,
+which acks and skips a 404 while leaving 401/429/5xx on their retry. The
+re-poller had the same misclassification and now drops rather than re-asking for
+the life of the process. **No manual unjam is needed** — on deploy the poison
+event is redelivered once, skipped, acked, and the backlog drains, so the six
+fills get their rows retroactively.
+
+**Cost, stated honestly.** Nothing was lost and no trade was affected:
+submission runs in a separate loop, which is why the orders went through at all,
+and the broker still holds the truth. What was dead is the firm's ability to
+measure its own execution — fill rate, slippage, whether an order ever
+completed. It also means the pre-existing "no order since 2026-07-29" note hid
+this: there were no orders to fail on between the split and 2026-08-04.
+
+**The generalisable form.** *An error that cannot succeed on retry is not a
+retryable error.* The retry-vs-skip split is the load-bearing decision in every
+one of these loops, and both branches were already written and commented here —
+the 404 was just filed under the wrong one. Note also that the identical defect
+class was found and fixed in the **risk** loop on 2026-07-06 (see
+`test_execution_agent_poison.py`, whose docstring describes a 422 replay jamming
+that loop the same way). The lesson generalised across loops; the fix did not.
+When a poison-pill class is found in one consumer, audit every other consumer in
+the same file before closing the card.

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import fakeredis.aioredis
+import httpx
 import pytest
 
 from shrap.events import Envelope, ReceivedEvent
@@ -141,6 +142,69 @@ async def test_repoll_publishes_fill_once_and_clears_pending() -> None:
     assert checked == 1
     assert [stream for stream, _ in redis.calls] == ["execution.order.filled"]
     assert pending == {}
+
+
+class RaisingBroker:
+    """Broker whose get_order always raises the same error."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self.get_order_calls: list[str] = []
+
+    async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("not used")
+
+    async def get_order(self, order_id: str) -> dict[str, Any]:
+        self.get_order_calls.append(order_id)
+        raise self._error
+
+
+def _not_found() -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://paper-api.alpaca.markets/v2/orders/order-1")
+    response = httpx.Response(404, json={"message": "order not found"}, request=request)
+    return httpx.HTTPStatusError("404", request=request, response=response)
+
+
+def _pending_order() -> dict[str, PendingOrder]:
+    return {
+        "order-1": PendingOrder(
+            submitted_event=_submitted_event(),
+            broker_order_id="order-1",
+            last_status="accepted",
+            next_check_at=0.0,
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_repoll_drops_an_order_the_broker_does_not_know() -> None:
+    """A 404 here never stalled the loop, but it would re-ask for the process's life."""
+
+    redis = FakeRedis()
+    broker = RaisingBroker(_not_found())
+    pending = _pending_order()
+
+    checked = await repoll_pending_once(redis, broker, pending, now=10.0, poll_interval_seconds=5.0)
+
+    assert checked == 0
+    assert pending == {}  # dropped, not rescheduled
+    assert redis.calls == []
+
+
+@pytest.mark.asyncio
+async def test_repoll_keeps_an_order_through_a_transient_error() -> None:
+    """The contrast that makes the drop above safe: a 500 stays pending."""
+
+    redis = FakeRedis()
+    request = httpx.Request("GET", "https://paper-api.alpaca.markets/v2/orders/order-1")
+    response = httpx.Response(500, request=request)
+    broker = RaisingBroker(httpx.HTTPStatusError("500", request=request, response=response))
+    pending = _pending_order()
+
+    checked = await repoll_pending_once(redis, broker, pending, now=10.0, poll_interval_seconds=5.0)
+
+    assert checked == 0
+    assert pending["order-1"].next_check_at == 15.0  # retried, not dropped
 
 
 @pytest.mark.asyncio
