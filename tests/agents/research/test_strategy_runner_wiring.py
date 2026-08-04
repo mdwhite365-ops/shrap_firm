@@ -103,6 +103,7 @@ def test_reference_factory_seam_emits_a_buy_end_to_end() -> None:
         now=datetime(2026, 7, 24, 14, 30, tzinfo=UTC),
         strategies=[item],
         stored_state={},
+        held={},
         factory=_default_strategy_factory,
         config=RunnerSignalConfig(max_quantity=1_000_000),
         regime_label="risk-on",

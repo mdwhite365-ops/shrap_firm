@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from shrap.research.strategy_runner.cadence import SESSION_SLOT
 from shrap.research.strategy_runner.engine import PlannedStateWrite, TargetState
@@ -103,6 +103,31 @@ LIMIT 1
 """.strip()
 
 
+# The sentinel the Reconciliation Agent writes on every pass, including a pass
+# that found nothing. Without it a flat account and a dead agent are the same
+# absence of rows, and those must produce opposite behaviour here: trade, or
+# refuse to.
+FLAT_MARKER_TICKER = "__FLAT__"
+
+# Positions are read as the newest PASS, not the newest row per ticker. A
+# per-ticker latest can mix two passes and report a position the newer pass
+# shows as closed — which is precisely the class of error this whole card
+# exists to remove.
+SELECT_LATEST_POSITIONS_SQL = """
+WITH newest AS (
+    SELECT event_id, at
+    FROM ops.position_snapshots
+    WHERE account_id = $1
+    ORDER BY at DESC
+    LIMIT 1
+)
+SELECT p.ticker, p.quantity, n.at
+FROM ops.position_snapshots p
+JOIN newest n ON n.event_id = p.event_id
+WHERE p.account_id = $1
+""".strip()
+
+
 class AsyncConnection(Protocol):
     async def execute(self, sql: str, *args: object) -> object: ...
 
@@ -158,6 +183,35 @@ class PostgresStrategyRunnerStateStore:
                 last_slot=SESSION_SLOT if last_slot is None else str(last_slot),
             )
         return state
+
+    async def latest_positions(self, account_id: str) -> tuple[dict[str, float], datetime | None]:
+        """What ``account_id`` actually holds, per the newest reconciliation pass.
+
+        Returns ``({}, None)`` when no pass has ever run for this account — the
+        caller must refuse to plan, because "no rows" cannot be read as "flat".
+        Returns ``({}, at)`` for a genuinely flat account: the pass ran, wrote
+        its marker, and found nothing.
+
+        The marker row is excluded from the mapping but is what makes the
+        timestamp trustworthy. Tickers with a zero quantity are dropped too — a
+        closed position is not a held one, and leaving it in would make an exit
+        fire against nothing, which is the bug this method exists to end.
+        """
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_LATEST_POSITIONS_SQL, account_id)
+        if not rows:
+            return {}, None
+        observed_at = cast(datetime, rows[0]["at"])
+        held: dict[str, float] = {}
+        for row in rows:
+            ticker = str(row["ticker"])
+            if ticker == FLAT_MARKER_TICKER:
+                continue
+            quantity = float(row["quantity"])
+            if quantity != 0.0:
+                held[ticker.upper()] = quantity
+        return held, observed_at
 
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]:
         """Most recent equity for ``account_id``, and when it was observed.

@@ -131,12 +131,14 @@ def _plan_one(
     regime_label: str | None = "risk-on",
     config: RunnerSignalConfig = UNCAPPED,
     equity: float = EQUITY,
+    held: dict[str, float] | None = None,
 ):
     plans = plan_session(
         session_date=SESSION,
         now=NOW,
         strategies=[item],
         stored_state=stored,
+        held=held or {},
         factory=_factory_returning(strategy),
         config=config,
         regime_label=regime_label,
@@ -171,7 +173,13 @@ def test_flat_to_invested_emits_buy() -> None:
 def test_invested_to_flat_emits_sell() -> None:
     strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.0})
     stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY, 40)}
-    plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored=stored)
+    # "Invested" is now what the ACCOUNT holds, not what the row remembers.
+    plan = _plan_one(
+        strategy=strategy,
+        item=_input("s1", "NVDA", 5),
+        stored=stored,
+        held={"NVDA": 40},
+    )
     assert [s.side for s in plan.signals] == [SIDE_SELL]
     (write,) = plan.state_writes
     assert write.last_target == 0.0
@@ -182,14 +190,19 @@ def test_invested_to_flat_emits_sell() -> None:
 def test_unchanged_invested_emits_nothing_but_stamps_state() -> None:
     strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 1.0})
     stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY, 40)}
-    plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored=stored)
+    plan = _plan_one(
+        strategy=strategy,
+        item=_input("s1", "NVDA", 5),
+        stored=stored,
+        held={"NVDA": 40},
+    )
     assert plan.signals == ()
     (write,) = plan.state_writes  # still stamped this session (idempotency guard)
     assert write.last_session_date == SESSION
     assert write.last_side == SIDE_BUY  # carried forward
-    # The held position is carried forward untouched. Re-sizing a hold would
-    # drift the recorded quantity away from the shares actually held, and the
-    # eventual exit sells the recorded quantity.
+    # Carried forward untouched. Since KI-030 this row is an audit trail of
+    # intent rather than the basis of the exit — the exit reads the account —
+    # but drifting it for no reason would make intent-vs-actual harder to read.
     assert write.last_quantity == 40
 
 
@@ -250,6 +263,7 @@ def test_factory_error_skips_only_that_strategy() -> None:
         now=NOW,
         strategies=[_input("bad", "AAPL", 5), _input("good", "NVDA", 5)],
         stored_state={},
+        held={},
         factory=factory,
         config=UNCAPPED,
         regime_label=None,
@@ -335,7 +349,7 @@ def test_equal_weights_across_a_universe_become_equal_dollars() -> None:
     assert notionals == {"AAA": 6, "BBB": 133, "CCC": 33}
 
 
-def test_an_exit_sells_the_recorded_entry_not_a_freshly_sized_one() -> None:
+def test_an_exit_sells_the_held_position_not_a_freshly_sized_one() -> None:
     """The price moved since entry. Re-sizing the exit would leave a residual
     (price up) or oversell into a short (price down)."""
 
@@ -343,18 +357,59 @@ def test_an_exit_sells_the_recorded_entry_not_a_freshly_sized_one() -> None:
     stored = {("s1", "NVDA"): TargetState(0.20, SIDE_BUY, YESTERDAY, 40)}
     # Price has doubled since the entry; a re-sized exit would sell 20.
     item = _multi_input("s1", {"NVDA": 100.0})
-    plan = _plan_one(strategy=strategy, item=item, stored=stored)
+    plan = _plan_one(strategy=strategy, item=item, stored=stored, held={"NVDA": 40})
     assert plan.signals[0].payload["quantity"] == 40
 
 
-def test_an_exit_of_a_pre_sizing_row_sells_one_share() -> None:
-    """Rows written before this card hold exactly 1 share — that is what the
-    fixed-quantity path emitted, so 1 is a fact about them, not a guess."""
+def test_an_exit_sells_what_is_held_not_what_was_intended() -> None:
+    """KI-030, the defect that produced real shorts on 2026-08-04.
+
+    The Risk Officer scales every order — 0.1875 at the time — so a recorded
+    intent of 52 became a 9-share position. Closing on the recorded number sold
+    the 9 and shorted 43.
+    """
 
     strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.0})
-    stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY, 0)}
-    plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored=stored)
-    assert plan.signals[0].payload["quantity"] == 1
+    stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY, 52)}
+
+    plan = _plan_one(
+        strategy=strategy, item=_input("s1", "NVDA", 5), stored=stored, held={"NVDA": 9}
+    )
+
+    assert plan.signals[0].payload["quantity"] == 9
+
+
+def test_a_position_the_account_does_not_hold_produces_no_sell() -> None:
+    """The other half of KI-030: an entry that was vetoed never happened.
+
+    This asserted the opposite before 2026-08-04 — that a row with no recorded
+    quantity still sold one share, on the reasoning that pre-sizing rows held
+    exactly 1. That was true of rows written by the fixed-quantity path and
+    false of every row whose order was refused downstream, and the engine could
+    not tell the two apart because it never asked the broker.
+    """
+
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.0})
+    stored = {("s1", "NVDA"): TargetState(1.0, SIDE_BUY, YESTERDAY, 40)}
+
+    plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored=stored, held={})
+
+    assert plan.signals == ()
+
+
+def test_a_short_position_is_refused_rather_than_doubled() -> None:
+    """A long-only strategy holding a short did not choose it.
+
+    Selling here would deepen the short rather than close it, so the ticker is
+    skipped and reported. Three of these existed on 2026-08-04.
+    """
+
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.0})
+
+    plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored={}, held={"NVDA": -12})
+
+    assert plan.signals == ()
+    assert any("short" in note for note in plan.sizing_notes)
 
 
 def test_an_unfundable_entry_emits_nothing_and_records_flat() -> None:
@@ -447,6 +502,7 @@ def _plan_many(
         now=NOW,
         strategies=items,
         stored_state={},
+        held={},
         factory=lambda rec, tks: fakes[rec.strategy_id],
         config=config,
         regime_label=None,
@@ -612,6 +668,7 @@ def _plan_at(item: StrategyInput, stored: dict[tuple[str, str], TargetState], no
         now=now,
         strategies=[item],
         stored_state=stored,
+        held={},
         factory=_factory_returning(FakeStrategy(name="cadence", warmup=1, weights={"NVDA": 1.0})),
         config=UNCAPPED,
         regime_label="risk-on",

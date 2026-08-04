@@ -159,6 +159,10 @@ class BarReader(Protocol):
 class StateStore(Protocol):
     async def read_state(self) -> dict[tuple[str, str], TargetState]: ...
 
+    async def latest_positions(
+        self, account_id: str
+    ) -> tuple[dict[str, float], datetime | None]: ...
+
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]: ...
 
     async def upsert(self, write: PlannedStateWrite) -> None: ...
@@ -373,6 +377,25 @@ async def run_pass(
     deferred: list[str] = []
     for account_id, account_records in sorted(grouped.items()):
         raw_equity, observed_at = await state_store.latest_equity(account_id)
+        # Positions are as load-bearing as equity now, and are deferred on the
+        # same terms. `at is None` means no reconciliation pass has ever run for
+        # this account, and "no rows" must never be read as "flat" — that
+        # reading is what let the Runner sell stock it did not own (KI-030).
+        held, positions_at = await state_store.latest_positions(account_id)
+        if positions_at is None:
+            log.error(
+                "strategy_runner.positions_unavailable",
+                account_id=account_id,
+                reason=(
+                    "no ops.position_snapshots pass for this account, so what it "
+                    "holds cannot be established; deferring rather than assuming flat"
+                ),
+                strategies=[r.strategy_id for r in account_records],
+                session_date=session_date.isoformat(),
+            )
+            deferred.extend(r.strategy_id for r in account_records)
+            continue
+
         try:
             equity = assert_equity_usable(raw_equity, observed_at, now)
         except SizingRefused as exc:
@@ -408,6 +431,7 @@ async def run_pass(
             session_date=session_date,
             now=now,
             strategies=inputs,
+            held=held,
             stored_state=stored_state,
             factory=_default_strategy_factory,
             config=config,
