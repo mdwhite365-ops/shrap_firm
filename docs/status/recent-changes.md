@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-08-03 (`main` at #190 — KI-009 resolved, the funnel's first admits)
+**Last updated:** 2026-08-04 (`main` at #193 — the firm's first fills, and the first two trading defects)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -816,6 +816,25 @@ The session that closed KI-009 and got the firm to a live forward test.
   first session emitted 20 signals and had all 20 vetoed `UNKNOWN_STRATEGY`,
   because `strategy_ids` was a Card 2 placeholder that #146 had quietly made
   load-bearing.
+- PR #191 — Status docs reconciled after the funnel opened.
+- PR #192 — The Runner sold stock the account did not own (KI-030). It read
+  "am I invested" from its own record of intent; the Risk Officer scales every
+  order, so a recorded 52 GME against 9 actually held made every exit a ~81%
+  short. `ops.position_snapshots` is now authoritative. **This is KI-005
+  arriving** — deferred until a Research strategy needed portfolio state, which
+  happened on its second day of trading.
+- PR #193 — The status loop stalled a month on the firm's first order (KI-031).
+  An account filter that read *unstamped* as *mine*, plus a 404 classified as
+  retryable, jammed all three Execution Agents on stream id `1783203414014-0`
+  from 2026-07-04. Six real fills sat behind it. On deploy the backlog drained:
+  `execution.order.filled` 47 → 53.
+
+## 2026-08-04 — the firm's first fills
+
+Six orders, six fills, on `PA3KQN57WVXY` at 13:30 UTC. Signal through fill with
+no human in the path, and the first two trading defects (above) found and fixed
+the same day. Three of the six were exits against positions the account had
+never held; those shorts were closed by hand.
 
 ## Security notes
 

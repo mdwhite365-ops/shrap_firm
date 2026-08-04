@@ -7,7 +7,9 @@ This is **Shrap**, a self-developing multi-agent trading firm. The repo name is 
 ## Current phase
 **Phase 1: implementation — Research unlock.** The paper-trading spine is deployed on the Dell and **closed** (market-hours smoke 9/9 on 2026-07-15; first fully autonomous trade, signal through fill, 2026-07-16). The Research funnel went live 2026-07-17; the Tech Watcher ingests EDGAR, arXiv, arXiv q-fin, USASpending, the Federal Register and DOE newsroom, and filters on **`qwen3.5:397b` via Ollama Cloud** (promoted 2026-07-31 by the first shadow eval — routing has been box-wide cloud since #169, and nothing runs on the local 9B).
 
-**The funnel closed end to end on 2026-08-02** (#189, KI-009). It had admitted nothing for two months because the EDGAR leg stored the Atom *index entry* — a filed date, an accession number and a file size — rather than the filing. With document bodies it admitted **46 items** and synthesized its first pipeline candidate. **Two strategies are staged at `paper`** as forward tests, not promotions; the order path has not yet carried an order end to end.
+**The funnel closed end to end on 2026-08-02** (#189, KI-009). It had admitted nothing for two months because the EDGAR leg stored the Atom *index entry* — a filed date, an accession number and a file size — rather than the filing. With document bodies it admitted **46 items** and synthesized its first pipeline candidate.
+
+**The order path closed on 2026-08-04: six orders, six fills** on `PA3KQN57WVXY`, signal through fill with no human in the path. **Two strategies sit at `paper`** as forward tests, not promotions — neither cleared the promote gate. Both are daily; day trading still needs the intraday bar-*reading* card, since `BarSample.session_date` is a `date` all the way through the strategy layer. The same day produced the first two trading defects, both fixed and verified in production: **KI-030** (the Runner sized exits from its own record of intent, not the broker's position — #192) and **KI-031** (the status loop had jammed for a month on the firm's first-ever order — #193).
 
 **Always-on services (34 containers, verified 2026-07-31):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger. **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker.
 
@@ -18,8 +20,13 @@ Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike
 > **Check the status docs before trusting them.** They have now fallen behind
 > `main` three times — #72–#80, #92–#101, and #129–#175, the last being
 > forty-six PRs of finished work still described as pending. Run
-> **`make doc-drift`** first (last reconciled at **#175**). When it fails, trust
+> **`make doc-drift`** first (last reconciled at **#193**). When it fails, trust
 > `git log`, `docker compose ps` and the database over any document.
+>
+> **`make doc-drift` compares PR numbers, not claims.** On 2026-08-04 it
+> reported every status doc `ok` while the handoff said *"Orders: none yet"* on a
+> day the firm had filled six. Green means recent, not true — the database is
+> still the arbiter.
 
 ### Python project conventions
 Standard PEP 621 / hatchling layout, single `src/shrap/` package. Tooling: **ruff** (lint + format, line length 100, py312 target), **pytest** + **pytest-asyncio** (auto mode), **mypy --strict** scoped to `src/shrap/`, **pre-commit** wiring all three plus YAML/whitespace hygiene. Runtime deps: `redis`, `httpx`, `structlog`, `pydantic`, `python-ulid`. Boring beats clever — no exotic tooling. See `pyproject.toml` and `Makefile` (`make all` = install + lint + typecheck + test).

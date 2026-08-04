@@ -36,8 +36,10 @@ session should pick up.
 
 **Two strategies are staged at `paper`** as deliberate forward tests rather than
 promotions — neither cleared the promote gate, and KI-027 explains why that gate
-is honest rather than tight. The order path has still never carried an order end
-to end; the next open is the first real test.
+is honest rather than tight. **The order path closed on 2026-08-04: six orders,
+six fills.** It also produced the first two trading defects, KI-030 and KI-031,
+both fixed the same day (#192, #193). The exit path has still never run against
+a real holding — three positions are waiting for it.
 
 **Remaining for day trading:** 2.8 and 2.9 shipped, so what is left is the bar
 *grain* change — `BarSample.session_date` is a `date`, and that type runs
@@ -229,7 +231,7 @@ now.
 
 | # | Item | Depends on | Note |
 |---|---|---|---|
-| 2.7 | ~~**Risk Officer: leverage, drawdown, per-strategy loss limits, and an intraday-margin-deficit model**~~ **DONE** | — | Shipped in #146. "The firm has none of these" was true when written and false from 2026-07-30. It is a **library** at `src/shrap/risk_compliance/risk_officer/` enforced inside the Pre-Trade Checker, not a compose service — there is no container to check. Its limits are unruled first cuts, and it has recorded exactly one decision (a `UNKNOWN_STRATEGY` veto) because no order has flowed since 2026-07-29. Built ≠ exercised; see KI-022. |
+| 2.7 | ~~**Risk Officer: leverage, drawdown, per-strategy loss limits, and an intraday-margin-deficit model**~~ **DONE** | — | Shipped in #146. "The firm has none of these" was true when written and false from 2026-07-30. It is a **library** at `src/shrap/risk_compliance/risk_officer/` enforced inside the Pre-Trade Checker, not a compose service — there is no container to check. Its limits are unruled first cuts. **First genuinely exercised 2026-08-04**, when it approved six orders and scaled every one of them — and that scaling is precisely what exposed KI-030, since the Runner was sizing exits from the pre-scaling intent. Built ≠ exercised; see KI-022. |
 | 2.8 | **Intraday bars ingest** | — | Second price path. `market_data.daily_bars` cannot express a fast loop at any parameterisation. Scope bar size and feed against ADR-0016's three asset classes, not equities alone. |
 | 2.9 | **Runner fires more than once per session** | 2.8 | The pass triggers on entry to `open` and the guard is `(strategy_id, session_date)`. Both are daily-bar assumptions. Note this is *capability*: a strategy that declines to act intraday stays correct and must stay cheap. |
 | 2.10 | **Intraday equities path** | 2.7, 2.8, 2.9 | First asset under ADR-0016 and the cheapest — reuses the broker, the 50-name universe, Tier 3, the strategies and the Evaluator. No new calendar; no ADR-0003 gate if bars are polled rather than streamed. |
