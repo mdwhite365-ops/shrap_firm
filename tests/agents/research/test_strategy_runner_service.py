@@ -101,13 +101,30 @@ class FakeReader:
 class FakeStateStore:
     """Per-account equity, so one account can be stale while another is fresh."""
 
-    def __init__(self, equity_by_account: dict[str, tuple[float | None, datetime | None]]) -> None:
+    def __init__(
+        self,
+        equity_by_account: dict[str, tuple[float | None, datetime | None]],
+        positions: dict[str, tuple[dict[str, float], datetime | None]] | None = None,
+    ) -> None:
         self._equity = equity_by_account
+        self._positions = positions or {}
         self.writes: list[PlannedStateWrite] = []
         self.equity_lookups: list[str] = []
 
     async def read_state(self) -> dict[tuple[str, str], TargetState]:
         return {}
+
+    async def latest_positions(
+        self, account_id: str
+    ) -> tuple[dict[str, float], datetime | None]:
+        """Default: a reconciled but flat account.
+
+        `at` is set and the mapping is empty — the pass ran and found nothing.
+        That is deliberately NOT the same as `(({}, None))`, which means no pass
+        has run and makes the Runner defer (KI-030).
+        """
+
+        return self._positions.get(account_id, ({}, datetime.now(UTC)))
 
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]:
         self.equity_lookups.append(account_id)
@@ -454,3 +471,41 @@ async def test_a_pass_with_nothing_due_reads_no_bars() -> None:
 
     assert result.emitted == 0
     assert reader.reads == 0
+
+
+# --- positions are as load-bearing as equity (KI-030) --------------------------
+
+
+async def test_an_account_with_no_reconciliation_pass_defers() -> None:
+    """"No rows" must never be read as "flat".
+
+    That reading is what let the Runner sell stock it did not own. An account
+    whose positions cannot be established is deferred on the same terms as one
+    whose equity cannot be — it gets another chance next pass rather than
+    trading against an assumption.
+    """
+
+    store = FakeStateStore({ACCOUNT_A: _fresh()}, positions={ACCOUNT_A: ({}, None)})
+
+    result = await _run([_record("s1", ACCOUNT_A)], store)
+
+    assert result.emitted == 0
+    assert result.deferred == ("s1",)
+    assert not result.is_complete
+
+
+async def test_a_reconciled_flat_account_trades() -> None:
+    """The contrast case, and the reason the flat marker exists.
+
+    A pass that ran and found nothing is a fact about the book. A pass that
+    never ran is an absence of information. They must not behave alike.
+    """
+
+    store = FakeStateStore(
+        {ACCOUNT_A: _fresh()}, positions={ACCOUNT_A: ({}, datetime.now(UTC))}
+    )
+
+    result = await _run([_record("s1", ACCOUNT_A)], store)
+
+    assert result.emitted == 1
+    assert result.is_complete

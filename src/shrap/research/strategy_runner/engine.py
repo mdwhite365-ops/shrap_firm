@@ -99,10 +99,6 @@ DEFAULT_CONFIDENCE = 0.75
 # it binds only on cheap names. The real position limit is the target weight.
 DEFAULT_MAX_QUANTITY = 100
 
-# Exit size for a row written before sizing existed. Not a guess: the pre-sizing
-# runner emitted a hardcoded 1 share, so 1 is exactly what any such position holds.
-LEGACY_EXIT_QUANTITY = 1
-
 # Total intended exposure across ALL strategies, as a multiple of account equity.
 #
 # 1.0 means fully invested and unlevered. This is a *firm-wide* budget, not a
@@ -386,6 +382,7 @@ def _plan_strategy(
     now: datetime,
     item: StrategyInput,
     stored_state: Mapping[tuple[str, str], TargetState],
+    held: Mapping[str, float],
     factory: StrategyFactory,
     config: RunnerSignalConfig,
     regime_label: str | None,
@@ -432,7 +429,46 @@ def _plan_strategy(
             weight = float(targets.get(ticker, 0.0))
             now_inv = _invested(weight)
             prev = stored_state.get((strategy_id, ticker), FLAT_TARGET)
-            prev_inv = _invested(prev.last_target)
+
+            # WHAT THE BROKER HOLDS, not what we once intended to hold.
+            #
+            # `prev.last_target` records intent, and intent is not position. An
+            # order can be vetoed, clamped or scaled between the signal and the
+            # fill, and the Runner never learns. On 2026-08-04 that produced
+            # real short positions on a long-only strategy: three names whose
+            # entries were vetoed on Monday were "exited" on Tuesday, selling
+            # stock the account had never owned. Worse, the Risk Officer scales
+            # every order (0.1875 at the time), so even a filled entry was
+            # recorded ~5x its true size and its exit would have shorted the
+            # difference. See KI-030.
+            #
+            # ADR-0017 is what makes this cheap: one strategy per account, so
+            # the account's positions ARE this strategy's positions. Nothing to
+            # derive — the Reconciliation Agent already writes them.
+            position = float(held.get(ticker.upper(), 0.0))
+            prev_inv = position > 0.0
+
+            if position < 0.0:
+                # A short on a long-only strategy. Never intended, and an exit
+                # here would double it rather than close it. Refuse the ticker
+                # and say so; a human decides what to do with a book the firm
+                # did not choose.
+                notes.append(
+                    f"{ticker}: account holds {position:g} (short) on a long-only "
+                    "strategy — skipped, needs a human"
+                )
+                writes.append(
+                    PlannedStateWrite(
+                        strategy_id=strategy_id,
+                        ticker=ticker,
+                        last_target=0.0,
+                        last_side=prev.last_side,
+                        last_session_date=session_date,
+                        last_quantity=0,
+                        last_slot=slot,
+                    )
+                )
+                continue
 
             side: str | None = None
             emit_quantity = 0
@@ -469,10 +505,12 @@ def _plan_strategy(
                     stored_quantity = 0
             elif prev_inv and not now_inv:
                 side = SIDE_SELL
-                # Sell the position we opened, not a freshly sized one.
-                emit_quantity = prev.last_quantity or LEGACY_EXIT_QUANTITY
+                # Sell what is HELD. `prev.last_quantity` is the pre-Risk-Officer
+                # intent and is routinely several times the true position, so
+                # closing on it sells the position and shorts the remainder.
+                emit_quantity = int(position)
                 stored_quantity = 0
-                sizing_basis = "closing the recorded entry"
+                sizing_basis = f"closing the {emit_quantity} share(s) the account holds"
 
             if side is not None:
                 payload = _build_payload(
@@ -534,6 +572,7 @@ def plan_session(
     now: datetime,
     strategies: Sequence[StrategyInput],
     stored_state: Mapping[tuple[str, str], TargetState],
+    held: Mapping[str, float],
     factory: StrategyFactory,
     config: RunnerSignalConfig,
     regime_label: str | None,
@@ -562,6 +601,7 @@ def plan_session(
             now=now,
             item=item,
             stored_state=stored_state,
+            held=held,
             factory=factory,
             config=config,
             regime_label=regime_label,
@@ -578,7 +618,6 @@ __all__ = [
     "DEFAULT_MAX_QUANTITY",
     "DEFAULT_URGENCY",
     "FLAT_TARGET",
-    "LEGACY_EXIT_QUANTITY",
     "PRODUCED_BY",
     "SCHEMA_VERSION",
     "SIDE_BUY",

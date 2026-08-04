@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-08-03 (**KI-009 and KI-026 RESOLVED** — the funnel's first 46 admits; KI-027/028/029 added)
+**Last updated:** 2026-08-04 (**KI-030** — the Runner sold positions it never held; first fills and first real defect on the same day)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -1218,3 +1218,67 @@ when nothing reads it becomes a defect the moment something does, and nothing in
 the type system, the linter or the suite marks that transition. When a card
 makes a previously-ignored field load-bearing, its *producers* are part of that
 card's scope. Grep for the field, not just for the consumer.
+
+## KI-030 — The Runner sold positions the account never held
+
+**Status:** RESOLVED 2026-08-04, same day it was found in production.
+
+The forward test's second session opened three **short** positions on
+long-only strategies: COIN −1, UUP −6, RIVN −12 on `PA3KQN57WVXY`. Nothing had
+shorted anything. The firm sold stock it did not own.
+
+**Mechanism.** The Runner decided "am I invested" from
+`strategy_runner_state.last_target` — its own record of *intent* — and sized
+exits from `last_quantity`. Intent is not position, and two things break the
+equivalence:
+
+1. **A vetoed order.** Monday's 20 signals were all refused `UNKNOWN_STRATEGY`
+   (KI-029) and produced no orders at all. The Runner had already stamped them
+   as held. Tuesday the strategy rotated out and sold them.
+2. **A scaled order, which is every order.** The Risk Officer applies
+   `stage_fraction x regime_multiplier` — 0.25 x 0.75 = **0.1875** at the time.
+   A recorded intent of 52 GME became a 9-share fill. Closing on 52 would sell
+   the 9 and short 43.
+
+The second is the severe one. It needs no veto, no outage and no edge case: it
+fires on **every exit**, shorting roughly 81% of the intended size, and it would
+have done so on 14 more positions the same week.
+
+**The engine already knew.** It guards the sizing-failure case verbatim —
+*"An entry that could not be sized did not happen. Record it as flat: storing
+the invested weight would make next session read this as an exit and emit a
+sell for a position the firm never opened."* The guard was correct and its
+reasoning general; only its trigger was narrow. Everything downstream of the
+signal was invisible to it.
+
+**Fix (#192).** `prev_inv` and the exit quantity now come from
+`ops.position_snapshots` — what the broker reports, not what the Runner hoped.
+ADR-0017 is what makes that cheap: one strategy per account, so the account's
+positions *are* the strategy's positions and there is nothing to derive. The
+table has existed since the Risk Officer needed a book to measure; nothing read
+it.
+
+Three consequences worth stating:
+
+- **An account with no reconciliation pass is deferred, not assumed flat.** The
+  `__FLAT__` marker row is what distinguishes "the pass ran and found nothing"
+  from "no pass has run", and those must behave oppositely.
+- **A short on a long-only strategy is skipped and reported**, never sold — a
+  sell would deepen it. A human decides what to do with a book the firm did not
+  choose.
+- **`last_quantity` survives as an audit trail of intent.** Comparing it against
+  the position is now a reconciliation signal rather than a trading input.
+
+**This is KI-005 arriving.** That issue deferred position-state derivation
+"until the first Research strategy needs portfolio state," and noted ADR-0017
+"dissolves most of this rather than solving it." A real strategy needed
+portfolio state on its second day of trading, and the dissolution had never been
+wired.
+
+**The generalisable form.** A value that is *usually* equal to the thing you
+want is not that thing. `last_quantity` equalled the position for as long as
+nothing between the signal and the fill could change it — and the moment a Risk
+Officer shipped, it silently stopped, with no type change, no test failure and
+no error. When a card inserts a stage into an existing pipeline, the question is
+not only "does the new stage work" but "what did anything downstream already
+believe about what reaches it."
