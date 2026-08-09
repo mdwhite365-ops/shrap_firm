@@ -153,20 +153,45 @@ async def test_an_intent_inside_every_limit_is_approved() -> None:
 
     assert assessment.approved
     assert assessment.account_id == ACCOUNT
-    assert assessment.approved_quantity == 1  # 8 x 0.25 paper stage x 0.75 regime
+    # 8 x 0.25 paper stage x 0.75 regime. This asserted 1 until 2026-08-09 —
+    # the floor threw away a third of the position and did it silently.
+    assert assessment.approved_quantity == 1.5
 
 
-async def test_an_order_too_small_to_survive_sizing_is_refused_not_sent_empty() -> None:
+async def test_a_small_order_is_scaled_rather_than_vetoed() -> None:
+    """The 26-of-89 case, inverted.
+
+    4 shares x 0.25 x 0.75 is 0.75 of a share. That was floored to zero and
+    vetoed SIZED_TO_ZERO — which is how 26 of 89 live decisions died, every one
+    of them a request under six shares. It is a real position now.
+    """
+
     officer = _officer(FakeStore(), FakeSwitchStore())
 
     assessment = await _assess(officer, quantity=4)
+
+    assert assessment.approved
+    assert assessment.approved_quantity == 0.75
+
+
+async def test_an_order_too_small_to_be_a_position_is_still_refused() -> None:
+    """SIZED_TO_ZERO survives, with a meaning worth having.
+
+    It now fires only when the scaled order is worth less than a dollar — the
+    order being meaningless, rather than integer arithmetic eating it. At $100 a
+    share, 0.01 shares scales to 0.001875 and is worth 19 cents.
+    """
+
+    officer = _officer(FakeStore(), FakeSwitchStore())
+
+    assessment = await _assess(officer, quantity=0.01)
 
     assert not assessment.approved
     assert assessment.reason_code == "SIZED_TO_ZERO"
 
 
 async def test_the_stage_fraction_and_regime_both_apply() -> None:
-    """paper stage is 25%, late-cycle-melt-up is 75%, so 100 -> 18."""
+    """paper stage is 25%, late-cycle-melt-up is 75%, so 100 -> 18.75."""
 
     officer = _officer(FakeStore(), FakeSwitchStore())
 
@@ -182,7 +207,7 @@ async def test_the_stage_fraction_and_regime_both_apply() -> None:
     assert assessment.sizing is not None
     assert assessment.sizing.stage_fraction == 0.25
     assert assessment.regime_multiplier == 0.75
-    assert assessment.sizing.approved_quantity == 18
+    assert assessment.sizing.approved_quantity == 18.75  # was 18; the 0.75 was floored away
 
 
 async def test_the_kelly_slot_is_present_and_empty() -> None:

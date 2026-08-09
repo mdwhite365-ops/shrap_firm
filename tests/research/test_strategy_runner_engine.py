@@ -343,10 +343,13 @@ def test_equal_weights_across_a_universe_become_equal_dollars() -> None:
     notionals = {s.ticker: s.payload["quantity"] for s in plan.signals}
     prices = {"AAA": 500.0, "BBB": 25.0, "CCC": 100.0}
     spent = {t: q * prices[t] for t, q in notionals.items()}
-    # Each slot is ~$3,333; flooring costs at most one share, so allow 1 share
-    # of the priciest name as tolerance.
-    assert max(spent.values()) - min(spent.values()) <= 500.0
-    assert notionals == {"AAA": 6, "BBB": 133, "CCC": 33}
+    # Exactly equal, not equal-within-a-share. This used to allow $500 of
+    # tolerance — one share of the priciest name — because flooring made the
+    # dollars unequal by construction, and it allowed the most on exactly the
+    # names the floor hurt most. Fractional sizing removes the tolerance along
+    # with the need for it.
+    assert max(spent.values()) - min(spent.values()) == pytest.approx(0.0)
+    assert notionals == pytest.approx({"AAA": 6.6666666, "BBB": 133.33333, "CCC": 33.333333})
 
 
 def test_an_exit_sells_the_held_position_not_a_freshly_sized_one() -> None:
@@ -415,20 +418,25 @@ def test_a_short_position_is_refused_rather_than_doubled() -> None:
 def test_an_unfundable_entry_emits_nothing_and_records_flat() -> None:
     """THE trap in this card.
 
-    A 10% slot on $10,000 is $1,000, so a $1,500 name cannot be held at all.
-    Recording the *intended* weight anyway would make next session read
-    invested -> flat and emit a sell for a position that was never opened.
+    Recording the *intended* weight when nothing was bought would make next
+    session read invested -> flat and emit a sell for a position that was never
+    opened. That is KI-030 in miniature and the invariant outlives its trigger.
+
+    The trigger changed on 2026-08-09. This used to be "a $1,500 name cannot be
+    held on a $1,000 slot", which fractional sizing made false — it holds 0.667
+    of a share. What remains unfundable is a slot too small to be a position at
+    all: 0.001% of $10,000 is ten cents.
     """
 
-    strategy = FakeStrategy(name="t", warmup=3, weights={"BRKA": 0.10})
+    strategy = FakeStrategy(name="t", warmup=3, weights={"BRKA": 0.00001})
     item = _multi_input("s1", {"BRKA": 1_500.0})
     plan = _plan_one(strategy=strategy, item=item, stored={})
 
     assert plan.signals == ()
     (write,) = plan.state_writes
-    assert write.last_target == 0.0  # flat, not 0.10
+    assert write.last_target == 0.0  # flat, not the intended weight
     assert write.last_quantity == 0
-    assert any("smaller than one share" in note for note in plan.sizing_notes)
+    assert any("too small to be a position" in note for note in plan.sizing_notes)
 
 
 def test_a_clamped_entry_is_reported_rather_than_silent() -> None:

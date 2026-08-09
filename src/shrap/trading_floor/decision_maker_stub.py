@@ -72,7 +72,10 @@ def build_stub_intent(
     if side not in {"buy", "sell"}:
         raise ValueError("side must be one of ['buy', 'sell']")
 
-    size_hint = int(signal.get("size_hint", signal.get("quantity", 0)))
+    # float, not int. Narrowing here truncated every fractional quantity the
+    # Runner produced, which put the floor back one stage downstream of where
+    # it was removed.
+    size_hint = float(signal.get("size_hint", signal.get("quantity", 0)))
     if size_hint <= 0:
         raise ValueError("size_hint must be positive")
 

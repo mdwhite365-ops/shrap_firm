@@ -81,7 +81,7 @@ class RiskAssessment:
     """The portfolio layer's answer for one intent."""
 
     approved: bool
-    approved_quantity: int
+    approved_quantity: float
     reason_code: str
     notes: list[str] = field(default_factory=list)
     account_id: str | None = None
@@ -163,7 +163,7 @@ class RiskOfficer:
         *,
         ticker: str,
         side: str,
-        quantity: int,
+        quantity: float,
         strategy_ids: Sequence[str],
         regime_label: str | None = None,
         regime_band: tuple[float, float] | None = None,
@@ -276,12 +276,14 @@ class RiskOfficer:
                 stage=stage or "unknown",
                 stage_fraction=1.0,
                 regime_multiplier=1.0,
+                reference_price=price,
             )
             if reducing
             else size_intent(
                 requested_quantity=quantity,
                 stage=stage,
                 regime_multiplier=multiplier,
+                reference_price=price,
             )
         )
         if sizing.approved_quantity <= 0:

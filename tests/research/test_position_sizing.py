@@ -34,31 +34,36 @@ def test_a_weight_becomes_a_dollar_slot_then_shares() -> None:
     assert r.is_tradeable
 
 
-def test_shares_are_floored_never_rounded_up() -> None:
-    """Overshooting a slot can breach gross exposure on a small account.
+def test_a_slot_is_filled_exactly_not_floored() -> None:
+    """The slot is spent, not approximated.
 
-    $1,000 at $300/share is 3.33 shares. Rounding to 4 spends $1,200 — 12% of a
-    $10,000 book for a 10% target, and ten such positions would be 120% gross.
+    $1,000 at $300/share is 3.33 shares. This asserted 3 until 2026-08-09, on
+    the reasoning that rounding to 4 would spend $1,200 and breach gross
+    exposure. True of rounding — but flooring was never the only alternative.
+    3.333... spends exactly $1,000, which is what the strategy was evaluated at,
+    and cannot overshoot at all.
+
+    The old floor cost 10% of this position and far more on expensive names.
     """
 
     r = size_position(target_weight=0.10, equity=10_000.0, price=300.0)
-    assert r.quantity == 3
-    assert r.quantity * r.price <= r.notional_slot
+    assert r.quantity == pytest.approx(1_000.0 / 300.0)
+    assert r.quantity * r.price == pytest.approx(r.notional_slot)
 
 
-def test_a_slot_smaller_than_one_share_reports_why() -> None:
-    """The $10k case that actually bites.
+def test_a_name_pricier_than_its_slot_is_now_holdable() -> None:
+    """The $10k case that used to bite, and no longer does.
 
-    A 10% slot is $1,000, so any name above $1,000/share cannot be held at all.
-    Returning 0 silently would let a strategy quietly stop expressing part of its
-    universe with nothing to indicate it had.
+    A 10% slot is $1,000, so a $1,500 name could not be held *at all* under the
+    floor — the strategy silently stopped expressing part of its universe, and
+    the part it dropped was systematically the expensive part. Two thirds of a
+    share is the position the strategy actually asked for.
     """
 
     r = size_position(target_weight=0.10, equity=10_000.0, price=1_500.0)
-    assert r.quantity == 0
-    assert not r.is_tradeable
-    assert "smaller than one share" in r.reason
-    assert "1,500" in r.reason
+    assert r.quantity == pytest.approx(2.0 / 3.0)
+    assert r.is_tradeable
+    assert r.quantity * r.price == pytest.approx(1_000.0)
 
 
 def test_a_zero_weight_is_an_exit_not_a_failure() -> None:

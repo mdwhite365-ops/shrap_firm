@@ -8,6 +8,7 @@ intent whose preserved mode is not ``paper``.
 from __future__ import annotations
 
 import asyncio
+import math
 import signal
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -60,6 +61,8 @@ class PaperBroker(Protocol):
 
     async def get_order(self, order_id: str) -> dict[str, Any]: ...
 
+    async def is_fractionable(self, symbol: str) -> bool: ...
+
 
 class AlpacaPaperBroker:
     """Adapter from Execution Agent's broker protocol to Alpaca paper HTTP."""
@@ -67,12 +70,40 @@ class AlpacaPaperBroker:
     def __init__(self, settings: AlpacaPaperSettings, http_client: AsyncHttpClient) -> None:
         self._client = AlpacaPaperClient(settings)
         self._http_client = http_client
+        self._fractionable: dict[str, bool] = {}
 
     async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
         return await self._client.submit_order(self._http_client, order)
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
         return await self._client.get_order(self._http_client, order_id)
+
+    async def is_fractionable(self, symbol: str) -> bool:
+        """Whether ``symbol`` accepts fractional quantities, cached per process.
+
+        Cached because it is a property of the asset, not of the order, and the
+        universe is fifty names — so this is fifty lookups over a process
+        lifetime, not one per trade.
+
+        **A lookup failure answers "no".** Falling back to *fractionable* would
+        send a fraction the venue may reject, turning an unknown into a failed
+        order; falling back to *whole shares* only under-fills, which is the
+        same direction the old floor erred in and is safe to retry. The cache is
+        not populated on failure, so the next order asks again.
+        """
+
+        key = symbol.strip().upper()
+        cached = self._fractionable.get(key)
+        if cached is not None:
+            return cached
+        try:
+            asset = await self._client.get_asset(self._http_client, key)
+        except Exception:
+            log.warning("execution_agent.fractionable_lookup_failed", symbol=key, exc_info=True)
+            return False
+        allowed = bool(asset.get("fractionable", False))
+        self._fractionable[key] = allowed
+        return allowed
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
@@ -202,8 +233,30 @@ def route_for_account(event: ReceivedEvent, account_id: str) -> str:
     return Routing.MINE if intent_account == account_id else Routing.OTHER
 
 
-def build_paper_order(event: ReceivedEvent) -> dict[str, Any]:
-    """Build the broker order payload from an approved risk event."""
+def _format_quantity(quantity: float) -> str:
+    """Render a quantity for the broker without scientific notation.
+
+    Alpaca takes ``qty`` as a decimal string. ``str(0.0000001)`` yields
+    ``'1e-07'``, which is not a decimal string, so formatting is explicit.
+    Trailing zeros are stripped so a whole-share order still reads as ``"9"``
+    rather than ``"9.000000000"`` in logs and in the order table.
+    """
+
+    # Floored, not rounded: rounding up ships a hair more than the Risk Officer
+    # approved, and the direction that cannot breach a limit is down.
+    floored = math.floor(quantity * 1_000_000_000) / 1_000_000_000
+    text = f"{floored:.9f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def build_paper_order(event: ReceivedEvent, *, fractionable: bool = True) -> dict[str, Any]:
+    """Build the broker order payload from an approved risk event.
+
+    ``fractionable`` comes from the broker via
+    :meth:`AlpacaPaperBroker.is_fractionable`. It defaults to ``True`` so pure
+    tests of the payload shape need not thread it, but the live path always
+    passes the asked-for value.
+    """
 
     risk_payload = event.envelope.payload
     if risk_payload is None:
@@ -223,13 +276,23 @@ def build_paper_order(event: ReceivedEvent) -> dict[str, Any]:
     side = str(approved_intent.get("side", "")).strip().lower()
     if side not in {"buy", "sell"}:
         raise ValueError("approved intent side must be buy or sell")
-    quantity = int(approved_intent.get("quantity", 0))
+    quantity = float(approved_intent.get("quantity", 0))
     if quantity <= 0:
         raise ValueError("approved intent quantity must be positive")
+    if not fractionable:
+        # The venue will not take a fraction of this asset, so this is the one
+        # place a floor is still correct. It is reported by being the only
+        # remaining floor, and it under-fills rather than over-fills.
+        quantity = math.floor(quantity)
+        if quantity <= 0:
+            raise ValueError(
+                f"{ticker} is not fractionable and the approved quantity rounds to zero "
+                "— permanent for this intent, so it is skipped rather than retried"
+            )
 
     return {
         "symbol": ticker,
-        "qty": str(quantity),
+        "qty": _format_quantity(quantity),
         "side": side,
         "type": "market",
         "time_in_force": "day",
@@ -363,7 +426,13 @@ async def process_risk_event(
 ) -> PublishedEvent:
     """Submit one approved paper order and publish the execution event."""
 
-    order = build_paper_order(event)
+    # Asked before the payload is built, because whether a fraction is legal is
+    # the broker's fact and it changes the quantity we are allowed to send.
+    intent = (event.envelope.payload or {}).get("approved_intent_payload")
+    symbol = str(intent.get("ticker", "")).strip().upper() if isinstance(intent, dict) else ""
+    fractionable = await broker.is_fractionable(symbol) if symbol else False
+
+    order = build_paper_order(event, fractionable=fractionable)
     broker_response = await broker.submit_order(order)
     payload = build_order_submitted_payload(event, order, broker_response)
     return await EventPublisher(redis).publish(

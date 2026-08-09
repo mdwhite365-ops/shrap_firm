@@ -150,7 +150,7 @@ def _downgrade_to_veto(decision_payload: dict[str, Any], reason_code: str, note:
 
 
 def _scale_down(
-    decision_payload: dict[str, Any], quantity: int, reason_code: str, note: str
+    decision_payload: dict[str, Any], quantity: float, reason_code: str, note: str
 ) -> None:
     """Reduce an approved intent's quantity, keeping it approved.
 
@@ -274,7 +274,7 @@ async def _apply_portfolio_gate(
     assessment = await officer.assess(
         ticker=str(decision_payload.get("ticker", "")),
         side=str(intent.get("side", "buy")),
-        quantity=int(decision_payload.get("approved_quantity", 0)),
+        quantity=float(decision_payload.get("approved_quantity", 0)),
         strategy_ids=[str(s) for s in decision_payload.get("strategy_ids", [])],
         regime_label=label,
         regime_band=band,
@@ -292,7 +292,7 @@ async def _apply_portfolio_gate(
             account_id=assessment.account_id,
         )
         return
-    if assessment.approved_quantity < int(decision_payload.get("approved_quantity", 0)):
+    if assessment.approved_quantity < float(decision_payload.get("approved_quantity", 0)):
         _scale_down(
             decision_payload,
             assessment.approved_quantity,

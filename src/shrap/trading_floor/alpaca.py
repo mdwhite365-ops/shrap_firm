@@ -181,6 +181,26 @@ class AlpacaPaperClient:
         response.raise_for_status()
         return _json_object(response.json(), "Alpaca order response")
 
+    async def get_asset(
+        self,
+        http_client: AsyncHttpClient,
+        symbol: str,
+    ) -> dict[str, Any]:
+        """Fetch one asset's tradability metadata, including ``fractionable``.
+
+        Only the broker knows which symbols accept a fractional quantity, and
+        sending one for an asset that does not is a rejected order rather than a
+        smaller fill. This is a property of the venue, so it is asked rather
+        than assumed or configured.
+        """
+
+        response = await http_client.get(
+            f"{self._api_base()}/assets/{symbol}",
+            headers=self.auth_headers(),
+        )
+        response.raise_for_status()
+        return _json_object(response.json(), "Alpaca asset response")
+
 
 def _json_object(value: Any, context: str) -> dict[str, Any]:
     if not isinstance(value, dict):
