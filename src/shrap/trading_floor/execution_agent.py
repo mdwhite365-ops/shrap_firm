@@ -90,6 +90,14 @@ class AlpacaPaperBroker:
         order; falling back to *whole shares* only under-fills, which is the
         same direction the old floor erred in and is safe to retry. The cache is
         not populated on failure, so the next order asks again.
+
+        **Every answer is logged with its provenance**, because without that the
+        two "no"s are indistinguishable after the fact. An asset the venue
+        genuinely does not fractionalise and an asset whose lookup timed out
+        both produce whole-share orders and identical fills, so a transient
+        network blip would look exactly like a permanent property of the symbol
+        — and the wrong one of those is worth chasing. ``source`` separates
+        them, so the question is a grep rather than an investigation.
         """
 
         key = symbol.strip().upper()
@@ -99,10 +107,26 @@ class AlpacaPaperBroker:
         try:
             asset = await self._client.get_asset(self._http_client, key)
         except Exception:
-            log.warning("execution_agent.fractionable_lookup_failed", symbol=key, exc_info=True)
+            # Deliberately not cached: a transient failure must not pin this
+            # symbol to whole shares for the life of the process.
+            log.warning(
+                "execution_agent.fractionable_resolved",
+                symbol=key,
+                fractionable=False,
+                source="lookup_failed",
+                cached=False,
+                exc_info=True,
+            )
             return False
         allowed = bool(asset.get("fractionable", False))
         self._fractionable[key] = allowed
+        log.info(
+            "execution_agent.fractionable_resolved",
+            symbol=key,
+            fractionable=allowed,
+            source="broker",
+            cached=True,
+        )
         return allowed
 
 
