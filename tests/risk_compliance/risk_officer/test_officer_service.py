@@ -478,3 +478,81 @@ async def test_the_regime_reaches_the_assessment(label: str | None, expected: fl
     )
 
     assert assessment.regime_multiplier == expected
+
+
+# --- Exits are capped at the position, never scaled (2026-08-07 live) ---------
+#
+# `reduces_position` exempts a risk-reducing trade from sizing, but answers
+# False whenever the Officer's book does not contain the ticker, or contains
+# less than the sell. Both fell through to size_intent and scaled the exit.
+#
+# Live proof: a 6-share UUP sell was approved at 1 and stranded 5, while RIOT
+# and RIVN sells in the same second were exempt. Same predicate, two answers,
+# decided by whether a position snapshot happened to be current.
+
+
+def _held(ticker: str, quantity: float, price: float = 100.0) -> tuple[Position, ...]:
+    return (Position(ticker=ticker, quantity=quantity, market_value=quantity * price),)
+
+
+async def test_an_exit_is_capped_at_the_position_not_scaled_below_it() -> None:
+    """The UUP case. Selling 6 against 5 held must sell 5, not 1.5."""
+
+    officer = _officer(FakeStore(positions=_held("AAPL", 5.0)), FakeSwitchStore())
+
+    assessment = await _assess(officer, quantity=6, side="sell")
+
+    assert assessment.approved
+    assert assessment.approved_quantity == 5.0  # the position, not 6 x 0.25 x 0.75
+
+
+async def test_an_exit_smaller_than_the_position_is_not_scaled_at_all() -> None:
+    """A partial exit is still an exit. Stage fraction must not touch it."""
+
+    officer = _officer(FakeStore(positions=_held("AAPL", 20.0)), FakeSwitchStore())
+
+    assessment = await _assess(officer, quantity=8, side="sell")
+
+    assert assessment.approved
+    assert assessment.approved_quantity == 8.0
+    assert assessment.sizing is not None
+    assert assessment.sizing.stage_fraction == 1.0  # exempt, not scaled
+
+
+async def test_a_sell_with_no_position_is_refused_rather_than_scaled_into_a_short() -> None:
+    """The severe form, and the reason this is not merely a stranding bug.
+
+    Scaling a sell the account cannot cover does not reduce anything — it opens
+    a short of the scaled size. Approving 1 of a 6-share sell against an empty
+    book is a 1-share short nobody asked for, and needs no veto to happen.
+    """
+
+    officer = _officer(FakeStore(positions=()), FakeSwitchStore())
+
+    assessment = await _assess(officer, quantity=6, side="sell")
+
+    assert not assessment.approved
+    assert assessment.reason_code == "SELL_WITHOUT_POSITION"
+    assert assessment.approved_quantity == 0
+
+
+async def test_a_sell_against_an_existing_short_is_refused_not_deepened() -> None:
+    """A negative book is not a position to reduce. It is one to escalate."""
+
+    officer = _officer(FakeStore(positions=_held("AAPL", -4.0)), FakeSwitchStore())
+
+    assessment = await _assess(officer, quantity=3, side="sell")
+
+    assert not assessment.approved
+    assert assessment.reason_code == "SELL_WITHOUT_POSITION"
+
+
+async def test_a_buy_is_still_scaled_by_stage_and_regime() -> None:
+    """The exemption is for exits only. Entries keep taking risk deliberately."""
+
+    officer = _officer(FakeStore(positions=_held("AAPL", 5.0)), FakeSwitchStore())
+
+    assessment = await _assess(officer, quantity=8, side="buy")
+
+    assert assessment.approved
+    assert assessment.approved_quantity == 1.5  # 8 x 0.25 x 0.75, unchanged

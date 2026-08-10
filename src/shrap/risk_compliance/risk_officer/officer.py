@@ -59,6 +59,7 @@ log = structlog.get_logger(__name__)
 REASON_RISK_STATE_UNAVAILABLE = "RISK_STATE_UNAVAILABLE"
 REASON_NO_ACCOUNT = "STRATEGY_HAS_NO_ACCOUNT"
 REASON_UNKNOWN_STRATEGY = "UNKNOWN_STRATEGY"
+REASON_SELL_WITHOUT_POSITION = "SELL_WITHOUT_POSITION"
 
 # How much price history the correlation clustering reads per name. Roughly a
 # quarter of trading days — long enough for a 60-day correlation with slack,
@@ -268,24 +269,72 @@ class RiskOfficer:
         # zero — leaving a position the strategy has asked to close and cannot.
         # Same failure as the regime-tightening case in `gate.py`: a control
         # meant to contain risk trapping the firm in it.
-        reducing = reduces_position(held_value, delta)
-        sizing = (
-            SizingDecision(
+        # `reduces_position` answers False in two cases that are not "this adds
+        # risk", and both fell through to size_intent — which then SCALED AN
+        # EXIT, the exact thing the paragraph above forbids:
+        #
+        #   1. The book has no row for the ticker. `by_ticker.get(symbol, 0.0)`
+        #      defaults to zero and `reduces_position` treats zero as "no
+        #      position to reduce".
+        #   2. The sell is larger than the position, which it reads as crossing
+        #      through zero into a short.
+        #
+        # Measured live 2026-08-07: a 6-share UUP sell was approved at 1 and
+        # stranded 5, while RIOT and RIVN sells in the same second were exempt
+        # because their tickers happened to be in the book. Same predicate, two
+        # answers, decided by whether a snapshot was current.
+        #
+        # The severe form is worse than stranding. Scaling a sell the account
+        # cannot cover does not reduce anything — it OPENS A SHORT of the scaled
+        # size. That is KI-030 arriving through the Risk Officer instead of the
+        # Runner, and no veto is needed for it to happen.
+        #
+        # So sells are handled on their own terms: capped at the position, never
+        # scaled below it, and refused outright when there is no position to
+        # sell. The Officer's book and the Runner's read are up to a
+        # reconciliation interval apart (KI-005), so "the book disagrees" is a
+        # normal condition and must fail safe rather than fail small.
+        px = price if price is not None and price > 0.0 else None
+        is_sell = side.strip().lower() == "sell"
+        held_shares = (held_value / px) if px is not None else 0.0
+
+        if is_sell and px is not None and held_shares > 0.0:
+            sizing = SizingDecision(
                 requested_quantity=quantity,
-                approved_quantity=quantity,
+                approved_quantity=min(quantity, held_shares),
                 stage=stage or "unknown",
                 stage_fraction=1.0,
                 regime_multiplier=1.0,
-                reference_price=price,
+                reference_price=px,
             )
-            if reducing
-            else size_intent(
-                requested_quantity=quantity,
-                stage=stage,
-                regime_multiplier=multiplier,
-                reference_price=price,
+        elif is_sell and px is not None:
+            return RiskAssessment.refused(
+                REASON_SELL_WITHOUT_POSITION,
+                f"{symbol} sell of {quantity:g} against a book holding "
+                f"{held_shares:g} — scaling this would open a short rather than "
+                "reduce anything, so it is refused. Either the position snapshot "
+                "is stale or the strategy is exiting something it never held.",
+                account_id,
             )
-        )
+        else:
+            reducing = reduces_position(held_value, delta)
+            sizing = (
+                SizingDecision(
+                    requested_quantity=quantity,
+                    approved_quantity=quantity,
+                    stage=stage or "unknown",
+                    stage_fraction=1.0,
+                    regime_multiplier=1.0,
+                    reference_price=price,
+                )
+                if reducing
+                else size_intent(
+                    requested_quantity=quantity,
+                    stage=stage,
+                    regime_multiplier=multiplier,
+                    reference_price=price,
+                )
+            )
         if sizing.approved_quantity <= 0:
             return RiskAssessment(
                 approved=False,
