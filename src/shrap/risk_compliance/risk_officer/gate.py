@@ -31,6 +31,7 @@ Prices come from ``market_data.daily_bars``. The intent carries no price (see
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -45,6 +46,37 @@ REASON_EXCEEDS_CLUSTER_CAP = "EXCEEDS_CLUSTER_CAP"
 REASON_NO_PRICE = "NO_PRICE_FOR_EXPOSURE"
 REASON_SCALED_DOWN = "SCALED_DOWN_PORTFOLIO_LIMIT"
 
+# Bisection over a continuous quantity. 40 halvings resolve any realistic order
+# to far below a cent's worth of stock, and the loop is bounded rather than
+# convergence-tested so it cannot spin on a pathological limit function.
+BISECTION_STEPS = 40
+
+# How far above the fitting size to probe when naming the binding limit. Small
+# enough not to skip a limit, large enough to actually cross one.
+BISECTION_PROBE = 1e-6
+
+# Alpaca accepts nine decimal places on a fractional quantity, so that is the
+# finest real size and anything beyond it is bisection noise.
+QUANTITY_PRECISION = 9
+_QUANTUM: float = float(10**QUANTITY_PRECISION)
+
+
+def quantize_down(quantity: float) -> float:
+    """Snap a quantity down to the broker's precision.
+
+    Down, never nearest: the bisection converges from both sides and can settle
+    a hair *over* a limit it was meant to respect, and rounding up would ship
+    that hair to the venue.
+
+    It also restores the veto. Bisecting a book with no room lands on something
+    like 1.8e-11 rather than a clean zero, which reads as approved and would
+    submit an order for a hundred-billionth of a share. Snapping down makes it
+    the zero it means.
+    """
+
+    return math.floor(quantity * _QUANTUM) / _QUANTUM
+
+
 BUY = "buy"
 SELL = "sell"
 
@@ -54,7 +86,7 @@ class PortfolioDecision:
     """The portfolio layer's verdict on one intent."""
 
     approved: bool
-    approved_quantity: int
+    approved_quantity: float
     reason_code: str
     notes: list[str] = field(default_factory=list)
     binding_limit: str | None = None
@@ -75,7 +107,7 @@ class PortfolioDecision:
         }
 
 
-def _signed_delta(side: str, quantity: int, price: float) -> float:
+def _signed_delta(side: str, quantity: float, price: float) -> float:
     """Market-value change of the position, signed by direction."""
 
     magnitude = quantity * price
@@ -163,7 +195,7 @@ def check_portfolio(
     book: BookExposure,
     ticker: str,
     side: str,
-    quantity: int,
+    quantity: float,
     price: float | None,
     limits: PortfolioLimits,
     price_history: Mapping[str, Sequence[float]] | None = None,
@@ -197,7 +229,7 @@ def check_portfolio(
 
     baseline = _breaches(book, symbol, limits, history)
 
-    def violation_at(size: int) -> tuple[str, float, float] | None:
+    def violation_at(size: float) -> tuple[str, float, float] | None:
         projected = book.projected(symbol, _signed_delta(side, size, price))
         return _violation(projected, symbol, limits, history, baseline)
 
@@ -210,21 +242,30 @@ def check_portfolio(
         )
 
     # Largest quantity that fits. Monotone in size for every limit here — each
-    # reading moves one way as the trade grows — so a binary search is exact
-    # and avoids walking a large share count one at a time.
-    low, high = 0, quantity
-    while low < high:
-        mid = (low + high + 1) // 2
+    # reading moves one way as the trade grows — so bisection is exact to the
+    # tolerance below.
+    #
+    # This searched over integers until fractional sizing landed. On a
+    # fractional quantity an integer bisection does not merely lose precision,
+    # it reinstates the floor: it can only ever return a whole share, so a
+    # 0.94-share order that fits every limit would come back as zero and be
+    # vetoed. That is the bug this card exists to remove, hiding one layer down.
+    low, high = 0.0, quantity
+    for _ in range(BISECTION_STEPS):
+        mid = (low + high) / 2.0
         if violation_at(mid) is None:
             low = mid
         else:
-            high = mid - 1
+            high = mid
+    low = quantize_down(low)
 
     # Report the limit that actually decided the size — the one breached by the
     # first share that does NOT fit — rather than whichever limit happened to be
     # checked first at the full requested quantity. With several limits breached
     # at once these differ, and the binding one is the actionable answer.
-    name, reading, cap = violation_at(low + 1) or full
+    # Probe just above what fit, to name the limit the next increment breaches
+    # rather than whichever was checked first at full size.
+    name, reading, cap = violation_at(min(low + BISECTION_PROBE, quantity)) or full
 
     # Clusters from the PROJECTED book: a name not yet held belongs to no cluster
     # in the current one, and reporting `None` for the very cluster that blocked
@@ -247,7 +288,7 @@ def check_portfolio(
             approved=False,
             approved_quantity=0,
             reason_code=name,
-            notes=[detail, "no room for a single share at this price"],
+            notes=[detail, "no room for any position in this name at this price"],
             binding_limit=name,
             cluster=members,
         )

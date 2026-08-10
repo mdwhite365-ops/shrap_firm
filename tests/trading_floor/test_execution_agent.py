@@ -74,6 +74,11 @@ class FakeBroker:
             "status": "accepted",
         }
 
+    async def is_fractionable(self, symbol: str) -> bool:
+        # Fractional by default in tests; the non-fractionable path
+        # has its own dedicated cases.
+        return True
+
     async def get_order(self, order_id: str) -> dict[str, Any]:
         self.status_requests.append(order_id)
         return self.statuses[order_id]

@@ -9,15 +9,17 @@ approved intents — every subsequent spine smoke failed at order-submitted.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import fakeredis.aioredis
 import httpx
 import pytest
 
-from shrap.events import EventPublisher
+from shrap.events import Envelope, EventPublisher, ReceivedEvent
 from shrap.events.groups import GroupEventSubscriber
 from shrap.trading_floor.execution_agent import (
+    build_paper_order,
     is_duplicate_order_error,
     is_unknown_order_error,
     poll_once,
@@ -114,6 +116,11 @@ class ScriptedBroker:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+    async def is_fractionable(self, symbol: str) -> bool:
+        # Fractional by default in tests; the non-fractionable path
+        # has its own dedicated cases.
+        return True
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
         raise AssertionError("not used")
@@ -260,6 +267,11 @@ class StatusBroker:
     async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
         raise AssertionError("not used")
 
+    async def is_fractionable(self, symbol: str) -> bool:
+        # Fractional by default in tests; the non-fractionable path
+        # has its own dedicated cases.
+        return True
+
     async def get_order(self, order_id: str) -> dict[str, Any]:
         self.asked.append(order_id)
         outcome = self._outcomes[order_id]
@@ -376,3 +388,77 @@ async def test_a_systemic_error_in_the_status_loop_still_retries() -> None:
     assert processed == 0
     redelivered = await subscriber_for(redis).read(["execution.order.submitted"], block_ms=1)
     assert len(redelivered) == 1
+
+
+# --- Fractional quantities (2026-08-09) ---------------------------------------
+#
+# The firm floored every order twice: once in the Runner turning a notional slot
+# into shares, once in the Risk Officer scaling that share count. 26 of 89 live
+# decisions died SIZED_TO_ZERO, every one a request under six shares, and the
+# survivors were systematically the cheap names. Quantities are fractional now,
+# and the only floor left is the one a non-fractionable asset forces.
+
+
+def _intent_event(quantity: float, ticker: str = "AAPL") -> ReceivedEvent:
+    return ReceivedEvent(
+        stream="risk.intent.approved",
+        redis_stream_id="1783203414014-0",
+        envelope=Envelope(
+            event_id="01APPROVED",
+            schema_version="1.0.0",
+            produced_at=datetime.now(UTC),
+            produced_by="risk/pre-trade-checker",
+            payload={
+                "approved": True,
+                "approved_intent_payload": {
+                    "ticker": ticker,
+                    "account_id": "PA3TESTACCT",
+                    "side": "buy",
+                    "quantity": quantity,
+                    "mode": "paper",
+                },
+            },
+        ),
+    )
+
+
+def test_a_fractionable_asset_keeps_its_fraction() -> None:
+    order = build_paper_order(_intent_event(0.75), fractionable=True)
+    assert order["qty"] == "0.75"
+
+
+def test_a_whole_quantity_still_reads_as_a_whole_number() -> None:
+    """9.0 must not reach the broker or the order table as "9.000000000"."""
+
+    order = build_paper_order(_intent_event(9.0), fractionable=True)
+    assert order["qty"] == "9"
+
+
+def test_a_tiny_quantity_is_decimal_not_scientific_notation() -> None:
+    """str(1e-07) is '1e-07', which Alpaca does not accept as a quantity."""
+
+    order = build_paper_order(_intent_event(0.0000001), fractionable=True)
+    assert order["qty"] == "0.0000001"
+
+
+def test_a_non_fractionable_asset_is_floored_not_rejected() -> None:
+    order = build_paper_order(_intent_event(3.9), fractionable=False)
+    assert order["qty"] == "3"
+
+
+def test_a_non_fractionable_asset_under_one_share_refuses_permanently() -> None:
+    """ValueError, deliberately: it routes to the ack-and-skip branch.
+
+    The venue will never accept 0.75 of this asset, so retrying is the poison
+    pill this module exists to prevent.
+    """
+
+    with pytest.raises(ValueError, match="not fractionable"):
+        build_paper_order(_intent_event(0.75), fractionable=False)
+
+
+def test_quantity_is_floored_to_broker_precision_never_rounded_up() -> None:
+    """Rounding up ships more than the Risk Officer approved."""
+
+    order = build_paper_order(_intent_event(1.9999999999), fractionable=True)
+    assert order["qty"] == "1.999999999"

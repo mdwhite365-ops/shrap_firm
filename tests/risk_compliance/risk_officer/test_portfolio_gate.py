@@ -291,3 +291,23 @@ def test_a_zero_price_is_refused_the_same_way() -> None:
 
     assert not decision.approved
     assert decision.reason_code == REASON_NO_PRICE
+
+
+def test_the_bisection_returns_a_fraction_not_a_whole_share() -> None:
+    """The floor's last hiding place.
+
+    The portfolio gate searched over integers, so even after sizing went
+    fractional it could only ever hand back a whole share — reinstating the
+    floor one layer below where it was removed. A book with room for 2.5 shares
+    must approve 2.5, not 2.
+    """
+
+    from shrap.risk_compliance.risk_officer.gate import quantize_down
+
+    assert quantize_down(2.5) == 2.5
+    # Snapped DOWN: bisection converges from both sides and can settle a hair
+    # over the limit it was meant to respect.
+    assert quantize_down(15.000000000081855) == 15.0
+    # And a book with no room lands on noise, not on a clean zero. Without this
+    # the veto reads as an approval for a hundred-billionth of a share.
+    assert quantize_down(1.8189894035458565e-11) == 0.0

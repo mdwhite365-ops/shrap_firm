@@ -147,7 +147,7 @@ class TargetState:
     last_target: float
     last_side: str | None
     last_session_date: date | None
-    last_quantity: int = 0
+    last_quantity: float = 0.0
     last_slot: str = SESSION_SLOT
     """The decision slot this row was last stamped in (:mod:`.cadence`).
 
@@ -156,7 +156,9 @@ class TargetState:
     """
 
 
-FLAT_TARGET = TargetState(last_target=0.0, last_side=None, last_session_date=None, last_quantity=0)
+FLAT_TARGET = TargetState(
+    last_target=0.0, last_side=None, last_session_date=None, last_quantity=0.0
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +194,7 @@ class PlannedStateWrite:
     last_target: float
     last_side: str | None
     last_session_date: date
-    last_quantity: int = 0
+    last_quantity: float = 0.0
     last_slot: str = SESSION_SLOT
 
 
@@ -228,7 +230,7 @@ def _justification(
     ticker: str,
     prev_invested: bool,
     now_invested: bool,
-    quantity: int,
+    quantity: float,
     sizing: str,
 ) -> str:
     """Explain the transition *and* the size.
@@ -242,7 +244,7 @@ def _justification(
     now = "invested" if now_invested else "flat"
     return (
         f"Strategy '{strategy_name}' ({strategy_id}) target for {ticker} changed "
-        f"{prev} -> {now}; {quantity} share(s) {sizing}. "
+        f"{prev} -> {now}; {quantity:g} share(s) {sizing}. "
         "Paper-stage strategy runner; not investment advice."
     )
 
@@ -252,7 +254,7 @@ def _build_payload(
     strategy_id: str,
     ticker: str,
     side: str,
-    quantity: int,
+    quantity: float,
     account_id: str,
     config: RunnerSignalConfig,
     regime_label: str | None,
@@ -464,14 +466,14 @@ def _plan_strategy(
                         last_target=0.0,
                         last_side=prev.last_side,
                         last_session_date=session_date,
-                        last_quantity=0,
+                        last_quantity=0.0,
                         last_slot=slot,
                     )
                 )
                 continue
 
             side: str | None = None
-            emit_quantity = 0
+            emit_quantity = 0.0
             sizing_basis = ""
             # An untouched ticker keeps its stored position; only a transition
             # changes what we believe we hold.
@@ -502,15 +504,18 @@ def _plan_strategy(
                     # session read this as an exit and emit a sell for a
                     # position the firm never opened.
                     stored_target = 0.0
-                    stored_quantity = 0
+                    stored_quantity = 0.0
             elif prev_inv and not now_inv:
                 side = SIDE_SELL
                 # Sell what is HELD. `prev.last_quantity` is the pre-Risk-Officer
                 # intent and is routinely several times the true position, so
                 # closing on it sells the position and shorts the remainder.
-                emit_quantity = int(position)
-                stored_quantity = 0
-                sizing_basis = f"closing the {emit_quantity} share(s) the account holds"
+                # Exactly what is held, fraction included. This was `int(position)`,
+                # which strands the remainder of a fractional position — and once
+                # entries are fractional, every position is fractional.
+                emit_quantity = float(position)
+                stored_quantity = 0.0
+                sizing_basis = f"closing the {emit_quantity:g} share(s) the account holds"
 
             if side is not None:
                 payload = _build_payload(

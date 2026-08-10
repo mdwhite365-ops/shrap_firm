@@ -73,6 +73,11 @@ class SequencedBroker:
     async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
         raise AssertionError("not used")
 
+    async def is_fractionable(self, symbol: str) -> bool:
+        # Fractional by default in tests; the non-fractionable path
+        # has its own dedicated cases.
+        return True
+
     async def get_order(self, order_id: str) -> dict[str, Any]:
         self.get_order_calls.append(order_id)
         if not self._responses:
@@ -153,6 +158,11 @@ class RaisingBroker:
 
     async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
         raise AssertionError("not used")
+
+    async def is_fractionable(self, symbol: str) -> bool:
+        # Fractional by default in tests; the non-fractionable path
+        # has its own dedicated cases.
+        return True
 
     async def get_order(self, order_id: str) -> dict[str, Any]:
         self.get_order_calls.append(order_id)
@@ -251,6 +261,11 @@ async def test_repoll_survives_broker_error_and_retries_later() -> None:
     class FailingBroker:
         async def submit_order(self, order: dict[str, Any]) -> dict[str, Any]:
             raise AssertionError("not used")
+
+        async def is_fractionable(self, symbol: str) -> bool:
+            # Fractional by default in tests; the non-fractionable path
+            # has its own dedicated cases.
+            return True
 
         async def get_order(self, order_id: str) -> dict[str, Any]:
             raise RuntimeError("broker unreachable")

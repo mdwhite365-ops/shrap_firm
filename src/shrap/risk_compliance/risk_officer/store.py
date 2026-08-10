@@ -186,8 +186,8 @@ class DecisionRow:
     side: str | None
     approved: bool
     reason_code: str
-    requested_quantity: int | None
-    approved_quantity: int | None
+    requested_quantity: float | None
+    approved_quantity: float | None
     binding_limit: str | None
     strategy_ids: list[str]
     detail: dict[str, Any]
