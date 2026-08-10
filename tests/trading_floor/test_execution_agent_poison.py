@@ -19,6 +19,7 @@ import pytest
 from shrap.events import Envelope, EventPublisher, ReceivedEvent
 from shrap.events.groups import GroupEventSubscriber
 from shrap.trading_floor.execution_agent import (
+    AlpacaPaperBroker,
     build_paper_order,
     is_duplicate_order_error,
     is_unknown_order_error,
@@ -462,3 +463,105 @@ def test_quantity_is_floored_to_broker_precision_never_rounded_up() -> None:
 
     order = build_paper_order(_intent_event(1.9999999999), fractionable=True)
     assert order["qty"] == "1.999999999"
+
+
+# --- Fractionable cache provenance -------------------------------------------
+#
+# A cached False from a transient lookup failure and a legitimately
+# non-fractionable asset produce identical orders and identical fills. Without
+# provenance on the log line the two are indistinguishable after the fact, and
+# the wrong one is worth chasing.
+
+
+class RecordingLog:
+    """Captures structlog-style kwargs for assertion."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, Any]]] = []
+
+    def info(self, event: str, **kw: Any) -> None:
+        self.events.append((event, kw))
+
+    def warning(self, event: str, **kw: Any) -> None:
+        self.events.append((event, kw))
+
+    def exception(self, event: str, **kw: Any) -> None:
+        self.events.append((event, kw))
+
+    def error(self, event: str, **kw: Any) -> None:
+        self.events.append((event, kw))
+
+
+class FakeAssetClient:
+    def __init__(self, outcome: dict[str, Any] | Exception) -> None:
+        self._outcome = outcome
+        self.calls: list[str] = []
+
+    async def get_asset(self, http_client: Any, symbol: str) -> dict[str, Any]:
+        self.calls.append(symbol)
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+def _broker_with(outcome: dict[str, Any] | Exception) -> tuple[Any, FakeAssetClient, RecordingLog]:
+    broker = AlpacaPaperBroker.__new__(AlpacaPaperBroker)
+    client = FakeAssetClient(outcome)
+    broker._client = client  # type: ignore[attr-defined]
+    broker._http_client = None  # type: ignore[attr-defined]
+    broker._fractionable = {}  # type: ignore[attr-defined]
+    recorder = RecordingLog()
+    return broker, client, recorder
+
+
+@pytest.mark.asyncio
+async def test_a_broker_answer_is_logged_with_its_source_and_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker, client, recorder = _broker_with({"fractionable": True})
+    monkeypatch.setattr("shrap.trading_floor.execution_agent.log", recorder)
+
+    assert await broker.is_fractionable("aapl") is True
+    # Second call is served from cache: no second broker hit, no second log.
+    assert await broker.is_fractionable("AAPL") is True
+    assert client.calls == ["AAPL"]
+
+    (event, kw) = recorder.events[0]
+    assert event == "execution_agent.fractionable_resolved"
+    assert kw["symbol"] == "AAPL"
+    assert kw["fractionable"] is True
+    assert kw["source"] == "broker"
+    assert kw["cached"] is True
+    assert len(recorder.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_lookup_is_distinguishable_from_a_real_no(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point: both answer False, and only the log tells them apart."""
+
+    broker, _client, recorder = _broker_with(RuntimeError("alpaca timeout"))
+    monkeypatch.setattr("shrap.trading_floor.execution_agent.log", recorder)
+
+    assert await broker.is_fractionable("UUP") is False
+
+    (_, kw) = recorder.events[0]
+    assert kw["fractionable"] is False
+    assert kw["source"] == "lookup_failed"  # not "broker"
+    assert kw["cached"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_failed_lookup_is_retried_rather_than_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A network blip must not pin a symbol to whole shares for the process."""
+
+    broker, client, recorder = _broker_with(RuntimeError("alpaca timeout"))
+    monkeypatch.setattr("shrap.trading_floor.execution_agent.log", recorder)
+
+    await broker.is_fractionable("UUP")
+    await broker.is_fractionable("UUP")
+
+    assert client.calls == ["UUP", "UUP"]  # asked again, not cached
