@@ -71,6 +71,34 @@ class BookExposure:
             totals[key] = totals.get(key, 0.0) + position.market_value
         return totals
 
+    @property
+    def shares_by_ticker(self) -> Mapping[str, float]:
+        """Signed **share count** per ticker, as the broker reported it.
+
+        Distinct from :attr:`by_ticker`, which is market value, and the
+        distinction is load-bearing. Anything needing a share count must read it
+        from here rather than deriving it as ``market_value / price``: the
+        market value carries the broker's mark from the moment of the snapshot,
+        and any price a caller has to hand is a different, later one. Dividing
+        one by the other yields a share count that is wrong by however much the
+        name moved in between.
+
+        That derivation shipped in #196 and stranded a residue on every exit —
+        selling the understated count and leaving the difference — until two
+        accounts held 12 and 27 names for strategies that hold ten.
+        """
+
+        totals: dict[str, float] = {}
+        for position in self.positions:
+            key = position.ticker.strip().upper()
+            totals[key] = totals.get(key, 0.0) + position.quantity
+        return totals
+
+    def shares(self, ticker: str) -> float:
+        """Signed share count of one name. 0.0 when not held."""
+
+        return self.shares_by_ticker.get(ticker.strip().upper(), 0.0)
+
     def weight(self, ticker: str) -> float:
         """Signed weight of one name. 0.0 when not held."""
 
@@ -98,6 +126,9 @@ class BookExposure:
         existing = self.by_ticker.get(key, 0.0)
         combined = existing + delta_market_value
         if combined != 0.0:
+            # quantity=0.0 because a projection is expressed in market value and
+            # has no share count to offer. So `shares_by_ticker` is meaningless
+            # on a projected book — read share counts from the real one only.
             remaining.append(Position(ticker=key, quantity=0.0, market_value=combined))
         return BookExposure(nav=self.nav, positions=tuple(remaining))
 
