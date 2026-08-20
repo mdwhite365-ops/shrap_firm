@@ -81,8 +81,19 @@ SYNTHESIS_SYSTEM_PROMPT = (
     '- "expected_impact_horizon": one of "<1y", "1-3y", "3-5y", "5-10y", ">10y", '
     'or "horizon unknown" (preferred over a fabricated one)\n'
     '- "kill_criteria": array of observable conditions, each naming a published '
-    "metric and a threshold (e.g. \"vendor X's capacity guidance falls below 2x "
-    'by FY27 earnings call") — never vague\n'
+    "metric and a threshold. **Each one must be a condition that, if OBSERVED, "
+    "proves the thesis WRONG.** Do not list conditions that would confirm it. "
+    "Before writing each criterion, ask: if this happened, would I abandon the "
+    "thesis? If the honest answer is that it would encourage you, the criterion "
+    "is inverted and must be rewritten.\n"
+    "  GOOD (the thesis dies): \"vendor X's capacity guidance falls below 2x by "
+    'FY27 earnings call"; "unit cost stays above $800/kg through 2030"\n'
+    "  BAD  (the thesis thrives): \"vendor X's capacity exceeds 200 units by "
+    'FY27"; "unit cost falls below $800/kg by 2030"\n'
+    "  The two read almost identically and mean opposite things. A candidate "
+    "whose criteria fire on success can never be killed by evidence — it dies "
+    "exactly when it is right and survives forever when it is wrong, which is "
+    "worse than having no criteria at all. Never vague.\n"
     '- "falsifier_horizon": the date (YYYY or YYYY-MM) by which at least one kill '
     "criterion is observable\n"
     '- "dependency_graph_seed": array of 3-10 supply-chain layer names that would '
