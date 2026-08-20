@@ -51,12 +51,38 @@ CREATE TABLE IF NOT EXISTS risk.decisions (
     side TEXT,
     approved BOOLEAN NOT NULL,
     reason_code TEXT NOT NULL,
-    requested_quantity INTEGER,
-    approved_quantity INTEGER,
+    requested_quantity DOUBLE PRECISION,
+    approved_quantity DOUBLE PRECISION,
     binding_limit TEXT,
     strategy_ids JSONB,
     detail JSONB
 )
+""".strip()
+
+# The columns were declared INTEGER when quantities were whole shares. #195
+# made them fractional and Postgres kept accepting the writes by ROUNDING, so
+# the audit trail quietly disagreed with the book: a 0.1875-share approval that
+# filled for 0.1875 shares was recorded as 0.
+#
+# Nothing failed and nothing was logged, which is why it survived nine days of
+# trading and two wrong theories about this table. The forensic record is the
+# one place a silent disagreement with reality is least acceptable.
+#
+# Guarded on the current type rather than run unconditionally: ALTER COLUMN TYPE
+# rewrites the table, and this runs on every service start.
+ALTER_DECISIONS_FRACTIONAL_QUANTITY_SQL = """
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'risk' AND table_name = 'decisions'
+          AND column_name = 'approved_quantity' AND data_type = 'integer'
+    ) THEN
+        ALTER TABLE risk.decisions
+            ALTER COLUMN requested_quantity TYPE DOUBLE PRECISION,
+            ALTER COLUMN approved_quantity TYPE DOUBLE PRECISION;
+    END IF;
+END $$
 """.strip()
 
 CREATE_DECISIONS_AT_INDEX_SQL = """
@@ -206,6 +232,7 @@ class RiskStore:
             for statement in (
                 CREATE_RISK_SCHEMA_SQL,
                 CREATE_DECISIONS_TABLE_SQL,
+                ALTER_DECISIONS_FRACTIONAL_QUANTITY_SQL,
                 CREATE_DECISIONS_AT_INDEX_SQL,
                 CREATE_DECISIONS_VETO_INDEX_SQL,
                 CREATE_KILL_SWITCHES_TABLE_SQL,
@@ -326,6 +353,7 @@ class RiskStore:
 
 
 __all__ = [
+    "ALTER_DECISIONS_FRACTIONAL_QUANTITY_SQL",
     "CREATE_DECISIONS_TABLE_SQL",
     "CREATE_KILL_SWITCHES_TABLE_SQL",
     "CREATE_RISK_SCHEMA_SQL",
