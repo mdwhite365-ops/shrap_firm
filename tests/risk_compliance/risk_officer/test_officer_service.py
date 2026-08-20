@@ -556,3 +556,59 @@ async def test_a_buy_is_still_scaled_by_stage_and_regime() -> None:
 
     assert assessment.approved
     assert assessment.approved_quantity == 1.5  # 8 x 0.25 x 0.75, unchanged
+
+
+# --- Exits use the broker's share count, not market_value / price -------------
+#
+# #196 derived held shares by division. The market value carries the mark from
+# the moment of the position snapshot; `price` is a later close. When the name
+# moved between them the derived count is wrong, min(requested, held) sells the
+# understated figure, and the difference is stranded.
+#
+# Measured 2026-08-19 across two live books: dust at nine decimals (DKNG
+# 0.060078927 = $1.52, U 0.012648483 = $0.59) and 27 open names in an account
+# running a top-ten strategy, because no exit ever completed.
+
+
+async def test_an_exit_sells_the_broker_share_count_not_a_derived_one() -> None:
+    """The position is marked at $100; the latest close is $125.
+
+    Deriving shares as 500/125 gives 4 and strands 1 of the 5 actually held.
+    """
+
+    positions = (Position(ticker="AAPL", quantity=5.0, market_value=500.0),)
+    officer = _officer(FakeStore(positions=positions, price=125.0), FakeSwitchStore())
+
+    assessment = await _assess(officer, quantity=5, side="sell")
+
+    assert assessment.approved
+    assert assessment.approved_quantity == 5.0  # not 4.0
+
+
+async def test_a_full_exit_leaves_no_residue_when_the_price_fell() -> None:
+    """The other direction. A fallen price overstates the derived count, which
+    `min` hides — but the same division is wrong, and asserting both directions
+    keeps the fix from being a one-sided patch."""
+
+    positions = (Position(ticker="AAPL", quantity=5.0, market_value=500.0),)
+    officer = _officer(FakeStore(positions=positions, price=50.0), FakeSwitchStore())
+
+    assessment = await _assess(officer, quantity=5, side="sell")
+
+    assert assessment.approved
+    assert assessment.approved_quantity == 5.0
+
+
+def test_share_counts_and_market_values_are_separate_readings() -> None:
+    """The distinction the derivation collapsed."""
+
+    from shrap.risk_compliance.risk_officer.exposure import BookExposure
+
+    book = BookExposure(
+        nav=10_000.0,
+        positions=(Position(ticker="AAPL", quantity=5.0, market_value=500.0),),
+    )
+
+    assert book.shares("AAPL") == 5.0
+    assert book.by_ticker["AAPL"] == 500.0
+    assert book.shares("MSFT") == 0.0  # not held

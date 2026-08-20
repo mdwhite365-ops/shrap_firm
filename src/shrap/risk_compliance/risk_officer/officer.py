@@ -294,9 +294,23 @@ class RiskOfficer:
         # sell. The Officer's book and the Runner's read are up to a
         # reconciliation interval apart (KI-005), so "the book disagrees" is a
         # normal condition and must fail safe rather than fail small.
+        # The broker's own share count, NOT market_value / price.
+        #
+        # #196 derived it by division and stranded a residue on every exit. The
+        # market value carries the mark from the moment of the snapshot; `price`
+        # is a later close. Divide one by the other and the share count is wrong
+        # by however much the name moved between them, so `min(requested, held)`
+        # sells the understated figure and leaves the rest behind.
+        #
+        # Measured 2026-08-19: dust at nine decimals across both books — DKNG
+        # 0.060078927 ($1.52), U 0.012648483 ($0.59) — and 27 open names in an
+        # account running a top-ten strategy, because each session sold most of
+        # the remainder and never all of it. That is the "sell a quarter, then a
+        # quarter of the remainder" failure the comment above warns about,
+        # arrived at by mismeasuring rather than by scaling.
         px = price if price is not None and price > 0.0 else None
         is_sell = side.strip().lower() == "sell"
-        held_shares = (held_value / px) if px is not None else 0.0
+        held_shares = book.shares(symbol)
 
         if is_sell and px is not None and held_shares > 0.0:
             sizing = SizingDecision(
