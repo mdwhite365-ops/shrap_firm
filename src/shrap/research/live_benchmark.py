@@ -52,6 +52,12 @@ from dataclasses import dataclass
 from datetime import date
 from itertools import pairwise
 
+from shrap.research.forward_score import (
+    DEFAULT_MIN_SESSIONS_FOR_RATE,
+    TRADING_DAYS_PER_YEAR,
+)
+from shrap.research.strategy_evaluator.engine import sharpe
+
 # Below this the number describes the sample, not the strategy. Deliberately
 # lower than forward_score's 20-session floor for an annualised *rate*: an
 # excess return over a handful of sessions is at least a fact about those
@@ -93,7 +99,45 @@ class LiveComparison:
     excess: float
     average_exposure: float
     underpowered: bool
+    excess_series: tuple[float, ...] = ()
+    """Per-session excess. Kept because its *dispersion* is the whole question:
+    a cumulative +0.069% over nine sessions is meaningless without it."""
     reason: str = ""
+
+    @property
+    def information_ratio(self) -> float | None:
+        """Annualised IR of the exposure-adjusted excess, or ``None``.
+
+        **The same statistic the promote gate uses**, computed with the same
+        function — :func:`~shrap.research.strategy_evaluator.engine.sharpe` over
+        an active-return series. Reimplementing it here would create a second
+        definition of the firm's central metric, and a live IR that could not be
+        set beside the backtest IR that admitted the strategy is the exact thing
+        this module exists to fix.
+
+        ``None`` rather than 0.0 when the series cannot support one: `sharpe`
+        returns 0.0 both for a flat series and for one too short to measure, and
+        those mean different things. A zero IR is a finding; an undefined one is
+        an absence of data.
+        """
+
+        if len(self.excess_series) < 2:
+            return None
+        if all(value == self.excess_series[0] for value in self.excess_series):
+            return None  # zero dispersion: sharpe would return 0.0, meaning "undefined"
+        return sharpe(self.excess_series, TRADING_DAYS_PER_YEAR)
+
+    @property
+    def ratio_is_meaningful(self) -> bool:
+        """Whether the window supports an annualised figure at all.
+
+        Mirrors :data:`~shrap.research.forward_score.DEFAULT_MIN_SESSIONS_FOR_RATE`
+        deliberately. Annualising multiplies by sqrt(252), so nine sessions
+        produce a confident-looking number from nothing — "noise wearing a
+        CAGR's clothes", as forward_score puts it about the same trap.
+        """
+
+        return self.sessions >= DEFAULT_MIN_SESSIONS_FOR_RATE
 
     @property
     def is_scored(self) -> bool:
@@ -117,6 +161,7 @@ def _refused(reason: str) -> LiveComparison:
         excess=0.0,
         average_exposure=0.0,
         underpowered=True,
+        excess_series=(),
         reason=reason,
     )
 
@@ -145,6 +190,7 @@ def compare_to_benchmark(
 
     excess = 0.0
     entitled = 0.0
+    per_session: list[float] = []
     exposures: list[float] = []
     benchmark_compounded = 1.0
 
@@ -156,7 +202,9 @@ def compare_to_benchmark(
         carried = previous.exposure_fraction
         attributed = carried * benchmark_move
         entitled += attributed
-        excess += account_move - attributed
+        session_excess = account_move - attributed
+        per_session.append(session_excess)
+        excess += session_excess
         exposures.append(carried)
         benchmark_compounded *= 1.0 + benchmark_move
 
@@ -168,6 +216,7 @@ def compare_to_benchmark(
         excess=excess,
         average_exposure=sum(exposures) / len(exposures),
         underpowered=len(benchmark_returns) < min_sessions,
+        excess_series=tuple(per_session),
     )
 
 

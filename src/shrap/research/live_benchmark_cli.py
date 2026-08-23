@@ -10,6 +10,12 @@ Reads three tables the firm already maintains and reports the comparison from
 Read-only. It computes and prints; it never writes a decision, a state row or an
 order, so it is safe to run against production at any time.
 
+**Needs numpy**, via the promote gate's `sharpe` — reused rather than
+reimplemented, because a second definition of the firm's central metric would
+produce a live IR that cannot be set beside the backtest IR that admitted the
+strategy. `strategy-runner` already carries numpy and pandas, so run it there;
+a lighter container will fail on import (runbook s1e).
+
 **Both readings are printed on purpose.** The naive one — account return against
 a fully invested benchmark — is the number anyone would reach for, and on
 2026-08-19 it said the strategy lost by 1.13pp while the exposure-matched one
@@ -145,6 +151,20 @@ def render(series: Sequence[AccountSeries], closes: dict[str, dict[date, float]]
         lines.append(f"  average exposure        {result.average_exposure * 100:8.1f}%")
         lines.append(f"  entitled at that size   {result.entitled_return * 100:+8.3f}%")
         lines.append(f"  EXCESS                  {result.excess * 100:+8.3f}%")
+        ratio = result.information_ratio
+        if ratio is None:
+            lines.append("  information ratio            n/a (series too short or flat)")
+        elif result.ratio_is_meaningful:
+            lines.append(f"  information ratio       {ratio:+8.2f}   (promote floor 0.50)")
+        else:
+            # Annualising multiplies by sqrt(252). Below the session floor the
+            # figure is arithmetic, not evidence, and printing it beside the
+            # promote floor without saying so invites exactly the comparison it
+            # cannot support.
+            lines.append(
+                f"  information ratio       {ratio:+8.2f}   "
+                f"NOT MEANINGFUL at {result.sessions} sessions"
+            )
         if result.average_exposure <= 0.0:
             # A book that was never invested did not compete. Calling that a
             # loss reads as a verdict on a strategy that never placed a trade.

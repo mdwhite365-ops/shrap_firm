@@ -169,3 +169,59 @@ def test_the_2026_08_19_measurement_reproduces() -> None:
     assert result.excess == pytest.approx(0.0037, abs=5e-5)
     assert not result.beat_benchmark_naively  # 0.70% < 1.825%
     assert result.excess > 0  # ...and yet it beat what it was owed
+
+
+# --- Live information ratio ---------------------------------------------------
+#
+# The statistic that makes a forward test comparable to the gate that admitted
+# the strategy. A cumulative excess of +0.069% over nine sessions is not
+# interpretable; its dispersion is what decides whether it is anything at all.
+
+
+def test_the_live_ratio_uses_the_same_function_as_the_promote_gate() -> None:
+    """Not a reimplementation. A second definition of the firm's central metric
+    would give a live IR that cannot be set beside the backtest IR."""
+
+    from shrap.research.forward_score import TRADING_DAYS_PER_YEAR
+    from shrap.research.strategy_evaluator.engine import sharpe
+
+    points = _points([10_000.0, 10_020.0, 10_010.0, 10_040.0], exposure_fraction=0.2)
+    result = compare_to_benchmark(points, [0.001, -0.002, 0.003], min_sessions=1)
+
+    assert result.information_ratio == pytest.approx(
+        sharpe(result.excess_series, TRADING_DAYS_PER_YEAR)
+    )
+
+
+def test_a_short_window_reports_a_ratio_but_denies_it_is_meaningful() -> None:
+    """Nine sessions annualised by sqrt(252) looks confident and is not."""
+
+    points = _points([10_000.0, 10_020.0, 10_010.0], exposure_fraction=0.2)
+
+    result = compare_to_benchmark(points, [0.001, -0.002], min_sessions=1)
+
+    assert result.information_ratio is not None
+    assert not result.ratio_is_meaningful
+
+
+def test_a_flat_excess_series_has_no_ratio_rather_than_a_zero_one() -> None:
+    """`sharpe` returns 0.0 for both a flat series and an unmeasurable one.
+    A zero IR is a finding; an undefined one is an absence of data."""
+
+    points = _points([10_000.0, 10_000.0, 10_000.0], exposure_fraction=0.0)
+
+    result = compare_to_benchmark(points, [0.0, 0.0], min_sessions=1)
+
+    assert result.excess_series == (0.0, 0.0)
+    assert result.information_ratio is None
+
+
+def test_the_excess_series_sums_to_the_reported_excess() -> None:
+    """The series and the headline must not be able to disagree."""
+
+    points = _points([10_000.0, 10_050.0, 10_030.0, 10_080.0], exposure_fraction=0.25)
+
+    result = compare_to_benchmark(points, [0.01, -0.004, 0.006], min_sessions=1)
+
+    assert len(result.excess_series) == 3
+    assert sum(result.excess_series) == pytest.approx(result.excess)
