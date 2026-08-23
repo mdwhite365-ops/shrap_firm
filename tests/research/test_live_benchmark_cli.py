@@ -113,3 +113,81 @@ def test_the_parser_requires_an_explicit_window() -> None:
     assert args.start == "2026-08-06"
     with pytest.raises(SystemExit):
         parser.parse_args(["--start", "2026-08-06"])
+
+
+# --- Defects found on the first live run, 2026-08-23 --------------------------
+
+
+def test_non_trading_days_are_dropped_from_the_window() -> None:
+    """The account tables run seven days a week; the market does not.
+
+    A weekend carries no bar, so the benchmark reads 0.0 across it while equity
+    still moves — putting the whole Friday-to-Monday move into `excess` with
+    nothing to offset it. The first live run reported "14 sessions" over a
+    fortnight holding 10 trading days.
+    """
+
+    thu, fri, sat, sun, mon = (
+        date(2026, 8, 6),
+        date(2026, 8, 7),
+        date(2026, 8, 8),
+        date(2026, 8, 9),
+        date(2026, 8, 10),
+    )
+    series = AccountSeries(
+        account_id="PA3TEST",
+        points=tuple(
+            SessionPoint(session_date=d, equity=10_000.0, gross_exposure=2_000.0)
+            for d in (thu, fri, sat, sun, mon)
+        ),
+    )
+    closes = {"AAA": {thu: 100.0, fri: 101.0, mon: 102.0}}  # no weekend bars
+
+    out = render([series], closes)
+
+    assert "2 sessions" in out  # three trading days -> two transitions
+    assert "2 non-trading day(s) dropped" in out
+
+
+def test_a_never_invested_account_did_not_play() -> None:
+    """Zero excess on zero exposure is not a loss.
+
+    The renderer read `excess > 0` as the only way to not lose, so an all-cash
+    account was reported as having "lost to" the benchmark — a verdict on a
+    strategy that never placed a trade.
+    """
+
+    dates = [date(2026, 8, 6), date(2026, 8, 7)]
+    series = AccountSeries(
+        account_id="PA3YPMG9AD4Z",
+        points=tuple(
+            SessionPoint(session_date=d, equity=10_000.0, gross_exposure=0.0) for d in dates
+        ),
+    )
+
+    out = render([series], _closes(dates, [100.0, 102.0]))
+
+    assert "did not play" in out
+    assert "lost to it" not in out
+
+
+def test_the_benchmark_is_buy_and_hold_not_daily_rebalanced() -> None:
+    """The two are different books and gave +1.825% against +2.403% live.
+
+    Two names moving oppositely and back: buy-and-hold ends where it started,
+    daily rebalancing does not.
+    """
+
+    dates = [date(2026, 8, 6), date(2026, 8, 7), date(2026, 8, 10)]
+    closes = {
+        "UP": {dates[0]: 100.0, dates[1]: 200.0, dates[2]: 100.0},
+        "DOWN": {dates[0]: 100.0, dates[1]: 50.0, dates[2]: 100.0},
+    }
+
+    returns = equal_weight_returns_for_dates(closes, dates)
+
+    # Held: (2.0 + 0.5)/2 = 1.25 at t1, back to 1.0 at t2.
+    assert returns[0] == pytest.approx(0.25)
+    assert returns[1] == pytest.approx(1.0 / 1.25 - 1.0)
+    compounded = (1 + returns[0]) * (1 + returns[1]) - 1.0
+    assert compounded == pytest.approx(0.0)  # it ends where it started
