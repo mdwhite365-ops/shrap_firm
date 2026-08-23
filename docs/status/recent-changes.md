@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-08-23 (`main` at #200 — the trading path fixed five times in ten days; the strategies still flat)
+**Last updated:** 2026-08-23 (`main` at #206 — the firm can measure itself now, and says "not yet")
 
 ## Merged since the inner-loop paper spine push began
 
@@ -869,6 +869,33 @@ at a profit. The benchmark has to be computed from `market_data.daily_bars`.
 The two strategies scored IR 0.306 against a benchmark at 0.876 and were staged
 as systems tests, so a weak fortnight is what the evaluation predicted.
 **The constraint is research throughput, not execution.**
+
+## Merged 2026-08-23 — the measurement thread
+
+- PR #201 — Status docs reconciled, then corrected twice: the third account is
+  neither a control nor a spare but an empty **strategy slot**, which makes it
+  the research-throughput constraint stated in hardware.
+- PR #202 — Removed a stray `docker-compose.yml` swept into `docs/status/` by
+  `git add -A`. No secrets in it; checked before removing.
+- PR #203 — Exposure-matched benchmark arithmetic. A fifth-invested book judged
+  against a fully invested benchmark measures the Risk Officer's caution, not
+  the strategy's skill.
+- PR #204 — `shrap-live-benchmark`, wiring that arithmetic to the three tables
+  the firm already keeps.
+- PR #205 — **Three defects found by the first live run**, invisible to 14
+  passing tests: weekends in the window (no bars, so the whole Friday-to-Monday
+  move landed in `excess` unoffset), a benchmark that averaged per-period
+  returns while calling itself buy-and-hold (+2.403% against +1.825% — a gap
+  larger than every excess figure reported), and a flat account rendered as
+  having "lost". A fourth, caught by an existing test: a name rejoining
+  mid-window dragged its since-inception return into one transition.
+- PR #206 — A live information ratio, computed with the promote gate's own
+  `sharpe` so the two cannot drift. `None` rather than `0.0` when undefined,
+  and flagged `NOT MEANINGFUL` below 20 sessions.
+
+**The first trustworthy reading:** IR +0.84 and −0.45 over nine sessions,
+t-statistics of +0.16 and −0.09. The tool printed a number above the promote
+floor and refused to let it be used, which is the whole point of it.
 
 ## Security notes
 

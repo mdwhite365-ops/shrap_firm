@@ -42,6 +42,43 @@ trading defect below was worth fixing because it bought honest measurement — b
 none of them would have made a bad strategy good, and fixing more of them will
 not either.
 
+## The firm can now measure itself, and the answer is "not yet"
+
+`shrap-live-benchmark` (#203–#206) compares a live account to an
+**exposure-matched** benchmark and reports the same information ratio the
+promote gate uses, computed with the same function. Run over 2026-08-06→19:
+
+| Account | Exposure | Excess | IR | t-stat |
+|---|---|---|---|---|
+| `PA3KQN57WVXY` | 17.9% | +0.069% | **+0.84** | **+0.16** |
+| `PA3HEG2CLXLU` | 14.7% | −0.043% | −0.45 | −0.09 |
+| `PA3YPMG9AD4Z` | 0% | — | n/a | never invested |
+
+**+0.84 is above the 0.50 promote floor and must not be used.** Nine sessions
+give it a t-statistic of 0.16 against the ~2 you would need; the tool prints it
+flagged `NOT MEANINGFUL` for exactly this reason. It is not evidence the
+strategy works, and it is not evidence against its backtest IR of 0.306 either.
+
+**Why the naive comparison is not the one to quote.** Account return against a
+fully invested benchmark said both strategies lost. Exposure-matched, one beat
+and one lost. Same data, opposite signs — and the tool prints both and says
+`DISAGREE` out loud rather than picking one.
+
+### The tension this exposes, which is Mike's to rule on
+
+At the paper stage the Risk Officer scales every order by
+`stage_fraction x regime_multiplier` = **0.1875**. So a strategy runs at roughly
+a fifth of its intended size, and:
+
+> **The scaling that protects an unproven strategy also prevents it from ever
+> proving itself.**
+
+If +0.84 were the true IR, significance would need `252 x (2/0.84)^2` ≈ **1,430
+sessions — about five and a half years.** Raising the stage fraction shortens
+that and raises the loss if the strategy is bad; leaving it means the forward
+test is a systems check, not evidence. Both are defensible. Nothing in the repo
+currently states which it is, and the promote gate quietly assumes the first.
+
 ## Measured 2026-08-19/20 (verify before reuse)
 
 | | |
@@ -194,9 +231,14 @@ ten days bought honest measurement; a sixth would not buy anything else.
 4. **Research throughput — and there is now an empty account measuring it.**
    The constraint, per the 2026-07-28 arithmetic. Three accounts were opened so
    three strategies could be calibrated in parallel; two are running and the
-   third has nothing to put in it. The literature corpus is exhausted (6 of 111
-   q-fin papers accepted, all consumed), so this means new sources or new
-   archetypes, not tuning.
+   third has nothing to put in it.
+
+   **It needs new sources, not a filter fix.** Checked 2026-08-23: the
+   literature leg reads each item's `summary` and prompts with it as
+   `Abstract:` at 4,000 chars, which for arXiv *is* the abstract — the right
+   unit for a relevance judgement, and **not** the EDGAR failure where the
+   stored item was an index entry. 105 of 111 q-fin papers rejected for "no
+   testable effect" is most likely correct rather than broken.
 5. **Render kill criteria for promoted candidates** on the review page. The
    promoted fission thesis — five criteria as of 2026-08-02 — cannot be reviewed
    on the review surface at all.
