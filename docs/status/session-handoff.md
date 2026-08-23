@@ -48,16 +48,24 @@ not either.
 |---|---|
 | Equity `PA3HEG2CLXLU` | **$9,990.85** (−0.09%) |
 | Equity `PA3KQN57WVXY` | **$10,069.87** (+0.70%) |
-| Equity `PA3YPMG9AD4Z` (**not a control** — see below) | **$10,066.19** (+0.66%) |
+| Equity `PA3YPMG9AD4Z` (**third strategy slot, empty** — see below) | **$10,066.19** (+0.66%) |
 | Orders | 68 over 10 sessions, **100% filled** |
 | Open positions | 12 and 27, for strategies that hold **ten** |
 | `risk.decisions` | 155 rows, 84 approvals / 71 vetoes |
 
-**`PA3YPMG9AD4Z` is not a control account, and must not be used as one.** It is
-the original account from the smoke-test phase. Its +0.66% is Mike's manual
-AAPL/SPY test purchases closing at a profit — a human's discretionary trades,
-which is the one thing a control must not contain. It holds only cash now, which
-is exactly what makes it look like a valid baseline at a glance.
+**`PA3YPMG9AD4Z` is not a control account and was never meant to be one.** The
+three accounts exist so **three strategies can run, be calibrated and be refined
+in parallel** without netting against each other (ADR-0017) — that is the whole
+reason for the split. This one is the original smoke-test account, and its
++0.66% is Mike's manual AAPL/SPY test purchases closing at a profit: a human's
+discretionary trades, which is the single thing a control must not contain. It
+holds only cash now, which is exactly what makes it look like a baseline at a
+glance.
+
+**It is empty because there is no third strategy to put in it.** The firm has
+capacity for three and runs two, and the idle slot is the research-throughput
+constraint made concrete — not spare infrastructure. A control account, if one
+is wanted, is a *fourth* account, not this one.
 
 **The firm therefore has no benchmark in its account data at all.** The correct
 comparison is equal-weight buy-and-hold over the traded window, computed from
@@ -174,18 +182,21 @@ ten days bought honest measurement; a sixth would not buy anything else.
 1. **Compute the benchmark.** Equal-weight buy-and-hold over the 50-name
    universe for 2026-08-06 → 2026-08-19, from `market_data.daily_bars`. Without
    it +0.70% is uninterpretable, and it gates every other judgement here. If a
-   clean control account is wanted afterwards it needs a *fresh* one —
-   `PA3YPMG9AD4Z` is contaminated by hand-placed test trades and cannot be
-   scrubbed back into a baseline.
+   clean control account is wanted afterwards it needs a *fourth*, fresh one —
+   `PA3YPMG9AD4Z` is the third strategy's slot, and is contaminated by
+   hand-placed test trades besides.
 2. **Clear the sub-$1 dust** in the Alpaca dashboard. Ops, not code.
 3. **Kill and re-propose `true-autonomy-implementation`.** Its falsifiers are
    inverted (see below) and `amend-criteria` is append-only, so they cannot be
    fixed in place. The kill reason should record that the *falsifiers* were
    inverted, not that the *thesis* was wrong — the graveyard's denominator
    depends on that distinction.
-4. **Research throughput.** The constraint, per the 2026-07-28 arithmetic. The
-   literature corpus is exhausted (6 of 111 q-fin papers accepted, all
-   consumed), so this means new sources or new archetypes, not tuning.
+4. **Research throughput — and there is now an empty account measuring it.**
+   The constraint, per the 2026-07-28 arithmetic. Three accounts were opened so
+   three strategies could be calibrated in parallel; two are running and the
+   third has nothing to put in it. The literature corpus is exhausted (6 of 111
+   q-fin papers accepted, all consumed), so this means new sources or new
+   archetypes, not tuning.
 5. **Render kill criteria for promoted candidates** on the review page. The
    promoted fission thesis — five criteria as of 2026-08-02 — cannot be reviewed
    on the review surface at all.
