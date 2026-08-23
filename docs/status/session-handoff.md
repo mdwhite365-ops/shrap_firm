@@ -1,4 +1,4 @@
-# Session handoff — 2026-08-04
+# Session handoff — 2026-08-23
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -14,7 +14,79 @@ them, and `git log` has the history.
 
 ---
 
-## The firm traded
+## Where the firm stands at sprint end
+
+The 4-month sprint (May–Aug) is nearly over. Stated plainly, because the
+temptation at this point is to describe activity rather than results:
+
+**The firm trades autonomously, correctly, and to no effect yet.** Ten sessions,
+68 orders, 100% fill rate, no human in the path. And over that fortnight the
+best account returned **+0.70%** against an idle all-cash account's **+0.66%**.
+Four basis points. That is the honest headline and it is not a plumbing problem.
+
+The two strategies running were staged as **systems tests, not promotions** —
+they scored IR **0.306** against a benchmark scoring **0.876**, so a fortnight of
+flat is exactly what the evaluation predicted. The forward test worked: it
+confirmed a prediction the firm had already made about itself.
+
+**The binding constraint is research throughput, not execution.** The 2026-07-28
+arithmetic still holds: 35%/year needs roughly 11 uncorrelated strategies at the
+promote floor, or ~3 at IR 1.0. The firm has **zero** above the floor. Every
+trading defect below was worth fixing because it bought honest measurement — but
+none of them would have made a bad strategy good, and fixing more of them will
+not either.
+
+## Measured 2026-08-19/20 (verify before reuse)
+
+| | |
+|---|---|
+| Equity `PA3HEG2CLXLU` | **$9,990.85** (−0.09%) |
+| Equity `PA3KQN57WVXY` | **$10,069.87** (+0.70%) |
+| Equity `PA3YPMG9AD4Z` (idle, all cash) | **$10,066.19** (+0.66%) — **unexplained, see below** |
+| Orders | 68 over 10 sessions, **100% filled** |
+| Open positions | 12 and 27, for strategies that hold **ten** |
+| `risk.decisions` | 155 rows, 84 approvals / 71 vetoes |
+
+**The idle account's gain is not explained.** `PA3YPMG9AD4Z` holds no positions
+and `cash == equity`. Cash does not appreciate, so either it traded and closed
+earlier or it did not start at $10,000. **Until that is resolved there is no
+valid benchmark**, and every performance comparison in this document — including
+the four-basis-point one above — rests on a number nobody has checked.
+
+## The trading path, fixed five times in ten days
+
+Every one silent. None raised, none logged, all found by looking at data rather
+than at alerts.
+
+| PR | Defect |
+|---|---|
+| #192 | Runner sized exits from its own record of *intent*, not the broker's position (KI-030) |
+| #193 | Status loop jammed a month on the firm's first order (KI-031) |
+| #195 | **Two** floors compounding — 26 of 89 decisions vetoed `SIZED_TO_ZERO`, and the executed book was the cheap half of the intended one |
+| #196 | Risk Officer *scaled* exits, and shorted what it could not sell |
+| #198 | Exits stranded a residue because held shares were **derived**, not read |
+| #199 | Audit trail **rounded** every fractional approval to a whole share |
+
+**#196, #198 and #199 were introduced by the same session that fixed the others.**
+#195 widened a type and #196 derived a value, and each broke something one layer
+downstream that had already declared what it expected.
+
+### The pattern, stated once
+
+**A component reconstructed a fact that was already recorded, and the
+reconstruction disagreed.**
+
+- `last_quantity` reconstructed the position from intent (#192).
+- `market_value / latest_close` reconstructed a share count from two different
+  prices, when `ops.position_snapshots.quantity` held it directly (#198).
+- An `INTEGER` column reconstructed a fractional quantity as a whole one (#199).
+
+The corollary that costs the most time: **when a card changes a type or inserts
+a stage, the question is not "does the new code work" but "what did anything
+downstream already declare about what reaches it."** Both #196 and #199 would
+have been caught by asking it.
+
+## The firm's first fills, 2026-08-04 (history)
 
 **2026-08-04, 13:30 UTC: six orders, six fills, on `PA3KQN57WVXY`.** The first
 time a Research strategy's signal reached a broker fill. Signal → intent → risk
@@ -73,48 +145,62 @@ neither cleared the promote gate and the transition reasons say so. Both declare
 open, but a strategy with no declared cadence acts once per session and every
 later tick is a no-op.
 
-**The book is not flat.** `PA3KQN57WVXY` holds **SOFI 10, GME 9, PLTR 1** —
-legitimate entries from 2026-08-04, left in place deliberately. Only the three
-phantom shorts were closed. The next session is therefore the first real test of
-the **exit** path under #192: any of those three the strategy rotates out of
-should sell exactly the quantity the account holds, not the quantity the Runner
-once intended.
-
-## State of the firm, measured 2026-08-04
-
-| | |
-|---|---|
-| EDGAR items with a document body | **3,696 / 3,696**, avg 5,834 chars (was 179) |
-| Items ever judged relevant | **49** — 46 `sec-edgar`, 2 `usaspending`, 1 `federal-register` |
-| World-changer candidates | 1 promoted (fission), **1 proposed by the pipeline** |
-| Strategies | 12 killed, **2 at `paper` with accounts**, 0 promoted by verdict |
-| Evaluations | 26 — 14 `hold-for-data`, 12 `kill` (see KI-027) |
-| Orders | **6 submitted, 6 filled** 2026-08-04 — the first ever |
-| Positions | `PA3KQN57WVXY`: SOFI 10, GME 9, PLTR 1. The other two accounts flat |
-| Paper accounts | `PA3HEG2CLXLU`, `PA3KQN57WVXY` assigned; `PA3YPMG9AD4Z` idle |
+**The books hold more names than the strategies do** — 12 and 27 against a
+top-ten mandate, as of 2026-08-19. That is #198's residue: until it deployed, no
+exit ever completed, so names accumulated instead of leaving. New exits complete;
+**the existing dust does not clear itself**, and anything under ~$1 notional
+cannot be sold through the API at all (Alpaca's fractional minimum). Those need
+liquidating in the dashboard or they stay, and each one burns an order a session
+while the Runner keeps trying to exit it.
 
 ## What is next, in order
 
-1. **Watch the next open — the exit path this time.** The entry path is proven.
-   What has never run is a sell against a real holding. Read `strategy-runner`
-   logs for the sizing basis before the order table.
-2. **Rule on `haleu-cost-curve`.** `shrap-tech-watcher-review` renders it. The
-   question is whether it is a distinct thesis or a rung of the promoted fission
-   one; a duplicate kill is a legitimate and useful outcome.
-3. **Intraday bar *reading* — the remaining piece of day trading.** #185 ingests
-   1-min bars and #186 lets the Runner act on a cadence, but nothing connects
-   them: `BarSample.session_date` is a `date`, and that type runs through
-   `PanelWindow`, `PricePanel`, the Evaluator and every strategy. **Declaring an
-   intraday cadence today would only re-run a strategy against a panel that
-   still changes once a day.** This is a type change through the core of the
-   strategy layer, not a config flag.
-4. **Position staleness at intraday grain (new, unfiled).** The Runner reads
-   positions from `ops.position_snapshots`, which the Reconciliation Agent
-   refreshes every **300s**. Free at daily cadence; wrong at a 5-minute one,
-   where a pass can plan against a book that already moved. A precondition for
-   (3), not a separate feature.
-5. **KI-027** — `hold-for-data` cannot resolve, and 14 evaluations sit in it.
+**Nothing on this list is a trading-path fix, and that is deliberate.** Five in
+ten days bought honest measurement; a sixth would not buy anything else.
+
+1. **Explain the idle account's +0.66%.** `PA3YPMG9AD4Z` holds only cash. Until
+   it is explained the firm has no benchmark, and every performance claim —
+   including the ones in this document — is unanchored. Cheapest item here and
+   it gates the interpretation of everything else.
+2. **Clear the sub-$1 dust** in the Alpaca dashboard. Ops, not code.
+3. **Kill and re-propose `true-autonomy-implementation`.** Its falsifiers are
+   inverted (see below) and `amend-criteria` is append-only, so they cannot be
+   fixed in place. The kill reason should record that the *falsifiers* were
+   inverted, not that the *thesis* was wrong — the graveyard's denominator
+   depends on that distinction.
+4. **Research throughput.** The constraint, per the 2026-07-28 arithmetic. The
+   literature corpus is exhausted (6 of 111 q-fin papers accepted, all
+   consumed), so this means new sources or new archetypes, not tuning.
+5. **Render kill criteria for promoted candidates** on the review page. The
+   promoted fission thesis — five criteria as of 2026-08-02 — cannot be reviewed
+   on the review surface at all.
+6. **KI-027** — `hold-for-data` cannot resolve, and 14 evaluations sit in it.
    A rename or an expiry, not a calibration change.
+7. **Intraday bar *reading*.** Still the remaining piece of day trading: #185
+   ingests 1-min bars and #186 lets the Runner act on a cadence, but nothing
+   connects them — `BarSample.session_date` is a `date`, and that type runs
+   through `PanelWindow`, `PricePanel`, the Evaluator and every strategy.
+   Declaring an intraday cadence today would only re-run a strategy against a
+   panel that still changes once a day. Its precondition is position staleness:
+   `ops.position_snapshots` refreshes every **300s**, free at daily cadence and
+   wrong at a five-minute one.
+
+## Kill criteria were being written backwards
+
+Two of three proposed world-changer candidates had falsifiers that fire when the
+thesis **succeeds** — `"HALEU production capacity >200 t/yr by 2030"`,
+`"Waymo daily miles > 1,000,000 by FY27"`. Those are milestones. A candidate
+written that way cannot be killed by evidence: it dies exactly when it is right
+and survives forever when it is wrong.
+
+It also inverts the evidence log, since observations are filed against a
+`kill_criterion_index` — logging "Waymo hit 1M miles" against criterion 0 records
+progress toward a kill when it is confirmation.
+
+**#200** states the rule in the synthesis prompt and contrasts a good criterion
+with an inverted one *in the same metric*, because that is the failure mode: the
+two read almost identically. The third candidate got it right unaided, so the
+generator was unconstrained rather than consistently wrong.
 
 ## Rulings made 2026-08-01/04
 
@@ -163,6 +249,18 @@ Recorded because each cost real time and the shape recurs.
 - *"ruff is clean."* `ruff check` was; `ruff format --check` was not, and CI runs
   both. `make lint` is the gate — running half of it and reporting the whole is
   how #192 arrived red.
+- *"Sizing in dollars instead of shares fixes `SIZED_TO_ZERO`."* It does not.
+  `(N x s)/p` and `(N/p) x s` are the same number; **the floor was doing all the
+  damage**, not the order of operations. Reordering the arithmetic would have
+  shipped a PR that fixed nothing measurable. The real fix was fractional
+  quantities.
+- *"`risk.decisions` stopped recording when #195 deployed."* 155 rows said no.
+  Then *"only vetoes are recording"* — 84 approvals said no. The actual defect
+  was an `INTEGER` column silently rounding, which is the plainest reading of the
+  schema and needed no theory at all. **Two wrong guesses about behaviour,
+  reached by reasoning, when the answer was a declaration available by looking.**
+- *"The shorts are flat"* / *"the book is now flat."* Said twice, wrong twice, in
+  both cases because a two-part action was reported done after one part.
 
 ## Standing constraints a new session must not rediscover
 
@@ -192,8 +290,12 @@ Recorded because each cost real time and the shape recurs.
 
 - **#100's Librarian INFO fix** and **#103's Evaluator trigger** — both
   unit-tested, neither observed in production.
-- **The exit path.** #192 is deployed but no sell against a real holding has run.
-  Three positions are waiting for it.
+- **#198, #199 and #200 in production.** All merged 2026-08-23, none observed
+  live. #198's effect is visible as *position count falling toward ten*; #199's
+  as *fractional quantities appearing in `risk.decisions`*; #200's only on the
+  next synthesised candidate.
+- **Whether any exit now completes cleanly.** The thing five PRs were aimed at,
+  and it has never been seen working.
 
 **Now verified, previously listed here:** the three-account split. All six
 2026-08-04 order rows carry `account_id = PA3KQN57WVXY`; #124–#128 work and

@@ -9,7 +9,9 @@ This is **Shrap**, a self-developing multi-agent trading firm. The repo name is 
 
 **The funnel closed end to end on 2026-08-02** (#189, KI-009). It had admitted nothing for two months because the EDGAR leg stored the Atom *index entry* — a filed date, an accession number and a file size — rather than the filing. With document bodies it admitted **46 items** and synthesized its first pipeline candidate.
 
-**The order path closed on 2026-08-04: six orders, six fills** on `PA3KQN57WVXY`, signal through fill with no human in the path. **Two strategies sit at `paper`** as forward tests, not promotions — neither cleared the promote gate. Both are daily; day trading still needs the intraday bar-*reading* card, since `BarSample.session_date` is a `date` all the way through the strategy layer. The same day produced the first two trading defects, both fixed and verified in production: **KI-030** (the Runner sized exits from its own record of intent, not the broker's position — #192) and **KI-031** (the status loop had jammed for a month on the firm's first-ever order — #193).
+**The order path closed on 2026-08-04: six orders, six fills** on `PA3KQN57WVXY`, signal through fill with no human in the path. **Two strategies sit at `paper`** as forward tests, not promotions — neither cleared the promote gate. Both are daily; day trading still needs the intraday bar-*reading* card, since `BarSample.session_date` is a `date` all the way through the strategy layer. **Ten sessions to 2026-08-19: 68 orders, 100% filled, and flat** — the best account returned +0.70% against an idle all-cash account's +0.66%. That is the predicted result, not a surprise: both strategies scored IR 0.306 against a benchmark at 0.876. **The binding constraint is research throughput, not execution** — 35%/year needs ~11 uncorrelated strategies at the promote floor and the firm has zero above it.
+
+The trading path was fixed **five times in ten days** (#192, #193, #195, #196, #198, #199), every defect silent and none raising an error. Three were introduced by the sessions that fixed the others. The recurring shape: **a component reconstructed a fact that was already recorded, and the reconstruction disagreed** — intent standing in for position, `market_value / price` standing in for a share count, an `INTEGER` column standing in for a fractional quantity. When a card changes a type or inserts a stage, ask what downstream already declared about what reaches it.
 
 **Always-on services (34 containers, verified 2026-07-31):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger. **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker.
 
@@ -20,7 +22,7 @@ Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike
 > **Check the status docs before trusting them.** They have now fallen behind
 > `main` three times — #72–#80, #92–#101, and #129–#175, the last being
 > forty-six PRs of finished work still described as pending. Run
-> **`make doc-drift`** first (last reconciled at **#193**). When it fails, trust
+> **`make doc-drift`** first (last reconciled at **#200**). When it fails, trust
 > `git log`, `docker compose ps` and the database over any document.
 >
 > **`make doc-drift` compares PR numbers, not claims.** On 2026-08-04 it

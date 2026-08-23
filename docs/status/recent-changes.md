@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-08-04 (`main` at #193 — the firm's first fills, and the first two trading defects)
+**Last updated:** 2026-08-23 (`main` at #200 — the trading path fixed five times in ten days; the strategies still flat)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -835,6 +835,37 @@ Six orders, six fills, on `PA3KQN57WVXY` at 13:30 UTC. Signal through fill with
 no human in the path, and the first two trading defects (above) found and fixed
 the same day. Three of the six were exits against positions the account had
 never held; those shorts were closed by hand.
+
+## Merged 2026-08-10 to 2026-08-23
+
+- PR #195 — The firm floored every order twice and bought the cheap half. 26 of
+  89 decisions vetoed `SIZED_TO_ZERO`, all under six shares, and the executed
+  book skewed cheap because an expensive name floors to a smaller share count.
+  Quantities are fractional end to end; the only floor left is the one a
+  non-fractionable asset forces at the broker.
+- PR #196 — The Risk Officer *scaled* exits, and shorted what it could not sell.
+  `reduces_position` answered False whenever the book lacked the ticker or held
+  less than the sell, so the exit fell through to sizing. Against an empty book a
+  6-share sell approved 1.125 — a short, needing no veto.
+- PR #197 — Provenance on the fractionable cache, so a failed lookup is
+  distinguishable from a real "no". Written before it was needed.
+- PR #198 — Exits stranded a residue because held shares were **derived** as
+  `market_value / latest_close` rather than read from
+  `ops.position_snapshots.quantity`. Two prices, one division, and no exit ever
+  completed: 12 and 27 open names for top-ten strategies.
+- PR #199 — The audit trail **rounded** every fractional approval to a whole
+  share. `INTEGER` columns, fractional quantities since #195, and Postgres
+  accepted the write silently.
+- PR #200 — The generator wrote kill criteria that fire when the thesis
+  *succeeds*. Two of three proposed candidates were unkillable by construction.
+
+## 2026-08-19 — ten sessions of autonomous trading, measured
+
+68 orders, 100% filled, no human in the path. Best account **+0.70%** against an
+idle all-cash account's **+0.66%**. The two strategies scored IR 0.306 against a
+benchmark at 0.876 and were staged as systems tests, so a flat fortnight is what
+the evaluation predicted. **The constraint is research throughput, not
+execution.**
 
 ## Security notes
 
