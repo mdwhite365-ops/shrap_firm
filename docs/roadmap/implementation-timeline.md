@@ -36,10 +36,11 @@ session should pick up.
 
 **Two strategies are staged at `paper`** as deliberate forward tests rather than
 promotions — neither cleared the promote gate, and KI-027 explains why that gate
-is honest rather than tight. **The order path closed on 2026-08-04: six orders,
-six fills.** It also produced the first two trading defects, KI-030 and KI-031,
-both fixed the same day (#192, #193). The exit path has still never run against
-a real holding — three positions are waiting for it.
+is honest rather than tight. **The order path closed on 2026-08-04**, and by 2026-08-19 had run ten
+autonomous sessions: 68 orders, 100% filled. It returned **+0.70%** against an
+idle account's +0.66%, which is what an IR of 0.306 predicts. The path needed
+**five** fixes in ten days (#192, #193, #195, #196, #198, #199) before the
+measurement was trustworthy; none of them make a bad strategy good.
 
 **Remaining for day trading:** 2.8 and 2.9 shipped, so what is left is the bar
 *grain* change — `BarSample.session_date` is a `date`, and that type runs

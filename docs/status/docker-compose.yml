@@ -1,0 +1,1439 @@
+# Shrap Firm - Phase 1 substrate stack
+#
+# Single-host Docker Compose for the Dell (shrap-prod on the Tailscale tailnet).
+# This file IS the deployment spec. If you need to change the substrate, change
+# this file and PR it; do not click around in the TrueNAS UI.
+#
+# Voice: boring beats clever. Well-known images, named volumes, restart
+# unless-stopped. All images pinned to a specific minor version - no :latest
+# drift on production-critical services. Update via PR.
+#
+# All host ports bind to 127.0.0.1 only. Remote access to anything in this
+# stack goes via Tailscale + SSH tunnel (see docs/runbooks/dell-bootstrap.md).
+# Inter-container traffic uses the shrap_net bridge with service DNS names.
+#
+# Substrate plus the deployed agent services (Operations, Risk and Compliance,
+# Trading Floor, Intelligence). Per-agent specs live in docs/agents/.
+
+networks:
+  shrap_net:
+    driver: bridge
+
+volumes:
+  redis_data:
+  pg_data:
+  qdrant_storage:
+  langfuse_pg_data:
+  prom_data:
+  grafana_data:
+  ollama_models:
+
+services:
+
+  # -------------------------------------------------------------------------
+  # Redis - cross-department message bus (Streams) + cache.
+  # ADR-0001 commits Redis Streams. AOF every-second is the right
+  # durability/throughput tradeoff for an event bus.
+  # -------------------------------------------------------------------------
+  redis:
+    image: redis:7.4-alpine
+    container_name: shrap_redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - "900 1"
+      - --save
+      - "300 10"
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Postgres + TimescaleDB - primary OLTP + time-series store.
+  # All agent-owned tables live here. Langfuse uses its own DB (below).
+  # -------------------------------------------------------------------------
+  postgres:
+    image: timescale/timescaledb-ha:pg16
+    container_name: shrap_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${SHRAP_DB_USER}
+      POSTGRES_PASSWORD: ${SHRAP_DB_PASSWORD}
+      POSTGRES_DB: ${SHRAP_DB_NAME}
+    volumes:
+      - pg_data:/home/postgres/pgdata/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SHRAP_DB_USER} -d ${SHRAP_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Qdrant - vector store for embeddings (research memory, document search).
+  # 6333 HTTP, 6334 gRPC. Native Prometheus /metrics on 6333.
+  # -------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.11.0
+    container_name: shrap_qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6333/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Langfuse DB - dedicated Postgres for Langfuse. Kept separate so its
+  # migrations cannot collide with the firm's main schema.
+  # No host port binding - only reached from the langfuse container.
+  # -------------------------------------------------------------------------
+  langfuse-db:
+    image: postgres:16.4-alpine
+    container_name: shrap_langfuse_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${LANGFUSE_DB_USER}
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_pg_data:/var/lib/postgresql/data
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LANGFUSE_DB_USER} -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Langfuse - LLM tracing UI / collector. ADR-0004 keeps Langfuse for LLM
+  # specifics; Prometheus+Grafana covers everything else.
+  # -------------------------------------------------------------------------
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: shrap_langfuse
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${LANGFUSE_DB_USER}:${LANGFUSE_DB_PASSWORD}@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      SALT: ${SALT}
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/public/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Prometheus - metrics scrape + storage. 30-day retention per ADR-0004.
+  # Scrape config lives in ./prometheus/prometheus.yml - the repo is truth.
+  # -------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: shrap_prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prom_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Grafana - dashboards for incident investigation. Mike's routine surface
+  # is the daily briefing; Grafana is for digging when something breaks.
+  # Bound to 3001 on the host because Langfuse owns 3000.
+  # -------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: shrap_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Ollama - local LLM serving. GPU passthrough via NVIDIA Container Toolkit.
+  # Hosts Qwen 3.5 9B on the Dell per docs/infrastructure/llm-routing.md.
+  # Image >= 0.31.x required for Qwen 3.5-generation models. 0.32.0 is what
+  # Mike deployed on the Dell 2026-07-16 (drift committed, PR #25 pattern);
+  # its CUDA path needs NVIDIA driver 570+ — present on the Dell since the
+  # 2070 Super swap. Driver 550 + this image = silent CPU-only fallback.
+  # -------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:0.32.0
+    container_name: shrap_ollama
+    restart: unless-stopped
+    # Serves LOCAL models only. Deliberately gets no OLLAMA_API_KEY: the daemon
+    # does not authenticate cloud models with a bearer token — it signs each
+    # request with the host's Ed25519 key at /root/.ollama/id_ed25519, which
+    # `ollama signin` registers with an ollama.com account. That identity would
+    # live in the ollama_models volume, i.e. as container state rather than
+    # config, and would vanish silently if the volume were ever recreated.
+    # The Tech Watcher therefore talks straight to https://ollama.com instead
+    # (see its SHRAP_LLM_OLLAMA_URL), where auth is a declarative env var.
+    #
+    # As of 2026-07-30 NO agent routes here: the Intelligence pair moved to
+    # ollama.com with the rest of the box. It is kept running deliberately, as
+    # the fallback the cloud path names — setting SHRAP_TW_OLLAMA_URL to
+    # http://ollama:11434 sends every LLM agent back to the local daemon in one
+    # env edit, which is the only lever available if the cloud usage cap is
+    # exhausted mid-week. It holds the GPU reservation and ~6.6GB of model for
+    # that purpose; retiring it is a separate decision, not a side effect.
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    networks:
+      - shrap_net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # -------------------------------------------------------------------------
+  # node-exporter - host CPU / memory / disk / network metrics.
+  # Uses host networking on :9100 - intentional, needs host-level visibility.
+  # -------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: shrap_node_exporter
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --web.listen-address=127.0.0.1:9100
+    pid: host
+    network_mode: host
+    volumes:
+      - /:/host:ro,rslave
+
+  # -------------------------------------------------------------------------
+  # cadvisor - per-container CPU / memory / restart counts.
+  # -------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: shrap_cadvisor
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # redis-exporter - Redis throughput, memory, stream length, consumer lag.
+  # -------------------------------------------------------------------------
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    container_name: shrap_redis_exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+    ports:
+      - "127.0.0.1:9121:9121"
+    networks:
+      - shrap_net
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # postgres-exporter - Postgres connection pool, table sizes, replication lag.
+  # -------------------------------------------------------------------------
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: shrap_postgres_exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}?sslmode=disable"
+    ports:
+      - "127.0.0.1:9187:9187"
+    networks:
+      - shrap_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # Health Monitor - the first agent. No-LLM, polls Prometheus for
+  # substrate health, publishes ops.health-* events on Redis Streams,
+  # alerts via Discord (routine) / ntfy.sh (urgent). See
+  # docs/agents/operations/health-monitor.md.
+  #
+  # Also runs the output-freshness sweep every five minutes: a read-only pass
+  # over the five tables that must grow for the firm to be doing anything
+  # (shrap.operations.staleness). An empty or frozen table publishes
+  # operations.health-anomaly. It reads Postgres directly rather than trusting
+  # any agent's self-report — three producers reported healthy passes while
+  # writing nothing, which is what this exists to catch. Set
+  # HEALTH_MONITOR_FRESHNESS_ENABLED=false to turn the sweep off without
+  # touching the substrate checks.
+  # -------------------------------------------------------------------------
+  health-monitor:
+    build:
+      context: ../
+      dockerfile: infra/health-monitor.Dockerfile
+    container_name: shrap_health_monitor
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HEALTH_MONITOR_REDIS_URL: "redis://redis:6379/0"
+      HEALTH_MONITOR_PROM_URL: "http://prometheus:9090"
+      HEALTH_MONITOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      HEALTH_MONITOR_FRESHNESS_ENABLED: "${HEALTH_MONITOR_FRESHNESS_ENABLED:-true}"
+      HEALTH_MONITOR_FRESHNESS_INTERVAL_SECONDS: "300"
+    depends_on:
+      redis:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Audit Logger - persists every configured Redis Stream envelope into
+  # PostgreSQL ops.audit_events for forensic reconstruction.
+  # -------------------------------------------------------------------------
+  audit-logger:
+    build:
+      context: ../
+      dockerfile: infra/audit-logger.Dockerfile
+    container_name: shrap_audit_logger
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      AUDIT_LOGGER_REDIS_URL: "redis://redis:6379/0"
+      AUDIT_LOGGER_STREAM_PATTERN: "*"
+      # Stream retention (KI-025). Redis is the transport; ops.audit_events is
+      # the record, so trimming discards a delivered copy and not the trail.
+      # Hourly is maintenance cadence, not delivery. Set 0 to preserve a stream
+      # in Redis while investigating it.
+      AUDIT_LOGGER_TRIM_INTERVAL_SECONDS: "${AUDIT_LOGGER_TRIM_INTERVAL_SECONDS:-3600}"
+      AUDIT_LOGGER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Risk Officer - the firm's single point of veto. Consumes
+  # trading.decision.intent and publishes risk.intent.approved/vetoed, plus
+  # risk.alert and risk.kill_switch.set/clear.
+  #
+  # The service and container keep the pre-trade-checker name: this process WAS
+  # the Pre-Trade Checker, which its own spec called "the Month 1 wire-only Risk
+  # Officer stub", and the portfolio layer graduated it in place. Renaming would
+  # recreate the container and the consumer group, and a fresh group re-reads
+  # the intent stream from START_ID and re-approves historical intents.
+  # -------------------------------------------------------------------------
+  pre-trade-checker:
+    build:
+      context: ../
+      dockerfile: infra/pre-trade-checker.Dockerfile
+    container_name: shrap_pre_trade_checker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PRE_TRADE_CHECKER_REDIS_URL: "redis://redis:6379/0"
+      # PRE_TRADE_CHECKER_ALLOWED_UNIVERSE is deliberately NOT pinned here. The
+      # default is the 50-name launch list, imported from launch_list.py so it
+      # cannot drift from the universe strategies are evaluated against; set it
+      # in .env to override. Pinning "${VAR:-}" would set the variable to an
+      # EMPTY STRING when unset, which is an empty allowlist — every order
+      # vetoed — and would also override .env.
+      # Ignored entirely once TIER3_ENFORCEMENT is on (Tier 3 becomes
+      # authoritative), which is the intended end state.
+      #
+      # Must equal STRATEGY_RUNNER_MAX_QUANTITY — the checker clamps rather than
+      # vetoes, so a larger Runner cap records an intent bigger than the fill.
+      PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER: "${PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER:-100}"
+      PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE: "${PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE:-false}"
+      PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY: "${PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY:-80}"
+      PRE_TRADE_CHECKER_SYMBOL_COOLDOWN_SECONDS: "${PRE_TRADE_CHECKER_SYMBOL_COOLDOWN_SECONDS:-300}"
+      # Tier 3 membership enforcement (ADR-0012). Default off until the
+      # Universe Curator's first card populates research.universe_tiers and
+      # DQ-004 locks the launch list; on + unavailable state fails closed.
+      PRE_TRADE_CHECKER_TIER3_ENFORCEMENT: "${PRE_TRADE_CHECKER_TIER3_ENFORCEMENT:-false}"
+      PRE_TRADE_CHECKER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      PRE_TRADE_CHECKER_TIER3_CACHE_TTL_SECONDS: "${PRE_TRADE_CHECKER_TIER3_CACHE_TTL_SECONDS:-30.0}"
+      PRE_TRADE_CHECKER_START_ID: "0-0"
+      PRE_TRADE_CHECKER_COUNT: "100"
+      PRE_TRADE_CHECKER_BLOCK_MS: "5000"
+      PRE_TRADE_CHECKER_RETRY_DELAY_SECONDS: "1.0"
+      PRE_TRADE_CHECKER_LOG_LEVEL: "INFO"
+      # Risk Officer portfolio layer: per-ticker, gross/net and correlation-cluster
+      # caps, plus the daily-loss and strategy-drawdown monitors. Limits live in
+      # docs/risk/policy.md; override an individual one below only to TIGHTEN it.
+      #
+      # Default off, same reasoning as TIER3_ENFORCEMENT above: the gate reads
+      # ops.position_snapshots, which the Reconciliation Agent only began writing
+      # in this card. Against an empty table the gate cannot tell a flat account
+      # from an unmeasured one, fails closed, and vetoes every order. Turn this on
+      # AFTER confirming a reconciliation pass has written positions:
+      #   select count(*) from ops.position_snapshots;
+      PRE_TRADE_CHECKER_PORTFOLIO_LIMITS_ENFORCEMENT: "${PRE_TRADE_CHECKER_PORTFOLIO_LIMITS_ENFORCEMENT:-false}"
+      PRE_TRADE_CHECKER_MONITOR_INTERVAL_SECONDS: "${PRE_TRADE_CHECKER_MONITOR_INTERVAL_SECONDS:-300.0}"
+      PRE_TRADE_CHECKER_MAX_TICKER_WEIGHT: "${PRE_TRADE_CHECKER_MAX_TICKER_WEIGHT:-0.20}"
+      PRE_TRADE_CHECKER_MAX_GROSS_EXPOSURE: "${PRE_TRADE_CHECKER_MAX_GROSS_EXPOSURE:-1.00}"
+      PRE_TRADE_CHECKER_MAX_NET_EXPOSURE: "${PRE_TRADE_CHECKER_MAX_NET_EXPOSURE:-1.00}"
+      PRE_TRADE_CHECKER_MAX_CLUSTER_WEIGHT: "${PRE_TRADE_CHECKER_MAX_CLUSTER_WEIGHT:-0.15}"
+      PRE_TRADE_CHECKER_MAX_DAILY_LOSS: "${PRE_TRADE_CHECKER_MAX_DAILY_LOSS:-0.02}"
+      PRE_TRADE_CHECKER_MAX_STRATEGY_DRAWDOWN: "${PRE_TRADE_CHECKER_MAX_STRATEGY_DRAWDOWN:-0.25}"
+      PRE_TRADE_CHECKER_CORRELATION_THRESHOLD: "${PRE_TRADE_CHECKER_CORRELATION_THRESHOLD:-0.80}"
+      PRE_TRADE_CHECKER_MIN_CLUSTER_HISTORY: "${PRE_TRADE_CHECKER_MIN_CLUSTER_HISTORY:-40}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Execution Agent - paper-only broker handoff. Consumes approved risk
+  # decisions and submits Alpaca paper market orders.
+  # -------------------------------------------------------------------------
+  execution-agent:
+    build:
+      context: ../
+      dockerfile: infra/execution-agent.Dockerfile
+    container_name: shrap_execution_agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      EXECUTION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      # OPTIONAL. The agent asks the broker which account its credentials open
+      # and uses that, so there is normally nothing to set here — the key pair
+      # already determines the book. Set it only as an assertion: a mismatch
+      # between this and the account the credentials actually open makes the
+      # agent refuse to start, which catches a key/account pairing mistake that
+      # would otherwise route one strategy's orders into another's account.
+      EXECUTION_AGENT_ACCOUNT_ID: "${ALPACA_ACCOUNT_ID:-}"
+      EXECUTION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY}"
+      EXECUTION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      EXECUTION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      EXECUTION_AGENT_START_ID: "0-0"
+      EXECUTION_AGENT_COUNT: "100"
+      EXECUTION_AGENT_BLOCK_MS: "5000"
+      EXECUTION_AGENT_RETRY_DELAY_SECONDS: "1.0"
+      EXECUTION_AGENT_STATUS_POLL_INTERVAL_SECONDS: "5.0"
+      EXECUTION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Execution Agent 1 - second/third paper account (ADR-0017). Same image,
+  # its own credentials, its own consumer group. It discovers which account
+  # its keys open and acts only on intents naming that account.
+  # -------------------------------------------------------------------------
+  execution-agent-1:
+    build:
+      context: ../
+      dockerfile: infra/execution-agent.Dockerfile
+    container_name: shrap_execution_agent_1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      EXECUTION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      # Distinct SERVICE_NAME => distinct consumer group. Without this the
+      # three agents would share one group, each event would go to exactly
+      # ONE of them, and an intent could land on an agent that is not its
+      # account — where it would be skipped and never executed by anyone.
+      EXECUTION_AGENT_SERVICE_NAME: "execution-agent-1"
+      # OPTIONAL. The agent asks the broker which account its credentials open
+      # and uses that, so there is normally nothing to set here — the key pair
+      # already determines the book. Set it only as an assertion: a mismatch
+      # between this and the account the credentials actually open makes the
+      # agent refuse to start, which catches a key/account pairing mistake that
+      # would otherwise route one strategy's orders into another's account.
+      EXECUTION_AGENT_ACCOUNT_ID: "${ALPACA_ACCOUNT_ID1:-}"
+      EXECUTION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY1}"
+      EXECUTION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY1}"
+      EXECUTION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      EXECUTION_AGENT_START_ID: "0-0"
+      EXECUTION_AGENT_COUNT: "100"
+      EXECUTION_AGENT_BLOCK_MS: "5000"
+      EXECUTION_AGENT_RETRY_DELAY_SECONDS: "1.0"
+      EXECUTION_AGENT_STATUS_POLL_INTERVAL_SECONDS: "5.0"
+      EXECUTION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Execution Agent 2 - second/third paper account (ADR-0017). Same image,
+  # its own credentials, its own consumer group. It discovers which account
+  # its keys open and acts only on intents naming that account.
+  # -------------------------------------------------------------------------
+  execution-agent-2:
+    build:
+      context: ../
+      dockerfile: infra/execution-agent.Dockerfile
+    container_name: shrap_execution_agent_2
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      EXECUTION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      # Distinct SERVICE_NAME => distinct consumer group. Without this the
+      # three agents would share one group, each event would go to exactly
+      # ONE of them, and an intent could land on an agent that is not its
+      # account — where it would be skipped and never executed by anyone.
+      EXECUTION_AGENT_SERVICE_NAME: "execution-agent-2"
+      # OPTIONAL. The agent asks the broker which account its credentials open
+      # and uses that, so there is normally nothing to set here — the key pair
+      # already determines the book. Set it only as an assertion: a mismatch
+      # between this and the account the credentials actually open makes the
+      # agent refuse to start, which catches a key/account pairing mistake that
+      # would otherwise route one strategy's orders into another's account.
+      EXECUTION_AGENT_ACCOUNT_ID: "${ALPACA_ACCOUNT_ID2:-}"
+      EXECUTION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY2}"
+      EXECUTION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY2}"
+      EXECUTION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      EXECUTION_AGENT_START_ID: "0-0"
+      EXECUTION_AGENT_COUNT: "100"
+      EXECUTION_AGENT_BLOCK_MS: "5000"
+      EXECUTION_AGENT_RETRY_DELAY_SECONDS: "1.0"
+      EXECUTION_AGENT_STATUS_POLL_INTERVAL_SECONDS: "5.0"
+      EXECUTION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Paper Order Store - persists paper execution submitted/status/fill events
+  # into trading.paper_order_events. It is append-only; reconciliation and
+  # current position derivation are intentionally later cards.
+  # -------------------------------------------------------------------------
+  paper-order-store:
+    build:
+      context: ../
+      dockerfile: infra/paper-order-store.Dockerfile
+    container_name: shrap_paper_order_store
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PAPER_ORDER_STORE_REDIS_URL: "redis://redis:6379/0"
+      PAPER_ORDER_STORE_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      PAPER_ORDER_STORE_START_ID: "0-0"
+      PAPER_ORDER_STORE_COUNT: "100"
+      PAPER_ORDER_STORE_BLOCK_MS: "5000"
+      PAPER_ORDER_STORE_RETRY_DELAY_SECONDS: "1.0"
+      PAPER_ORDER_STORE_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Reconciliation Agent - compares Alpaca paper account/orders against the
+  # persisted trading.paper_order_events trail on a simple interval and
+  # publishes operations.reconciliation-completed / -discrepancy events.
+  # -------------------------------------------------------------------------
+  reconciliation-agent:
+    build:
+      context: ../
+      dockerfile: infra/reconciliation-agent.Dockerfile
+    container_name: shrap_reconciliation_agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RECONCILIATION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      RECONCILIATION_AGENT_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      RECONCILIATION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY}"
+      RECONCILIATION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      RECONCILIATION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      RECONCILIATION_AGENT_INTERVAL_SECONDS: "300"
+      RECONCILIATION_AGENT_RETRY_DELAY_SECONDS: "30"
+      RECONCILIATION_AGENT_LOOKBACK_DAYS: "${RECONCILIATION_AGENT_LOOKBACK_DAYS:-7}"
+      RECONCILIATION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+  # -------------------------------------------------------------------------
+  # Reconciliation Agent 1 - second/third paper account (ADR-0017). Writes
+  # ops.account_snapshots stamped with the account its own keys open, and
+  # compares only that account's stored orders.
+  # -------------------------------------------------------------------------
+  reconciliation-agent-1:
+    build:
+      context: ../
+      dockerfile: infra/reconciliation-agent.Dockerfile
+    container_name: shrap_reconciliation_agent_1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RECONCILIATION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      RECONCILIATION_AGENT_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      RECONCILIATION_AGENT_SERVICE_NAME: "reconciliation-agent-1"
+      RECONCILIATION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY1}"
+      RECONCILIATION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY1}"
+      RECONCILIATION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      RECONCILIATION_AGENT_INTERVAL_SECONDS: "300"
+      RECONCILIATION_AGENT_RETRY_DELAY_SECONDS: "30"
+      RECONCILIATION_AGENT_LOOKBACK_DAYS: "${RECONCILIATION_AGENT_LOOKBACK_DAYS:-7}"
+      RECONCILIATION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+  # -------------------------------------------------------------------------
+  # Reconciliation Agent 2 - second/third paper account (ADR-0017). Writes
+  # ops.account_snapshots stamped with the account its own keys open, and
+  # compares only that account's stored orders.
+  # -------------------------------------------------------------------------
+  reconciliation-agent-2:
+    build:
+      context: ../
+      dockerfile: infra/reconciliation-agent.Dockerfile
+    container_name: shrap_reconciliation_agent_2
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      RECONCILIATION_AGENT_REDIS_URL: "redis://redis:6379/0"
+      RECONCILIATION_AGENT_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      RECONCILIATION_AGENT_SERVICE_NAME: "reconciliation-agent-2"
+      RECONCILIATION_AGENT_ALPACA_API_KEY: "${ALPACA_API_KEY2}"
+      RECONCILIATION_AGENT_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY2}"
+      RECONCILIATION_AGENT_ALPACA_ENDPOINT: "${ALPACA_ENDPOINT:-https://paper-api.alpaca.markets}"
+      RECONCILIATION_AGENT_INTERVAL_SECONDS: "300"
+      RECONCILIATION_AGENT_RETRY_DELAY_SECONDS: "30"
+      RECONCILIATION_AGENT_LOOKBACK_DAYS: "${RECONCILIATION_AGENT_LOOKBACK_DAYS:-7}"
+      RECONCILIATION_AGENT_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Decision Maker (Card 2 wire stub) - converts trading.strategy.signal into
+  # trading.decision.intent above a confidence threshold. start_id=$ so a
+  # restart never re-trades historical signals.
+  # -------------------------------------------------------------------------
+  decision-maker:
+    build:
+      context: ../
+      dockerfile: infra/decision-maker.Dockerfile
+    container_name: shrap_decision_maker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DECISION_MAKER_REDIS_URL: "redis://redis:6379/0"
+      DECISION_MAKER_START_ID: "$$"
+      DECISION_MAKER_CONFIDENCE_THRESHOLD: "0.7"
+      DECISION_MAKER_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Strategy Fixture - deterministic pipeline-exercise signal source.
+  # DISABLED BY DEFAULT: set STRATEGY_FIXTURE_ENABLED=true in infra/.env to
+  # arm it. At most max_signals_per_day regime-gated signals per UTC day;
+  # the pre-trade rate guardrails still apply downstream.
+  # -------------------------------------------------------------------------
+  strategy-fixture:
+    build:
+      context: ../
+      dockerfile: infra/strategy-fixture.Dockerfile
+    container_name: shrap_strategy_fixture
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      STRATEGY_FIXTURE_REDIS_URL: "redis://redis:6379/0"
+      STRATEGY_FIXTURE_ENABLED: "${STRATEGY_FIXTURE_ENABLED:-false}"
+      STRATEGY_FIXTURE_TICKER: "${STRATEGY_FIXTURE_TICKER:-SPY}"
+      STRATEGY_FIXTURE_ALLOWED_REGIME_LABELS: "${STRATEGY_FIXTURE_ALLOWED_REGIME_LABELS:-crisis-recovery,late-cycle-melt-up}"
+      STRATEGY_FIXTURE_MAX_SIGNALS_PER_DAY: "${STRATEGY_FIXTURE_MAX_SIGNALS_PER_DAY:-1}"
+      STRATEGY_FIXTURE_INTERVAL_SECONDS: "600"
+      STRATEGY_FIXTURE_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Strategy Librarian - Research Department, the registry's event-facing
+  # half. Consumes research.strategy.verdict, applies lifecycle transitions
+  # through the state-machine-enforcing registry, publishes
+  # research.strategy.* lifecycle events. Idles until an Evaluator exists.
+  # -------------------------------------------------------------------------
+  strategy-librarian:
+    build:
+      context: ../
+      dockerfile: infra/strategy-librarian.Dockerfile
+    container_name: shrap_strategy_librarian
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      STRATEGY_LIBRARIAN_REDIS_URL: "redis://redis:6379/0"
+      STRATEGY_LIBRARIAN_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      STRATEGY_LIBRARIAN_START_ID: "0"
+      STRATEGY_LIBRARIAN_COUNT: "100"
+      STRATEGY_LIBRARIAN_BLOCK_MS: "5000"
+      STRATEGY_LIBRARIAN_RETRY_DELAY_SECONDS: "1.0"
+      STRATEGY_LIBRARIAN_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Strategy Runner - Research Department. The paper-trading loop's last
+  # structural piece and the Strategy Fixture's real successor. Consumes
+  # operations.market-phase; on each entry into `open` it evaluates every
+  # active paper-stage strategy and emits a trading.strategy.signal on a
+  # flat/invested target transition. Emits signals only (Decision Maker ->
+  # Pre-Trade -> Execution owns the rest); idempotent per (strategy, session).
+  # PAPER ONLY - no intents, no broker credentials.
+  # -------------------------------------------------------------------------
+  strategy-runner:
+    build:
+      context: ../
+      dockerfile: infra/strategy-runner.Dockerfile
+    container_name: shrap_strategy_runner
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      STRATEGY_RUNNER_REDIS_URL: "redis://redis:6379/0"
+      STRATEGY_RUNNER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      STRATEGY_RUNNER_START_ID: "$$"
+      STRATEGY_RUNNER_CONFIDENCE: "0.75"
+      # Firm-wide exposure budget as a multiple of equity, split equally across
+      # active strategies. 1.0 = fully invested, unlevered. Above 1.0 levers the
+      # whole book — wait for drawdown limits and an intraday-margin-deficit
+      # model (ADR-0016) before raising it.
+      STRATEGY_RUNNER_MAX_GROSS_EXPOSURE: "${STRATEGY_RUNNER_MAX_GROSS_EXPOSURE:-1.0}"
+      # No STRATEGY_RUNNER_ACCOUNT_ID: the runner is account-aware and reads
+      # each strategy's account from research.strategies (ADR-0017). One runner
+      # serves every account; it holds no broker credentials, so a single
+      # instance also keeps one consumer group on operations.market-phase.
+      # Must equal PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER — the checker clamps
+      # rather than vetoes, so a larger value here records an intent bigger than
+      # the fill and the later exit would oversell. Raise both together.
+      STRATEGY_RUNNER_MAX_QUANTITY: "${PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER:-100}"
+      STRATEGY_RUNNER_ADJUSTMENT: "all"
+      STRATEGY_RUNNER_COUNT: "100"
+      STRATEGY_RUNNER_BLOCK_MS: "5000"
+      STRATEGY_RUNNER_RETRY_DELAY_SECONDS: "1.0"
+      STRATEGY_RUNNER_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Tech Watcher (ingest slice) - Research Department, top of the
+  # Framework #1 funnel. Hourly EDGAR + arXiv pulls into
+  # research.raw_source_items with atomic cursor advance; publishes
+  # ingestion.heartbeat per source. Deterministic - the LLM synthesis
+  # pass is the next card.
+  # -------------------------------------------------------------------------
+  tech-watcher:
+    build:
+      context: ../
+      dockerfile: infra/tech-watcher.Dockerfile
+    container_name: shrap_tech_watcher
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TECH_WATCHER_REDIS_URL: "redis://redis:6379/0"
+      TECH_WATCHER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      TECH_WATCHER_INTERVAL_SECONDS: "3600"
+      TECH_WATCHER_MAX_RESULTS: "100"
+      TECH_WATCHER_LLM_ENABLED: "${TECH_WATCHER_LLM_ENABLED:-true}"
+      TECH_WATCHER_FILTER_MAX_ITEMS: "300"
+      # The Hypothesis Generator's feed (2026-07-30). A SECOND arXiv source
+      # with its own budget and its own filter — a single widened query would
+      # let a busy day in cs.LG (hundreds of papers) crowd q-fin (a few dozen)
+      # out of a newest-first fetch capped at MAX_RESULTS, and the leg would
+      # report a healthy pass while delivering nothing.
+      #
+      # Cost is bounded and small: ~100 items on the first pass, then ~40/day,
+      # through the same cheap classification tier the world-changer filter
+      # uses. Set QFIN_ENABLED=false to turn the leg off without touching the
+      # rest of the LLM pipeline.
+      TECH_WATCHER_QFIN_ENABLED: "${TECH_WATCHER_QFIN_ENABLED:-true}"
+      TECH_WATCHER_QFIN_CATEGORIES: "q-fin.PM,q-fin.ST,q-fin.TR,q-fin.GN"
+      TECH_WATCHER_LITERATURE_MAX_ITEMS: "100"
+      TECH_WATCHER_SYNTHESIS_INTERVAL_SECONDS: "86400"
+      TECH_WATCHER_MAX_PROPOSALS: "10"
+      TECH_WATCHER_LOG_LEVEL: "INFO"
+      # LLM routing (Mike's ruling 2026-07-27, superseding local-only of
+      # 2026-07-15 for THIS agent only — the Intelligence agents below stay
+      # local). Still deployment routing, not a registry change: the tier
+      # aliases remain the contract (ADR-0009), and both still point at the
+      # local daemon, which proxies cloud-tagged models upstream.
+      #
+      # Why local-only ended here: qwen3.5:9b-q4_K_M could not execute the
+      # filter's multi-constraint classification. It rejected a DOE
+      # announcement of a *fourth* reactor criticality as "a single milestone"
+      # lacking "independent replication," and reached for the archetype's
+      # example vocabulary (fusion ignition) on a fission item. Filter prompt
+      # v4 fixed the prompt-side causes and changed nothing: 16 re-scored,
+      # 0 flips. See DQ-006 and KI-009.
+      #
+      # Model choice is cost-shaped. Ollama bills GPU-time and labels a usage
+      # tier per model. The filter runs over ~1900 backlog items plus ~140/day,
+      # so it takes the cheapest tier that can plausibly do the job
+      # (gpt-oss:20b-cloud, "Low Usage"; its 128K context is ~90x our ~1400
+      # token prompt, so paying for a 1M window buys nothing). Synthesis runs a
+      # handful of times a day on already-clustered candidates and is where
+      # judgment is load-bearing, so it takes kimi-k3:cloud ("Extra High
+      # Usage"). K3 on the bulk filter would pay flagship rates for a call that
+      # deliberately runs with think=False.
+      #
+      # Both are overridable without editing compose, so laddering up on a bad
+      # result is an .env edit and a restart.
+      #
+      # This container points at ollama.com directly rather than the local
+      # daemon. The daemon's cloud path authenticates by signing requests with
+      # the host's Ed25519 key (registered via `ollama signin`), which is
+      # container-volume state that dies quietly if the volume is recreated.
+      # ollama.com serves the same /api/chat contract as a remote Ollama host,
+      # so the only difference is a bearer token — which is config, restorable
+      # from .env, and reviewable. Other agents keep using the local daemon.
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
+      # Was gpt-oss:20b-cloud. Promoted 2026-07-31 on the first real shadow eval
+      # (calibration.md §(e) Run 3): five models were indistinguishable on
+      # judgement — 100% schema, 100% self-consistency, zero disagreements — so
+      # the call reduced to latency and usage tier, where this is the lowest
+      # tier among the fast models at p95 2539ms vs the incumbent's 12769ms.
+      # Filter task only; the Intelligence agents' binding below is unchanged.
+      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_FILTER_MODEL:-qwen3.5:397b}"
+      SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
+      # Was kimi-k3:cloud. That model requires a paid Ollama subscription this
+      # account does not have and returns HTTP 403 (verified 2026-07-30 while
+      # pointing the Hypothesis Generator at the same tier). Synthesis runs
+      # inside `except Exception: log.exception("synthesis_failed")`, so a 403
+      # every night looked like a healthy service with a quiet funnel: items
+      # marked relevant, nothing ever clustered into a candidate.
+      #
+      # Default is now the model already working on the bulk filter. Synthesis
+      # IS where judgment is load-bearing, so laddering up is the right move
+      # the day the subscription exists - set SHRAP_SYNTHESIS_MODEL and
+      # restart, which is what this indirection is for.
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "${SHRAP_SYNTHESIS_MODEL:-gpt-oss:20b-cloud}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Regime Classifier - Intelligence Department, statistical layer only.
+  # Syncs daily bars (Alpaca data API, IEX feed) into market_data.ohlcv_1d
+  # and publishes intel.regime.tick / .changed / .sizing-modifier events.
+  # The LLM historical-analog layer is deferred (Month 3, feature flag).
+  # -------------------------------------------------------------------------
+  regime-classifier:
+    build:
+      context: ../
+      dockerfile: infra/regime-classifier.Dockerfile
+    container_name: shrap_regime_classifier
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REGIME_CLASSIFIER_REDIS_URL: "redis://redis:6379/0"
+      REGIME_CLASSIFIER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      REGIME_CLASSIFIER_ALPACA_API_KEY: "${ALPACA_API_KEY}"
+      REGIME_CLASSIFIER_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      REGIME_CLASSIFIER_SYMBOLS: "${REGIME_CLASSIFIER_SYMBOLS:-SPY,QQQ,IWM,HYG,TLT,AAPL,NVDA,TSLA,LMT}"
+      REGIME_CLASSIFIER_INTERVAL_SECONDS: "300"
+      REGIME_CLASSIFIER_DEBOUNCE_M: "3"
+      REGIME_CLASSIFIER_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Market Phase Scheduler - Operations Department. Deterministic XNYS
+  # calendar clock: publishes phase transitions (pre-open/open/after-hours/
+  # overnight/closed-day) on operations.market-phase. No LLM, no credentials;
+  # spine plumbing for the overnight research rhythm.
+  # -------------------------------------------------------------------------
+  market-phase:
+    build:
+      context: ../
+      dockerfile: infra/market-phase.Dockerfile
+    container_name: shrap_market_phase
+    restart: unless-stopped
+    environment:
+      MARKET_PHASE_REDIS_URL: "redis://redis:6379/0"
+      MARKET_PHASE_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # News Analyzer - Intelligence Department news feed. Pulls the Alpaca news
+  # API (data host, IEX/Benzinga) for the Tier 3 names, materiality-scores
+  # each item on the local LLM tier (escalating material items), and
+  # publishes intelligence.signal events. Cadence follows the market phase
+  # (operations.market-phase). Both LLM tiers env-route to Ollama in the seed
+  # (Mike's local-only ruling 2026-07-15) — deployment routing, not a
+  # registry change (docs/infrastructure/llm-registry.md).
+  # -------------------------------------------------------------------------
+  news-analyzer:
+    build:
+      context: ../
+      dockerfile: infra/news-analyzer.Dockerfile
+    container_name: shrap_news_analyzer
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NEWS_ANALYZER_REDIS_URL: "redis://redis:6379/0"
+      NEWS_ANALYZER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      NEWS_ANALYZER_ALPACA_API_KEY: "${ALPACA_API_KEY}"
+      NEWS_ANALYZER_ALPACA_SECRET_KEY: "${ALPACA_SECRET_KEY}"
+      NEWS_ANALYZER_SYMBOLS: "${NEWS_ANALYZER_SYMBOLS:-SPY,QQQ,IWM,HYG,TLT,AAPL,NVDA,TSLA,LMT}"
+      NEWS_ANALYZER_ESCALATION_THRESHOLD: "2"
+      NEWS_ANALYZER_PUBLISH_THRESHOLD: "1"
+      NEWS_ANALYZER_ACTIVE_INTERVAL_SECONDS: "600"
+      NEWS_ANALYZER_IDLE_INTERVAL_SECONDS: "3600"
+      NEWS_ANALYZER_LOG_LEVEL: "INFO"
+      # Cloud LLM routing (Mike's ruling 2026-07-30), superseding the local-only
+      # ruling of 2026-07-15 for the Intelligence agents: the 9B local model was
+      # not good enough for materiality judgement. Same direct-to-ollama.com path
+      # the Tech Watcher takes — bearer token from .env rather than Ed25519
+      # container state. Deployment routing, not a registry change; the tier
+      # aliases remain the contract (ADR-0009).
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_INTEL_BULK_MODEL:-gpt-oss:20b-cloud}"
+      SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "${SHRAP_INTEL_ESCALATION_MODEL:-gpt-oss:20b-cloud}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Filing Processor - Intelligence Department 8-K deep read. Polls the Tech
+  # Watcher's research.raw_source_items table for sec-edgar 8-K rows, resolves
+  # each to the Tier 3 roster by CIK, fetches full filing text from EDGAR
+  # Archives (descriptive SEC User-Agent, polite throttle), splits by declared
+  # 8-K item code, materiality-scores each item on the local LLM tier
+  # (escalating material items), and publishes intelligence.signal events.
+  # Reads the Tech Watcher's table but never writes it; own poll cursor.
+  # Cadence follows the market phase (operations.market-phase). Both LLM tiers
+  # env-route to Ollama in the seed (Mike's local-only ruling 2026-07-15).
+  #
+  # Two on-demand CLIs live in this same container (no separate image):
+  #   docker compose exec filing-processor \
+  #     shrap-filing-processor-discover --since 2024-01-01 --dry-run
+  #   docker compose exec filing-processor \
+  #     shrap-filing-processor-backfill --since 2024-01-01
+  # discover asks EDGAR's submissions API directly and queues pending rows,
+  # reaching filings older than the Tech Watcher's feed ever carried; backfill
+  # drives fetch/score over rows already discovered. Run discover first.
+  # -------------------------------------------------------------------------
+  filing-processor:
+    build:
+      context: ../
+      dockerfile: infra/filing-processor.Dockerfile
+    container_name: shrap_filing_processor
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      FILING_PROCESSOR_REDIS_URL: "redis://redis:6379/0"
+      FILING_PROCESSOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      # Tier 3 roster, TICKER:CIK keyed by CIK (EDGAR resolution is CIK-based).
+      # Placeholder launch names until the Universe Curator owns Tier 3 state.
+      FILING_PROCESSOR_ROSTER: "${FILING_PROCESSOR_ROSTER:-AAPL:320193,NVDA:1045810,TSLA:1318605,LMT:936468}"
+      FILING_PROCESSOR_SEC_USER_AGENT: "${FILING_PROCESSOR_SEC_USER_AGENT:-shrap-firm/0.1 filing-processor (mdwhite365@gmail.com)}"
+      FILING_PROCESSOR_ESCALATION_THRESHOLD: "2"
+      FILING_PROCESSOR_PUBLISH_THRESHOLD: "1"
+      FILING_PROCESSOR_ACTIVE_INTERVAL_SECONDS: "600"
+      FILING_PROCESSOR_IDLE_INTERVAL_SECONDS: "3600"
+      FILING_PROCESSOR_LOG_LEVEL: "INFO"
+      # Cloud LLM routing (Mike's ruling 2026-07-30) — see the News Analyzer
+      # block above; the two Intelligence agents move together, as their specs
+      # already pair them ("both on the same clock, deliberately").
+      #
+      # Both knobs are single env vars on purpose: pointing escalation at a
+      # genuinely stronger model (e.g. SHRAP_INTEL_ESCALATION_MODEL=kimi-k2.5)
+      # is a one-line .env edit and a recreate — no rebuild — once that model's
+      # usage tier is confirmed inside the subscription.
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
+      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_INTEL_BULK_MODEL:-gpt-oss:20b-cloud}"
+      SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
+      SHRAP_LLM_CLOUD_DEFAULT_MODEL: "${SHRAP_INTEL_ESCALATION_MODEL:-gpt-oss:20b-cloud}"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Universe Curator - Research Department. Owns Tier 2 (Watch) and Tier 3
+  # (Active) universe state under ADR-0012: research.universe_tiers (the
+  # Pre-Trade Checker's tradeability read model) and research.universe_staging
+  # (pending Tier 3 proposals). Sole publisher of the five tier-transition
+  # events. The container runs the daily watch-expiry sweep; Mike's decisions
+  # go through `docker compose exec universe-curator shrap-universe-promote ...`
+  # (seed / stage / approve / reject / extend / expire / load-launch-list).
+  # No LLM, no broker credentials. Sole writer of the tier tables.
+  # -------------------------------------------------------------------------
+  universe-curator:
+    build:
+      context: ../
+      dockerfile: infra/universe-curator.Dockerfile
+    container_name: shrap_universe_curator
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      UNIVERSE_CURATOR_REDIS_URL: "redis://redis:6379/0"
+      UNIVERSE_CURATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      UNIVERSE_CURATOR_SWEEP_INTERVAL_SECONDS: "86400"
+      UNIVERSE_CURATOR_LOG_LEVEL: "INFO"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+  # Market Data backfill - shared infrastructure, run on demand (NOT started
+  # by default; gated behind the "tools" profile). Fetches historical daily
+  # bars from Alpaca's data API (IEX feed, adjustment=all) and upserts them
+  # into market_data.daily_bars, the Strategy Evaluator's backtest data
+  # prerequisite (also usable for the Regime Classifier's threshold backfill).
+  # Run pattern:
+  #   docker compose run --rm market-data \
+  #     shrap-market-data-backfill --tickers AAPL,MSFT --since 2021-01-01
+  # Reads the bare ALPACA_* data-host credentials from .env (data-host
+  # read-only, same names as the Regime Classifier / News Analyzer use).
+  #
+  # The SAME container also runs the intraday backfill (timeline 2.8), which
+  # writes market_data.intraday_bars rather than daily_bars:
+  #   docker compose --profile tools run --rm market-data \
+  #     shrap-market-data-intraday-backfill --launch-list --dry-run
+  # Mind the grain difference before dropping --dry-run: one ticker-day of
+  # 1Min bars is ~390 rows, so the launch list over the default 30 days is
+  # ~410k rows against the daily backfill's ~50 per ticker-year.
+  # -------------------------------------------------------------------------
+  # Market Data trigger - keeps market_data.daily_bars advancing without a
+  # human. The backfill below is a tools-profile CLI, so bars only ever moved
+  # when someone typed a command; on 2026-07-31 the table was two sessions
+  # stale and every evaluation since had read a frozen panel (KI-024).
+  #
+  # Tickers come from the Curator's Tier-3 launch list, not from config. The
+  # window is computed per ticker from what the store already has, so a sweep
+  # requests the gap rather than five years, and a newly added name still gets
+  # its full history. Shares market-data.Dockerfile with the backfill, so a
+  # change under src/shrap/market_data/ has TWO build targets.
+  market-data-trigger:
+    build:
+      context: ../
+      dockerfile: infra/market-data.Dockerfile
+    container_name: shrap_market_data_trigger
+    command: ["shrap-market-data-trigger"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MARKET_DATA_TRIGGER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      MARKET_DATA_TRIGGER_FEED: "iex"
+      MARKET_DATA_TRIGGER_ADJUSTMENT: "all"
+      # Six hours: daily bars change once per session, so the interval buys
+      # latency after the close rather than resolution.
+      MARKET_DATA_TRIGGER_SWEEP_INTERVAL_SECONDS: "21600"
+      MARKET_DATA_TRIGGER_RESTATE_DAYS: "5"
+      MARKET_DATA_TRIGGER_LOG_LEVEL: "INFO"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  market-data:
+    build:
+      context: ../
+      dockerfile: infra/market-data.Dockerfile
+    container_name: shrap_market_data
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      MARKET_DATA_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      MARKET_DATA_FEED: "iex"
+      MARKET_DATA_ADJUSTMENT: "all"
+      MARKET_DATA_LOG_LEVEL: "INFO"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+  # Strategy Evaluator - Research Department, the firm's deterministic
+  # gatekeeper. NOT started by default (no overnight queue runner this card);
+  # gated behind the "tools" profile and exec'd on demand. Reads a
+  # hypothesis-stage strategy from research.strategies, backtests it against
+  # market_data.daily_bars (walk-forward + realistic costs + friction stress),
+  # and promotes to paper / kills on the registry. Anchor freshness is checked
+  # against research.world_changers only (bottleneck leg deferred). Publishes
+  # research.strategy.verdict / research.strategy.killed. No LLM, no broker
+  # credentials.
+  # Run pattern — BUILD FIRST, and do NOT pass --user. See
+  # docs/runbooks/deploying-after-a-code-change.md; both were learned the hard way 2026-07-28.
+  #   docker compose --profile tools build strategy-evaluator
+  #   docker compose --profile tools run --rm strategy-evaluator \
+  #     shrap-strategy-evaluate --strategy-id 01STRAT... [--dry-run]
+  # `run` never rebuilds, so without the build step this silently executes the
+  # previously-built image. And the container's default uid (10001) is what
+  # matches the mounted card directory below — overriding it to the host user
+  # causes PermissionError on a directory whose ownership looks correct.
+  # -------------------------------------------------------------------------
+  strategy-evaluator:
+    build:
+      context: ../
+      dockerfile: infra/strategy-evaluator.Dockerfile
+    container_name: shrap_strategy_evaluator
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      STRATEGY_EVALUATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      STRATEGY_EVALUATOR_REDIS_URL: "redis://redis:6379/0"
+      # Absolute, and bind-mounted below. This was previously the RELATIVE path
+      # "docs/strategies/evaluations", which resolved against WORKDIR /app —
+      # root-owned, while the container runs as USER shrap (uid 10001). The
+      # evaluator could never write a card: it died with PermissionError on
+      # mkdir at the FIRST line of commit(), before the registry transition,
+      # the evaluations row, and the event publish. Found 2026-07-27 by the
+      # first real verdict run.
+      STRATEGY_EVALUATOR_CARD_ROOT: "/cards"
+      STRATEGY_EVALUATOR_LOG_LEVEL: "INFO"
+    volumes:
+      # Evaluation cards are repo artifacts ("the repo is the truth"), so they
+      # land in the working tree rather than a named volume.
+      #
+      # ONE-TIME HOST SETUP, required before the first run on a new machine —
+      # a bind mount carries host ownership, so uid 10001 must be able to write:
+      #   sudo mkdir -p ../docs/strategies/evaluations
+      #   sudo chown 10001:10001 ../docs/strategies/evaluations
+      # Cards then land owned by uid 10001. To commit them, either chown back
+      # afterwards or invoke with `--user "$(id -u):$(id -g)"`.
+      - ../docs/strategies/evaluations:/cards
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Strategy Evaluator TRIGGER - the always-on half (ADR-0013 item 2). Same
+  # image as strategy-evaluator above, different command: instead of one
+  # evaluation on demand, it sweeps hypothesis-stage strategies on an interval
+  # and evaluates each through the identical pipeline. NOT tools-profile: this
+  # one is meant to be running.
+  #
+  # ADR-0015 - kills apply unattended, promotes do not. A promote is recorded
+  # (card + research.evaluations row + research.strategy.promotion-pending
+  # event) but the registry transition is withheld, because hypothesis -> paper
+  # is what makes the Strategy Runner start emitting trading signals for it.
+  # Applying a held promotion = running the ordinary CLI on the same strategy:
+  #   docker compose --profile tools run --rm strategy-evaluator \
+  #     shrap-strategy-evaluate --strategy-id 01STRAT...
+  #
+  # It shares the card bind mount, so the SAME one-time host chown documented
+  # on strategy-evaluator applies - and this service writes cards unattended,
+  # so a missing chown fails on a schedule rather than when someone is looking.
+  # -------------------------------------------------------------------------
+  strategy-evaluator-trigger:
+    build:
+      context: ../
+      dockerfile: infra/strategy-evaluator.Dockerfile
+    container_name: shrap_strategy_evaluator_trigger
+    command: ["shrap-strategy-evaluator-trigger"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      STRATEGY_EVALUATOR_TRIGGER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      STRATEGY_EVALUATOR_TRIGGER_REDIS_URL: "redis://redis:6379/0"
+      STRATEGY_EVALUATOR_TRIGGER_CARD_ROOT: "/cards"
+      # 15 minutes between sweeps; a strategy is not re-evaluated for 24h unless
+      # its spec_hash or the protocol version changes. The sweep interval is
+      # responsiveness; the re-evaluation floor is what stops duplicate work.
+      STRATEGY_EVALUATOR_TRIGGER_SWEEP_INTERVAL_SECONDS: "900"
+      STRATEGY_EVALUATOR_TRIGGER_REEVAL_INTERVAL_HOURS: "24"
+      STRATEGY_EVALUATOR_TRIGGER_LOG_LEVEL: "INFO"
+    volumes:
+      - ../docs/strategies/evaluations:/cards
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Hypothesis Generator - the firm proposing its own strategies from the
+  # literature (technical-catalyst archetype, ADR-0013). Tools profile: one
+  # batch on demand, exits when done.
+  #
+  #   docker compose --profile tools run --rm hypothesis-generator \
+  #     shrap-hypothesis-generate --dry-run --limit 10
+  #   docker compose --profile tools run --rm hypothesis-generator \
+  #     shrap-hypothesis-generate --gaps
+  #
+  # It reuses strategy-evaluator.Dockerfile, and that is a requirement rather
+  # than convenience: the capability check reads FACTOR_SCORERS and the engine's
+  # parameter bounds to decide whether a published effect is runnable, which
+  # pulls in numpy. The tech-watcher image has no numpy, so running the
+  # generator there fails at import (2026-07-30) - see runbook 1d.
+  #
+  # A change under src/shrap/research/ therefore has THREE build targets:
+  # strategy-evaluator, strategy-evaluator-trigger, and this one.
+  # -------------------------------------------------------------------------
+  hypothesis-generator:
+    build:
+      context: ../
+      dockerfile: infra/strategy-evaluator.Dockerfile
+    container_name: shrap_hypothesis_generator
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      HYPOTHESIS_GENERATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      # Same routing as tech-watcher: ollama.com directly, bearer token from
+      # .env. The local daemon's cloud path authenticates with a host Ed25519
+      # key that dies with the container volume; a token is config.
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+      # The CLI defaults to --tier local-heavy, so local-heavy is bound here to
+      # a model that actually exists on this deployment. Without this the tier
+      # resolves to its registry default (mistral-small:24b on the local
+      # daemon), which is not pulled - the CLI would need a --tier flag on
+      # every invocation to work at all.
+      #
+      # gpt-oss:20b-cloud is the model already proving out on the q-fin filter.
+      # The proposer's task is harder (structured extraction with a citation),
+      # so laddering up is expected: set SHRAP_PROPOSER_MODEL and restart. Note
+      # kimi-k3:cloud requires a paid subscription this account does not have -
+      # it 403s (verified 2026-07-30).
+      SHRAP_LLM_LOCAL_HEAVY_PROVIDER: "ollama"
+      SHRAP_LLM_LOCAL_HEAVY_MODEL: "${SHRAP_PROPOSER_MODEL:-gpt-oss:20b-cloud}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
+  # Hypothesis Generator TRIGGER - the always-on half. Same image and same
+  # pipeline as the tools service above; instead of one batch on demand it
+  # sweeps pending literature on an interval.
+  #
+  # Without it the funnel has a person in it: Tech Watcher fills
+  # research.literature_items hourly and nothing reads them until someone types
+  # a command (the state #156 shipped in, found 2026-07-30).
+  #
+  # ARMED by default, and the reason is a bound rather than a hope. A proposal's
+  # identity is (rule, factor) and an already-held identity is refused, so this
+  # can mint at most ONE lineage root per implemented effect, ever - registry
+  # pollution is capped by the size of the scorer library, not by how long it
+  # runs. What it writes is `hypothesis`, which trades nothing: the Evaluator
+  # still gates it, kills apply unattended, and a promote is withheld for Mike
+  # (ADR-0015).
+  #
+  # HYPOTHESIS_GENERATOR_DRY_RUN=true is the kill switch - the sweep still runs
+  # and still reports, and writes nothing.
+  # -------------------------------------------------------------------------
+  hypothesis-generator-trigger:
+    build:
+      context: ../
+      dockerfile: infra/strategy-evaluator.Dockerfile
+    container_name: shrap_hypothesis_generator_trigger
+    command: ["shrap-hypothesis-generator-trigger"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HYPOTHESIS_GENERATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      HYPOTHESIS_GENERATOR_REDIS_URL: "redis://redis:6379/0"
+      # Literature arrives at the speed of arXiv. Sweeping faster spends
+      # round-trips finding nothing.
+      HYPOTHESIS_GENERATOR_SWEEP_INTERVAL_SECONDS: "3600"
+      HYPOTHESIS_GENERATOR_MAX_ITEMS: "25"
+      HYPOTHESIS_GENERATOR_DRY_RUN: "${HYPOTHESIS_GENERATOR_DRY_RUN:-false}"
+      HYPOTHESIS_GENERATOR_LOG_LEVEL: "INFO"
+      SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
+      SHRAP_LLM_LOCAL_HEAVY_PROVIDER: "ollama"
+      SHRAP_LLM_LOCAL_HEAVY_MODEL: "${SHRAP_PROPOSER_MODEL:-gpt-oss:20b-cloud}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # Infrastructure Mapper (Month-2) - deterministic, run-on-demand (tools
+  # profile, not started by default). Loads the hand-seeded world-changer graph
+  # into research.graphs* and inspects graph state. Run pattern:
+  #   docker compose run --rm infra-mapper shrap-infra-mapper load-seed-graph
+  #   docker compose run --rm infra-mapper shrap-infra-mapper list
+  infra-mapper:
+    build:
+      context: ../
+      dockerfile: infra/infra-mapper.Dockerfile
+    container_name: shrap_infra_mapper
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      INFRA_MAPPER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      INFRA_MAPPER_REDIS_URL: "redis://redis:6379/0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shrap_net
