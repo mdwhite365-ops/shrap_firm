@@ -47,9 +47,10 @@ the same as alpha. Do not report it as alpha.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from itertools import pairwise
 
 # Below this the number describes the sample, not the strategy. Deliberately
 # lower than forward_score's 20-session floor for an annualised *rate*: an
@@ -192,10 +193,41 @@ def equal_weight_session_returns(
     return returns
 
 
+def equal_weight_returns_for_dates(
+    closes: Mapping[str, Mapping[date, float]],
+    dates: Sequence[date],
+) -> list[float]:
+    """One equal-weight return per transition in ``dates``.
+
+    Date-keyed rather than positional, because the account's session dates and
+    the bar table's are not guaranteed to line up: a reconciliation pass can
+    land on a day with no bar, and a positional zip would then compare Tuesday's
+    equity against Wednesday's market.
+
+    **Each transition averages only names priced on BOTH of its dates.** A name
+    that listed midway contributes to the transitions it has and to no others,
+    rather than being dropped from the universe entirely or padded with a
+    fabricated price. Same reasoning as the ragged-panel handling in
+    :class:`~shrap.research.strategy_evaluator.benchmark.EqualWeightBuyAndHold`:
+    the benchmark's universe is the names trading that day.
+    """
+
+    returns: list[float] = []
+    for previous, current in pairwise(dates):
+        moves = [
+            series[current] / series[previous] - 1.0
+            for series in closes.values()
+            if previous in series and current in series and series[previous] > 0.0
+        ]
+        returns.append(sum(moves) / len(moves) if moves else 0.0)
+    return returns
+
+
 __all__ = [
     "DEFAULT_MIN_SESSIONS",
     "LiveComparison",
     "SessionPoint",
     "compare_to_benchmark",
+    "equal_weight_returns_for_dates",
     "equal_weight_session_returns",
 ]
