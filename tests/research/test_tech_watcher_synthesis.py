@@ -624,3 +624,51 @@ def test_synthesis_cluster_prompt_includes_target_impostors() -> None:
     prompt = _cluster_prompt(cluster)
     assert "Known impostors for compute-substrate" in prompt
     assert "neuromorphic" in prompt.lower()
+
+
+# --- Kill-criteria polarity ---------------------------------------------------
+#
+# Found 2026-08-04 on the live review page: two of three proposed candidates had
+# kill criteria that fire when the thesis SUCCEEDS.
+#
+#   haleu-cost-curve          "HALEU production capacity >200 tonnes/year by 2030"
+#   true-autonomy-implementation  "Waymo daily miles > 1,000,000 by FY27"
+#
+# Both read as milestones, and a candidate written that way cannot be killed by
+# evidence: it dies exactly when it is right and survives forever when it is
+# wrong. The prompt showed the correct shape in a single example and never
+# stated the rule, so a model that missed the example had nothing to check
+# against.
+
+
+def test_the_prompt_states_the_polarity_rule_not_just_an_example() -> None:
+    from shrap.research.tech_watcher.synthesis import SYNTHESIS_SYSTEM_PROMPT
+
+    prompt = SYNTHESIS_SYSTEM_PROMPT.lower()
+    assert "proves the thesis wrong" in prompt
+    assert "do not list conditions that would confirm it" in prompt
+
+
+def test_the_prompt_contrasts_a_good_criterion_with_an_inverted_one() -> None:
+    """The failure mode is that the two read almost identically.
+
+    A rule with no counter-example is easy to agree with and still get backwards,
+    so the BAD case is shown in the same metric as the GOOD one.
+    """
+
+    from shrap.research.tech_watcher.synthesis import SYNTHESIS_SYSTEM_PROMPT
+
+    assert "GOOD" in SYNTHESIS_SYSTEM_PROMPT
+    assert "BAD" in SYNTHESIS_SYSTEM_PROMPT
+    # The real inverted criterion that shipped, and its correct form.
+    assert "unit cost stays above $800/kg through 2030" in SYNTHESIS_SYSTEM_PROMPT
+    assert "unit cost falls below $800/kg by 2030" in SYNTHESIS_SYSTEM_PROMPT
+
+
+def test_the_prompt_says_why_an_inverted_criterion_is_worse_than_none() -> None:
+    """Stating the consequence, not just the rule. A criterion that fires on
+    success is not a weak falsifier — it is an anti-falsifier."""
+
+    from shrap.research.tech_watcher.synthesis import SYNTHESIS_SYSTEM_PROMPT
+
+    assert "can never be killed by evidence" in SYNTHESIS_SYSTEM_PROMPT
