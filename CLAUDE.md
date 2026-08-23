@@ -22,7 +22,7 @@ Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike
 > **Check the status docs before trusting them.** They have now fallen behind
 > `main` three times — #72–#80, #92–#101, and #129–#175, the last being
 > forty-six PRs of finished work still described as pending. Run
-> **`make doc-drift`** first (last reconciled at **#200**). When it fails, trust
+> **`make doc-drift`** first (last reconciled at **#206**). When it fails, trust
 > `git log`, `docker compose ps` and the database over any document.
 >
 > **`make doc-drift` compares PR numbers, not claims.** On 2026-08-04 it

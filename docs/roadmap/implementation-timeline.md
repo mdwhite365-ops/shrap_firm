@@ -42,6 +42,14 @@ idle account's +0.66%, which is what an IR of 0.306 predicts. The path needed
 **five** fixes in ten days (#192, #193, #195, #196, #198, #199) before the
 measurement was trustworthy; none of them make a bad strategy good.
 
+**The firm can now measure itself against the market** (#203–#206):
+`shrap-live-benchmark` compares a live account to an *exposure-matched*
+benchmark and reports the promote gate's own information ratio, computed with
+the same function so the two cannot drift. Its first trustworthy reading gave
+IR +0.84 and −0.45 over nine sessions — t-statistics of +0.16 and −0.09 — and
+flagged both `NOT MEANINGFUL`. Printing a number above the promote floor while
+refusing to let it be used is the point of the tool, not a limitation of it.
+
 **Remaining for day trading:** 2.8 and 2.9 shipped, so what is left is the bar
 *grain* change — `BarSample.session_date` is a `date`, and that type runs
 through `PanelWindow`, `PricePanel`, the Evaluator and every strategy.
