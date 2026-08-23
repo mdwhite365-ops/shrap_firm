@@ -197,30 +197,66 @@ def equal_weight_returns_for_dates(
     closes: Mapping[str, Mapping[date, float]],
     dates: Sequence[date],
 ) -> list[float]:
-    """One equal-weight return per transition in ``dates``.
+    """Per-transition returns of an equal-weight **buy-and-hold** book.
 
-    Date-keyed rather than positional, because the account's session dates and
-    the bar table's are not guaranteed to line up: a reconciliation pass can
-    land on a day with no bar, and a positional zip would then compare Tuesday's
-    equity against Wednesday's market.
+    Buy 1/N at ``dates[0]`` and hold. The portfolio's value at *t* is the mean
+    of each name's ``close(t) / close(dates[0])``, and the returns are the
+    changes in that value.
 
-    **Each transition averages only names priced on BOTH of its dates.** A name
-    that listed midway contributes to the transitions it has and to no others,
-    rather than being dropped from the universe entirely or padded with a
-    fabricated price. Same reasoning as the ragged-panel handling in
-    :class:`~shrap.research.strategy_evaluator.benchmark.EqualWeightBuyAndHold`:
-    the benchmark's universe is the names trading that day.
+    **This averaged per-period returns until 2026-08-23, which is daily
+    rebalancing, not buy-and-hold.** The two are different books and they gave
+    different answers on the first live run — +2.403% rebalanced against
+    +1.825% held, over the same fortnight. That gap was larger than every
+    excess figure being reported, and the module called itself buy-and-hold
+    throughout. The name was right and the arithmetic was wrong.
+
+    It matters beyond accuracy: the promote gate scores backtests against
+    :class:`~shrap.research.strategy_evaluator.benchmark.EqualWeightBuyAndHold`,
+    so a live comparison using a different book cannot be set beside the
+    evaluation that admitted the strategy.
+
+    Ragged data: a name contributes to *t* when it is priced at both the base
+    date and *t*. Dropping it from the whole window instead would shrink the
+    universe to whatever listed earliest.
     """
+
+    if len(dates) < 2:
+        return []
+    base = dates[0]
 
     returns: list[float] = []
     for previous, current in pairwise(dates):
-        moves = [
-            series[current] / series[previous] - 1.0
+        # Membership is held CONSTANT across each transition: only names priced
+        # at the base, at `previous` AND at `current`. Recomputing the universe
+        # per date instead lets a name rejoining mid-window drag its whole
+        # since-inception return into one transition, recording a composition
+        # change as a price move.
+        held = [
+            series
             for series in closes.values()
-            if previous in series and current in series and series[previous] > 0.0
+            if base in series and previous in series and current in series and series[base] > 0.0
         ]
-        returns.append(sum(moves) / len(moves) if moves else 0.0)
+        if not held:
+            returns.append(0.0)
+            continue
+        before = sum(s[previous] / s[base] for s in held) / len(held)
+        after = sum(s[current] / s[base] for s in held) / len(held)
+        returns.append(after / before - 1.0 if before > 0.0 else 0.0)
     return returns
+
+
+def trading_dates(closes: Mapping[str, Mapping[date, float]]) -> set[date]:
+    """Dates the market actually priced, per the bar table.
+
+    The account tables do not know about weekends — reconciliation writes a
+    snapshot every ~300s all week — so a naive window includes Saturdays. Those
+    carry no bar, so the benchmark reads 0.0 across them while the account's
+    equity still moves, and the whole Friday-to-Monday move lands in `excess`
+    with nothing to offset it. Measured on the first live run: 14 "sessions"
+    over a fortnight that held 10 trading days.
+    """
+
+    return {moment for series in closes.values() for moment in series}
 
 
 __all__ = [
@@ -230,4 +266,5 @@ __all__ = [
     "compare_to_benchmark",
     "equal_weight_returns_for_dates",
     "equal_weight_session_returns",
+    "trading_dates",
 ]

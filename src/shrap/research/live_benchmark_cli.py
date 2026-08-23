@@ -31,6 +31,7 @@ from shrap.research.live_benchmark import (
     SessionPoint,
     compare_to_benchmark,
     equal_weight_returns_for_dates,
+    trading_dates,
 )
 
 SELECT_SESSION_EQUITY_SQL = """
@@ -123,12 +124,19 @@ async def load_series(
 
 
 def render(series: Sequence[AccountSeries], closes: dict[str, dict[date, float]]) -> str:
+    # Only days the market priced. The account tables run seven days a week, so
+    # an unfiltered window puts Saturdays in the series: no bar, benchmark 0.0,
+    # and the entire Friday-to-Monday move landing in `excess` unoffset.
+    sessions = trading_dates(closes)
     lines: list[str] = []
     for entry in series:
-        dates = [p.session_date for p in entry.points]
+        points = tuple(p for p in entry.points if p.session_date in sessions)
+        dropped = len(entry.points) - len(points)
+        dates = [p.session_date for p in points]
         benchmark = equal_weight_returns_for_dates(closes, dates)
-        result = compare_to_benchmark(entry.points, benchmark)
-        lines.append(f"\n{entry.account_id}  ({len(dates)} sessions)")
+        result = compare_to_benchmark(points, benchmark)
+        suffix = f", {dropped} non-trading day(s) dropped" if dropped else ""
+        lines.append(f"\n{entry.account_id}  ({max(len(dates) - 1, 0)} sessions{suffix})")
         if not result.is_scored:
             lines.append(f"  not scored: {result.reason}")
             continue
@@ -137,11 +145,18 @@ def render(series: Sequence[AccountSeries], closes: dict[str, dict[date, float]]
         lines.append(f"  average exposure        {result.average_exposure * 100:8.1f}%")
         lines.append(f"  entitled at that size   {result.entitled_return * 100:+8.3f}%")
         lines.append(f"  EXCESS                  {result.excess * 100:+8.3f}%")
-        naive = "lost to" if not result.beat_benchmark_naively else "beat"
-        fair = "beat" if result.excess > 0 else "lost to"
-        lines.append(f"  naive reading: {naive} the benchmark · exposure-matched: {fair} it")
-        if naive != fair:
-            lines.append("  ^ the two readings DISAGREE; the exposure-matched one is the fair one")
+        if result.average_exposure <= 0.0:
+            # A book that was never invested did not compete. Calling that a
+            # loss reads as a verdict on a strategy that never placed a trade.
+            lines.append("  never invested — did not play, so neither beat nor lost")
+        else:
+            naive = "lost to" if not result.beat_benchmark_naively else "beat"
+            fair = "matched" if result.excess == 0 else ("beat" if result.excess > 0 else "lost to")
+            lines.append(f"  naive reading: {naive} the benchmark · exposure-matched: {fair} it")
+            if fair != "matched" and naive != fair:
+                lines.append(
+                    "  ^ the two readings DISAGREE; the exposure-matched one is the fair one"
+                )
         if result.underpowered:
             lines.append("  (underpowered: too few sessions to mean much)")
     return "\n".join(lines) if lines else "no accounts with both equity and position data"
