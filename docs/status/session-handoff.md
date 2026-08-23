@@ -19,10 +19,16 @@ them, and `git log` has the history.
 The 4-month sprint (May–Aug) is nearly over. Stated plainly, because the
 temptation at this point is to describe activity rather than results:
 
-**The firm trades autonomously, correctly, and to no effect yet.** Ten sessions,
-68 orders, 100% fill rate, no human in the path. And over that fortnight the
-best account returned **+0.70%** against an idle all-cash account's **+0.66%**.
-Four basis points. That is the honest headline and it is not a plumbing problem.
+**The firm trades autonomously, correctly, and to an effect nobody has measured
+yet.** Ten sessions, 68 orders, 100% fill rate, no human in the path, and the
+best account returned **+0.70%** over the fortnight.
+
+**Against what, the firm cannot currently say.** There is no control account:
+`PA3YPMG9AD4Z` looked like one — all cash, +0.66% — but its gain is Mike's own
+AAPL/SPY smoke-test buys closing at a profit, so it measures a human's
+discretionary trades, not a do-nothing baseline. A raw +0.70% over two weeks
+means nothing without the benchmark, and the benchmark has to be computed from
+`market_data.daily_bars`, not read off an account.
 
 The two strategies running were staged as **systems tests, not promotions** —
 they scored IR **0.306** against a benchmark scoring **0.876**, so a fortnight of
@@ -42,16 +48,23 @@ not either.
 |---|---|
 | Equity `PA3HEG2CLXLU` | **$9,990.85** (−0.09%) |
 | Equity `PA3KQN57WVXY` | **$10,069.87** (+0.70%) |
-| Equity `PA3YPMG9AD4Z` (idle, all cash) | **$10,066.19** (+0.66%) — **unexplained, see below** |
+| Equity `PA3YPMG9AD4Z` (**not a control** — see below) | **$10,066.19** (+0.66%) |
 | Orders | 68 over 10 sessions, **100% filled** |
 | Open positions | 12 and 27, for strategies that hold **ten** |
 | `risk.decisions` | 155 rows, 84 approvals / 71 vetoes |
 
-**The idle account's gain is not explained.** `PA3YPMG9AD4Z` holds no positions
-and `cash == equity`. Cash does not appreciate, so either it traded and closed
-earlier or it did not start at $10,000. **Until that is resolved there is no
-valid benchmark**, and every performance comparison in this document — including
-the four-basis-point one above — rests on a number nobody has checked.
+**`PA3YPMG9AD4Z` is not a control account, and must not be used as one.** It is
+the original account from the smoke-test phase. Its +0.66% is Mike's manual
+AAPL/SPY test purchases closing at a profit — a human's discretionary trades,
+which is the one thing a control must not contain. It holds only cash now, which
+is exactly what makes it look like a valid baseline at a glance.
+
+**The firm therefore has no benchmark in its account data at all.** The correct
+comparison is equal-weight buy-and-hold over the traded window, computed from
+`market_data.daily_bars` — the same benchmark the Evaluator already uses for
+information ratio. Until that number exists, +0.70% is a return with nothing to
+judge it against, and *"the strategies are flat"* is an impression rather than a
+finding.
 
 ## The trading path, fixed five times in ten days
 
@@ -158,10 +171,12 @@ while the Runner keeps trying to exit it.
 **Nothing on this list is a trading-path fix, and that is deliberate.** Five in
 ten days bought honest measurement; a sixth would not buy anything else.
 
-1. **Explain the idle account's +0.66%.** `PA3YPMG9AD4Z` holds only cash. Until
-   it is explained the firm has no benchmark, and every performance claim —
-   including the ones in this document — is unanchored. Cheapest item here and
-   it gates the interpretation of everything else.
+1. **Compute the benchmark.** Equal-weight buy-and-hold over the 50-name
+   universe for 2026-08-06 → 2026-08-19, from `market_data.daily_bars`. Without
+   it +0.70% is uninterpretable, and it gates every other judgement here. If a
+   clean control account is wanted afterwards it needs a *fresh* one —
+   `PA3YPMG9AD4Z` is contaminated by hand-placed test trades and cannot be
+   scrubbed back into a baseline.
 2. **Clear the sub-$1 dust** in the Alpaca dashboard. Ops, not code.
 3. **Kill and re-propose `true-autonomy-implementation`.** Its falsifiers are
    inverted (see below) and `amend-criteria` is append-only, so they cannot be

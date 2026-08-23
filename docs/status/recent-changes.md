@@ -861,11 +861,14 @@ never held; those shorts were closed by hand.
 
 ## 2026-08-19 — ten sessions of autonomous trading, measured
 
-68 orders, 100% filled, no human in the path. Best account **+0.70%** against an
-idle all-cash account's **+0.66%**. The two strategies scored IR 0.306 against a
-benchmark at 0.876 and were staged as systems tests, so a flat fortnight is what
-the evaluation predicted. **The constraint is research throughput, not
-execution.**
+68 orders, 100% filled, no human in the path. Best account **+0.70%** — against
+nothing, because the firm has no control account. `PA3YPMG9AD4Z` looked like one
+until its +0.66% turned out to be hand-placed AAPL/SPY smoke-test buys closing
+at a profit. The benchmark has to be computed from `market_data.daily_bars`.
+
+The two strategies scored IR 0.306 against a benchmark at 0.876 and were staged
+as systems tests, so a weak fortnight is what the evaluation predicted.
+**The constraint is research throughput, not execution.**
 
 ## Security notes
 
