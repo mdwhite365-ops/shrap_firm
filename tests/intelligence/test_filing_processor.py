@@ -124,6 +124,8 @@ class FakeLLM:
         json_mode: bool = False,
         temperature: float = 0.2,
         think: bool | None = None,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> FakeLLMResult:
         self.calls.append({"tier": tier, "json_mode": json_mode, "think": think})
         content = self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]

@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-08-23 (`main` at #206 — the firm can measure itself now, and says "not yet")
+**Last updated:** 2026-08-23 (`main` at #208 — LLM calls are traced, once Langfuse has keys)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -892,6 +892,19 @@ as systems tests, so a weak fortnight is what the evaluation predicted.
 - PR #206 — A live information ratio, computed with the promote gate's own
   `sharpe` so the two cannot drift. `None` rather than `0.0` when undefined,
   and flagged `NOT MEANINGFUL` below 20 sessions.
+
+- PR #207 — Status docs reconciled to #206.
+- PR #208 — **Langfuse tracing (KI-018).** Langfuse had been deployed for three
+  months with a grep for `langfuse` across `src/` returning zero matches.
+  `TierLLMClient.complete()` now records each completion as a trace plus a
+  generation — full input and output, token counts, model parameters, latency —
+  covering all eleven call sites at once. Calls carry a **`task` name** rather
+  than only a tier, because llm-routing.md slices the migration sample by task
+  and several unrelated jobs share `local-classification`. Tracing **fails
+  open**, the inverse of the Risk Officer: a tracer that raised would let an
+  observability outage stop the Tech Watcher filtering. **It traces nothing
+  until Mike creates API keys in the Langfuse UI** — see the runbook's new
+  §3.4a, which treats "reachable" and "traced" as different claims.
 
 **The first trustworthy reading:** IR +0.84 and −0.45 over nine sessions,
 t-statistics of +0.16 and −0.09. The tool printed a number above the promote

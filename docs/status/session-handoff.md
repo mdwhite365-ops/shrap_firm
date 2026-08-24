@@ -216,12 +216,20 @@ while the Runner keeps trying to exit it.
 **Nothing on this list is a trading-path fix, and that is deliberate.** Five in
 ten days bought honest measurement; a sixth would not buy anything else.
 
-1. **Compute the benchmark.** Equal-weight buy-and-hold over the 50-name
-   universe for 2026-08-06 → 2026-08-19, from `market_data.daily_bars`. Without
-   it +0.70% is uninterpretable, and it gates every other judgement here. If a
-   clean control account is wanted afterwards it needs a *fourth*, fresh one —
+1. ~~**Compute the benchmark.**~~ **Done** — #203–#206 shipped
+   `shrap-live-benchmark`; the reading is in the section above. If a clean
+   control account is wanted it still needs a *fourth*, fresh one —
    `PA3YPMG9AD4Z` is the third strategy's slot, and is contaminated by
    hand-placed test trades besides.
+1a. **Paste the Langfuse API keys into `infra/.env`.** #208 made every agent
+   trace its LLM calls, but **only when keys exist**, and Langfuse issues them
+   from its own UI so no card can create them. Until then each agent logs
+   `llm.tracing_disabled` at startup and the sample keeps not accumulating —
+   which is what KI-018 has described since July. Steps and the verification
+   that separates "reachable" from "traced" are in
+   `docs/runbooks/dell-bootstrap.md` §3.4a. This is five minutes and it is the
+   only item here whose cost is *irrecoverable*: an untraced call cannot be
+   traced retroactively, and Month 4's exit criteria need 50 of them per task.
 2. **Clear the sub-$1 dust** in the Alpaca dashboard. Ops, not code.
 3. **Kill and re-propose `true-autonomy-implementation`.** Its falsifiers are
    inverted (see below) and `amend-criteria` is append-only, so they cannot be

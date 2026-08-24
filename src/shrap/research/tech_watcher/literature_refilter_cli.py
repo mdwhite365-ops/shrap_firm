@@ -30,7 +30,7 @@ import os
 
 import httpx
 
-from shrap.llm import TierLLMClient, TierRegistry
+from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
 from shrap.llm.registry import TIER_LOCAL_CLASSIFICATION
 from shrap.research.hypothesis_generator.literature import PostgresLiteratureStore
 from shrap.research.tech_watcher.literature_filter import literature_refilter_pass
@@ -46,7 +46,8 @@ class _NoLLM:
 async def _run(args: argparse.Namespace) -> str:
     from shrap.common.db import create_asyncpg_pool
 
-    registry = TierRegistry(dict(os.environ))
+    env = dict(os.environ)
+    registry = TierRegistry(env)
     # A verdict's identity is (prompt version, model), so the pass needs to know
     # which model would score these items now — without it a model swap under an
     # unchanged prompt selects nothing and reports success.
@@ -71,7 +72,7 @@ async def _run(args: argparse.Namespace) -> str:
         async with httpx.AsyncClient(follow_redirects=True) as http:
             report = await literature_refilter_pass(
                 pool,
-                TierLLMClient(registry, http),
+                TierLLMClient(registry, http, tracer=tracer_from_env(env, http)),
                 sink,
                 max_items=args.limit,
                 tier=args.tier,

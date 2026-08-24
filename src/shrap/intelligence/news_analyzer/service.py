@@ -50,7 +50,7 @@ from shrap.intelligence.news_analyzer.scorer import (
     parse_news_response,
 )
 from shrap.intelligence.news_analyzer.store import PostgresNewsStore, ScorableItem
-from shrap.llm import TierLLMClient, TierRegistry
+from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
 from shrap.llm.registry import TIER_CLOUD_DEFAULT, TIER_LOCAL_CLASSIFICATION
 from shrap.trading_floor.alpaca import AsyncHttpClient
 
@@ -216,6 +216,8 @@ async def score_pass(
             system=NEWS_SYSTEM_PROMPT,
             json_mode=True,
             think=False,
+            task="news-analyzer.classify",
+            metadata={"item_id": item.item_id, "prompt_version": NEWS_PROMPT_VERSION},
         )
         verdict = parse_news_response(item.item_id, local.content, item.symbols)
         # History row first (KI-007): a crash before the mark re-scores the
@@ -227,12 +229,20 @@ async def score_pass(
         final_model = local.model
         if verdict.materiality >= config.escalation_threshold:
             escalated += 1
+            # Same `task` as the local leg — see the note in the Filing
+            # Processor's escalation: the tier is what distinguishes them.
             cloud = await llm.complete(
                 tier=config.cloud_tier,
                 prompt=prompt,
                 system=NEWS_SYSTEM_PROMPT,
                 json_mode=True,
                 think=False,
+                task="news-analyzer.classify",
+                metadata={
+                    "item_id": item.item_id,
+                    "prompt_version": NEWS_PROMPT_VERSION,
+                    "escalation": True,
+                },
             )
             cloud_verdict = parse_news_response(item.item_id, cloud.content, item.symbols)
             await store.append_verdict(
@@ -384,8 +394,11 @@ async def run(
     await store.ensure_schema()
     source = AlpacaNewsClient(market_data_settings)
     async with httpx.AsyncClient(timeout=http_timeout) as http:
-        registry = TierRegistry(llm_env if llm_env is not None else dict(os.environ))
-        llm = TierLLMClient(registry, cast(Any, http))
+        resolved_env = llm_env if llm_env is not None else dict(os.environ)
+        registry = TierRegistry(resolved_env)
+        llm = TierLLMClient(
+            registry, cast(Any, http), tracer=tracer_from_env(resolved_env, cast(Any, http))
+        )
         try:
             await run_loop(
                 source,

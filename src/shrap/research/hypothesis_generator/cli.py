@@ -92,7 +92,7 @@ def items_from_file(path: Path) -> list[LiteratureItem]:
 
 async def _run(args: argparse.Namespace) -> str:
     from shrap.common.db import create_asyncpg_pool
-    from shrap.llm import TierLLMClient, TierRegistry
+    from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
     from shrap.research.strategy_registry import PostgresStrategyRegistry
 
     pool = await create_asyncpg_pool(_dsn(args.dsn))
@@ -112,9 +112,10 @@ async def _run(args: argparse.Namespace) -> str:
             else await literature.pending(args.limit)
         )
         registry = PostgresStrategyRegistry(pool)
+        env = dict(os.environ)
         async with httpx.AsyncClient(follow_redirects=True) as http:
             generator = HypothesisGenerator(
-                llm=TierLLMClient(TierRegistry(dict(os.environ)), http),
+                llm=TierLLMClient(TierRegistry(env), http, tracer=tracer_from_env(env, http)),
                 registry=registry,
                 literature=literature,
                 gaps=gaps,

@@ -42,7 +42,7 @@ import structlog
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
-from shrap.llm import TierLLMClient, TierRegistry
+from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
 from shrap.llm.registry import TIER_LOCAL_HEAVY
 from shrap.research.hypothesis_generator.generator import HypothesisGenerator
 from shrap.research.hypothesis_generator.literature import PostgresLiteratureStore
@@ -133,9 +133,12 @@ async def run(
             tier=tier,
             dry_run=dry_run,
         )
+        resolved_env = env if env is not None else dict(os.environ)
         async with httpx.AsyncClient(follow_redirects=True) as http:
             generator = HypothesisGenerator(
-                llm=TierLLMClient(TierRegistry(env if env is not None else dict(os.environ)), http),
+                llm=TierLLMClient(
+                    TierRegistry(resolved_env), http, tracer=tracer_from_env(resolved_env, http)
+                ),
                 registry=registry,
                 literature=literature,
                 gaps=gaps,

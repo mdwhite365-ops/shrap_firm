@@ -171,12 +171,41 @@ Open a tunnel from your MacBook (`shrap-dev`):
 
     ssh -L 3000:localhost:3000 shrap-prod
 
-Then on the MacBook browser go to `http://localhost:3000`. Create the first user (Langfuse's standard onboarding), create a project named `shrap-firm`, and copy the public+secret API keys into your password store. These keys will land in agent specs later as the Langfuse SDK credentials.
+Then on the MacBook browser go to `http://localhost:3000`. Create the first user (Langfuse's standard onboarding), create a project named `shrap-firm`, and copy the public+secret API keys into your password store.
 
 API liveness check (from the Dell):
 
     curl -s http://localhost:3000/api/public/health
     # expect: {"status":"OK"} or similar
+
+### 3.4a Turn tracing on (KI-018)
+
+**Reachable is not traced.** Langfuse ran for three months with nothing writing to it, and a healthy container proves only that the collector is up. The agents write traces since #208, but only when they hold keys.
+
+Paste the two keys from the step above into `infra/.env`:
+
+    LANGFUSE_PUBLIC_KEY=pk-lf-...
+    LANGFUSE_SECRET_KEY=sk-lf-...
+
+`LANGFUSE_HOST` already defaults to `http://langfuse:3000`, the container-network address. It is deliberately not `NEXTAUTH_URL`, which is the browser-facing URL and is unreachable from inside the network.
+
+Then recreate the LLM-using services so they pick the keys up:
+
+    sudo docker compose up -d tech-watcher news-analyzer filing-processor hypothesis-generator-trigger
+
+**Verify, and do not skip this.** Each agent says which way it resolved at startup:
+
+    sudo docker compose logs --since 5m tech-watcher | grep llm.tracing
+
+    # want: "llm.tracing_enabled"  host=http://langfuse:3000
+    # not:  "llm.tracing_disabled" reason=...
+
+That line proves the keys were read. It does **not** prove a trace landed — the tracer fails open, so a bad key, a wrong host or a rejected batch all leave the agent running normally and only log `llm.trace_failed` or `llm.trace_rejected`. Check for both, then confirm in the UI:
+
+    sudo docker compose logs --since 1h tech-watcher | grep -E "llm.trace_(failed|rejected)"
+    # want: no output
+
+KI-018 closes when a trace is **visible in the Langfuse UI** under project `shrap-firm`, not when the code merges and not when the startup line appears. Traces are named by task — `tech-watcher.filter`, `filing-processor.classify` — so the project view should show one row per completion with its full prompt and response.
 
 ### 3.5 Prometheus - all scrape targets UP
 

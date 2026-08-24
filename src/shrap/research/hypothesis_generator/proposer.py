@@ -169,6 +169,8 @@ class CompletionClient(Protocol):
         json_mode: bool = False,
         temperature: float = 0.2,
         think: bool | None = None,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Any: ...
 
 
@@ -306,6 +308,8 @@ async def propose(
         json_mode=True,
         temperature=temperature,
         think=True,
+        task="hypothesis-generator.propose",
+        metadata={"item_id": item.item_id},
     )
     return parse_proposal(item, result.content, result.model)
 

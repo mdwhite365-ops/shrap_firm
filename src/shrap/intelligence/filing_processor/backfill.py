@@ -67,7 +67,7 @@ from shrap.intelligence.filing_processor.store import (
     PendingFiling,
     PostgresFilingStore,
 )
-from shrap.llm import TierLLMClient, TierRegistry
+from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
 
 log = structlog.get_logger(__name__)
 
@@ -265,8 +265,11 @@ async def run(
     source = EdgarFilingClient(sec_user_agent)
     try:
         async with httpx.AsyncClient(timeout=http_timeout, follow_redirects=True) as http:
-            registry = TierRegistry(llm_env if llm_env is not None else dict(os.environ))
-            llm = TierLLMClient(registry, cast(Any, http))
+            resolved_env = llm_env if llm_env is not None else dict(os.environ)
+            registry = TierRegistry(resolved_env)
+            llm = TierLLMClient(
+                registry, cast(Any, http), tracer=tracer_from_env(resolved_env, cast(Any, http))
+            )
             summary = await backfill_pass(
                 store,
                 cast(FilingSource, source),

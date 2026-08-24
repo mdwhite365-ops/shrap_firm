@@ -99,8 +99,10 @@ class FakeLLM:
         json_mode: bool = False,
         temperature: float = 0.2,
         think: bool | None = None,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> FakeLLMResult:
-        self.calls.append({"tier": tier, "json_mode": json_mode, "think": think})
+        self.calls.append({"tier": tier, "json_mode": json_mode, "think": think, "task": task})
         content = self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]
         return FakeLLMResult(content, model=f"model-for-{tier}")
 
@@ -500,6 +502,12 @@ async def test_score_pass_escalates_material_item_appends_second_history_row() -
     assert len(llm.calls) == 2
     assert llm.calls[0]["tier"] == "local-classification"
     assert llm.calls[1]["tier"] == "cloud-default"
+    # Both legs trace under one task name on purpose (KI-018). llm-routing.md's
+    # migration protocol compares two models doing the same job, so the local
+    # pass and its cloud escalation have to land in the same sample; the tier
+    # is what tells them apart.
+    assert llm.calls[0]["task"] == "news-analyzer.classify"
+    assert llm.calls[1]["task"] == "news-analyzer.classify"
     history = [args for sql, args in pool.conn.executed if sql == INSERT_NEWS_VERDICT_HISTORY_SQL]
     assert len(history) == 2  # both the local and the escalation verdict logged
     # Higher verdict wins for publishing: cloud read (materiality 3, tighter summary).

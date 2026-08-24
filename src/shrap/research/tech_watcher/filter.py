@@ -176,6 +176,8 @@ class CompletionClient(Protocol):
         json_mode: bool = False,
         temperature: float = 0.2,
         think: bool | None = None,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Any: ...
 
 
@@ -376,6 +378,8 @@ async def _score_items(
             system=FILTER_SYSTEM_PROMPT,
             json_mode=True,
             think=False,
+            task="tech-watcher.filter",
+            metadata={"item_id": item.item_id, "prompt_version": FILTER_PROMPT_VERSION},
         )
         verdict = parse_filter_response(item.item_id, result.content)
         decided_at = datetime.now(UTC)

@@ -14,6 +14,7 @@ the orchestration (fetch → score → escalate → publish) lives in
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -82,6 +83,8 @@ class CompletionClient(Protocol):
         json_mode: bool = False,
         temperature: float = 0.2,
         think: bool | None = None,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Any: ...
 
 

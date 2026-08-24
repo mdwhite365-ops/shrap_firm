@@ -71,7 +71,7 @@ from shrap.intelligence.market_phase import (
     interval_for_phase,
     read_latest_phase,
 )
-from shrap.llm import TierLLMClient, TierRegistry
+from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
 from shrap.llm.registry import TIER_CLOUD_DEFAULT, TIER_LOCAL_CLASSIFICATION
 
 log = structlog.get_logger(__name__)
@@ -373,6 +373,12 @@ async def score_pass(
                 system=FILING_SYSTEM_PROMPT,
                 json_mode=True,
                 think=False,
+                task="filing-processor.classify",
+                metadata={
+                    "accession": filing.accession,
+                    "item_code": item_code,
+                    "prompt_version": FILING_PROMPT_VERSION,
+                },
             )
             verdict = parse_filing_response(
                 filing.accession, item_code, local.content, fallback_symbols
@@ -386,12 +392,23 @@ async def score_pass(
             final_model = local.model
             if verdict.materiality >= config.escalation_threshold:
                 escalated += 1
+                # Same `task` as the local leg, deliberately. llm-routing.md's
+                # migration protocol compares two models doing *one* job; naming
+                # the escalation differently would split the sample in half and
+                # leave nothing to compare. The tier tells them apart.
                 cloud = await llm.complete(
                     tier=config.cloud_tier,
                     prompt=prompt,
                     system=FILING_SYSTEM_PROMPT,
                     json_mode=True,
                     think=False,
+                    task="filing-processor.classify",
+                    metadata={
+                        "accession": filing.accession,
+                        "item_code": item_code,
+                        "prompt_version": FILING_PROMPT_VERSION,
+                        "escalation": True,
+                    },
                 )
                 cloud_verdict = parse_filing_response(
                     filing.accession, item_code, cloud.content, fallback_symbols
@@ -562,8 +579,11 @@ async def run(
     await store.ensure_schema()
     source = EdgarFilingClient(sec_user_agent)
     async with httpx.AsyncClient(timeout=http_timeout, follow_redirects=True) as http:
-        registry = TierRegistry(llm_env if llm_env is not None else dict(os.environ))
-        llm = TierLLMClient(registry, cast(Any, http))
+        resolved_env = llm_env if llm_env is not None else dict(os.environ)
+        registry = TierRegistry(resolved_env)
+        llm = TierLLMClient(
+            registry, cast(Any, http), tracer=tracer_from_env(resolved_env, cast(Any, http))
+        )
         try:
             await run_loop(
                 cast(FilingSource, source),
