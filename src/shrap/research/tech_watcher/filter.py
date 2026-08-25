@@ -28,6 +28,7 @@ from typing import Any, Protocol
 import structlog
 from ulid import ULID
 
+from shrap.llm import CompletionClient
 from shrap.llm.registry import TIER_LOCAL_CLASSIFICATION
 from shrap.research.tech_watcher.archetypes import ARCHETYPE_KEYS, archetype_filter_prompt_block
 from shrap.research.tech_watcher.sources import (
@@ -166,22 +167,6 @@ class UnfilteredItem:
     accession number, and appending that to a document adds noise to the one
     part of the prompt the model is supposed to weigh.
     """
-
-
-class CompletionClient(Protocol):
-    async def complete(
-        self,
-        tier: str,
-        prompt: str,
-        system: str | None = None,
-        json_mode: bool = False,
-        temperature: float = 0.2,
-        think: bool | None = None,
-        task: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        trace_id: str | None = None,
-        session_id: str | None = None,
-    ) -> Any: ...
 
 
 # Sources this filter must not score. `arxiv-qfin` feeds the Hypothesis

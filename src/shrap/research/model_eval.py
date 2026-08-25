@@ -56,7 +56,7 @@ from typing import Any, Protocol
 
 import structlog
 
-from shrap.llm import TierRegistry
+from shrap.llm import CompletionClient, TierRegistry
 from shrap.research.tech_watcher.filter import (
     FILTER_PROMPT_VERSION,
     FILTER_SYSTEM_PROMPT,
@@ -114,22 +114,6 @@ class CallResult:
         """
 
         return (self.relevant, self.archetype)
-
-
-class CompletionClient(Protocol):
-    async def complete(
-        self,
-        tier: str,
-        prompt: str,
-        system: str | None = None,
-        json_mode: bool = False,
-        temperature: float = 0.2,
-        think: bool | None = None,
-        task: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        trace_id: str | None = None,
-        session_id: str | None = None,
-    ) -> Any: ...
 
 
 class ClientFactory(Protocol):

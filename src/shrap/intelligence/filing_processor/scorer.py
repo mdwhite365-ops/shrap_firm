@@ -16,9 +16,9 @@ orchestration (poll → fetch → score → publish) lives in
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+
+from shrap.llm import CompletionClient
 
 # Bump on any behavior-relevant prompt change; stamped into every history row
 # so calibration reviews know which prompt scored each item (KI-007).
@@ -99,22 +99,6 @@ class FilingVerdict:
     category: str
     materiality: int
     summary: str
-
-
-class CompletionClient(Protocol):
-    async def complete(
-        self,
-        tier: str,
-        prompt: str,
-        system: str | None = None,
-        json_mode: bool = False,
-        temperature: float = 0.2,
-        think: bool | None = None,
-        task: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        trace_id: str | None = None,
-        session_id: str | None = None,
-    ) -> Any: ...
 
 
 def build_prompt(

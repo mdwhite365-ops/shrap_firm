@@ -31,8 +31,8 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
 
+from shrap.llm import CompletionClient
 from shrap.research.hypothesis_generator.expressible import (
     AVAILABLE_SERIES,
     EXPRESSIBLE_RULES,
@@ -158,22 +158,6 @@ PROPOSER_SYSTEM_PROMPT = (
     '"thesis": "<one paragraph: the claim, the mechanism, and why it should '
     'persist>"}'
 )
-
-
-class CompletionClient(Protocol):
-    async def complete(
-        self,
-        tier: str,
-        prompt: str,
-        system: str | None = None,
-        json_mode: bool = False,
-        temperature: float = 0.2,
-        think: bool | None = None,
-        task: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        trace_id: str | None = None,
-        session_id: str | None = None,
-    ) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)

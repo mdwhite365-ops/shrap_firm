@@ -16,6 +16,11 @@ until API billing is set up (Mike's ruling, 2026-07-15: local-only for now).
 :mod:`shrap.llm.tracing` records each completion to Langfuse. An agent opts in
 with one line — ``tracer=tracer_from_env(env, http)`` at the point it builds
 its client — and a deployment without Langfuse keys simply does not trace.
+
+Agents type their dependency as :class:`shrap.llm.protocol.CompletionClient`
+rather than as the concrete client, and there is exactly one declaration of it.
+Eight modules used to carry their own copy; keeping them in agreement cost two
+eight-file edits in two days before the duplication was removed.
 """
 
 from shrap.llm.client import (
@@ -26,6 +31,7 @@ from shrap.llm.client import (
     TierLLMClient,
 )
 from shrap.llm.http import HTTPClient, HTTPResponse
+from shrap.llm.protocol import CompletionClient
 from shrap.llm.registry import (
     PROVIDER_ANTHROPIC,
     PROVIDER_OLLAMA,
@@ -44,6 +50,7 @@ from shrap.llm.tracing import (
 __all__ = [
     "PROVIDER_ANTHROPIC",
     "PROVIDER_OLLAMA",
+    "CompletionClient",
     "HTTPClient",
     "HTTPResponse",
     "LLMError",
