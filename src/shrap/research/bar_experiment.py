@@ -57,6 +57,7 @@ from typing import Any, Protocol
 
 import structlog
 
+from shrap.llm import CompletionClient
 from shrap.research.tech_watcher.archetypes import ARCHETYPES, archetype_filter_prompt_block
 from shrap.research.tech_watcher.filter import (
     FILTER_PROMPT_VERSION,
@@ -366,22 +367,6 @@ def bars_by_key(keys: Sequence[str] | None = None) -> tuple[Bar, ...]:
 # ---------------------------------------------------------------------------
 # running
 # ---------------------------------------------------------------------------
-
-
-class CompletionClient(Protocol):
-    async def complete(
-        self,
-        tier: str,
-        prompt: str,
-        *,
-        system: str,
-        json_mode: bool,
-        think: bool,
-        task: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        trace_id: str | None = None,
-        session_id: str | None = None,
-    ) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)

@@ -42,6 +42,7 @@ import structlog
 from ulid import ULID
 
 from shrap.events import EventPublisher
+from shrap.llm import CompletionClient
 from shrap.llm.registry import TIER_CLOUD_DEFAULT
 from shrap.research.tech_watcher.archetypes import (
     ARCHETYPE_KEYS,
@@ -183,22 +184,6 @@ class SynthesisReport:
     clusters_promotable: int
     proposed: int
     rejected: int
-
-
-class CompletionClient(Protocol):
-    async def complete(
-        self,
-        tier: str,
-        prompt: str,
-        system: str | None = None,
-        json_mode: bool = False,
-        temperature: float = 0.2,
-        think: bool | None = None,
-        task: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        trace_id: str | None = None,
-        session_id: str | None = None,
-    ) -> Any: ...
 
 
 class RedisStreamClient(Protocol):

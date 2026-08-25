@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-08-25 (`main` at #208 — LLM calls are traced, once Langfuse has keys)
+**Last updated:** 2026-08-25 (`main` at #210 — LLM calls are traced, once Langfuse has keys)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -919,6 +919,20 @@ as systems tests, so a weak fortnight is what the evaluation predicted.
   therefore the only supported path on this server, not a shortcut. Upgrading
   means ClickHouse, a blob store and a worker container; recommended **not this
   sprint**.
+
+- PR #209 — **Re-land of the Langfuse audit that #208 merged without.** The
+  commit passed CI on the branch and was left behind when the PR merged at its
+  first commit, so `main` carried the tracer with none of the audit. The failure
+  mode the same PR documented: `doc-drift` compares PR numbers, and the number
+  was right.
+- PR #210 — **One `CompletionClient`, not eight.** Eight modules declared the
+  protocol themselves, byte-identical in seven cases. Structural typing makes
+  that legal and it reads like decoupling, but it stopped being decoupling the
+  moment the copies had to agree: adding `task`/`metadata` (#208) and
+  `trace_id`/`session_id` (#209) meant editing eight files twice in two days.
+  Same shape as the trading path's defect family — a fact declared in more than
+  one place, where the copies are free to disagree. Net −117 lines, and a parity
+  test so the single declaration cannot drift from the client it describes.
 
 **The first trustworthy reading:** IR +0.84 and −0.45 over nine sessions,
 t-statistics of +0.16 and −0.09. The tool printed a number above the promote

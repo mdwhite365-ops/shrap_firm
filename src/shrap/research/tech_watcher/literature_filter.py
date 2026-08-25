@@ -36,6 +36,7 @@ from typing import Any, Protocol
 import structlog
 from ulid import ULID
 
+from shrap.llm import CompletionClient
 from shrap.llm.registry import TIER_LOCAL_CLASSIFICATION
 from shrap.research.hypothesis_generator.literature import (
     STREAM_LITERATURE_INGESTED,
@@ -127,22 +128,6 @@ UPDATE research.raw_source_items
 SET filtered_at = $2, filter_result = $3::jsonb
 WHERE item_id = $1
 """.strip()
-
-
-class CompletionClient(Protocol):
-    async def complete(
-        self,
-        tier: str,
-        prompt: str,
-        system: str | None = None,
-        json_mode: bool = False,
-        temperature: float = 0.2,
-        think: bool | None = None,
-        task: str | None = None,
-        metadata: Mapping[str, Any] | None = None,
-        trace_id: str | None = None,
-        session_id: str | None = None,
-    ) -> Any: ...
 
 
 class AsyncConnection(Protocol):
