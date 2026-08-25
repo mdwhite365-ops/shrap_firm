@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-08-23 (**KI-018** — LLM calls are instrumented as of #208, and stay untraced until Langfuse has API keys)
+**Last updated:** 2026-08-25 (**KI-018** — LLM calls are instrumented as of #208 and stay untraced until Langfuse has API keys; **KI-032** — the Langfuse server is end of life)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -738,6 +738,35 @@ Three decisions worth keeping:
   asks for *full* input/output, and a silently shortened sample would satisfy
   the letter of that while corrupting the evaluation.
 
+### Audited against Langfuse's own guidance, 2026-08-25
+
+The official Langfuse skill (`.claude/skills/langfuse/`, vendored at
+`ff47830`) prescribes an audit rather than a rewrite when instrumentation
+already exists. Run against #208, it found four gaps, all since fixed:
+
+| Gap | Fix |
+|---|---|
+| **No session grouping.** A 300-item filter pass produced 300 unrelated traces; nothing recorded that they were one run, so *"what did the 09:00 pass do"* could not be asked. | One `session_id` per pass, minted where the pass function already runs exactly once. Synthesis reuses its existing `batch_id` — the batch *is* the session. |
+| **The escalation read as two units of work.** The Filing Processor and News Analyzer score an item locally, then score the *same item* on a cloud tier. Those landed as two unrelated traces. | Callers mint one `trace_id` per item and pass it to both legs, so the escalation is a second generation under the first's trace. |
+| **Names were not verb-first.** Langfuse asks for active language at low cardinality; `tech-watcher.filter` leads with a noun. | Renamed throughout: `filter-world-changer-item`, `score-filing-item`, `score-news-item`, `synthesize-candidate`, `propose-hypothesis`, `evaluate-model-candidate`, `evaluate-archetype-bar`, `filter-literature-item`. Run-specific values stay in metadata, never the name. |
+| **Masking not assessed.** | Assessed and deliberately not implemented — see below. |
+
+**Masking: assessed, not implemented.** What reaches the LLM layer is
+public-source text — SEC filing bodies, news headlines, arXiv abstracts, and the
+firm's own prompts. No credential passes through it; ADR-0003 confines broker
+keys to broker-facing containers and this is not one. Two changes should reopen
+the question: a prompt built from anything user-supplied, or a Langfuse instance
+reachable by anyone but Mike.
+
+**The one step of the skill's workflow that could not be run** is its required
+self-audit loop — execute the path, fetch the trace back, check it against the
+live guidance, repeat. That needs API keys and a reachable Langfuse. It is the
+first thing to do after the keys exist, and until then no one has *seen* a
+Shrap trace.
+
+**The audit also surfaced [KI-032](#ki-032--the-langfuse-server-is-end-of-life-and-that-locks-out-every-current-client):** the deployed
+server is end of life, and no current Langfuse SDK can talk to it.
+
 ### What remains, and why this is not closed
 
 **Nothing is traced until Langfuse issues API keys, and only Mike can do that.**
@@ -1381,3 +1410,45 @@ class was found and fixed in the **risk** loop on 2026-07-06 (see
 that loop the same way). The lesson generalised across loops; the fix did not.
 When a poison-pill class is found in one consumer, audit every other consumer in
 the same file before closing the card.
+
+## KI-032 — The Langfuse server is end of life, and that locks out every current client
+
+**Status:** Open, found 2026-08-25 while auditing #208 against Langfuse's own
+instrumentation skill. Not blocking today. It is a decision for Mike, not a bug.
+
+`infra/docker-compose.yml` pins `langfuse/langfuse:2`. Langfuse's self-hosted
+compatibility matrix says what that costs:
+
+| Client | OSS v2 (deployed) | OSS v3 | OSS v4 |
+|---|---|---|---|
+| Python SDK v4 (current, 4.14.5) | **Unsupported** | ≥ 3.63.0 | Full |
+| Python SDK v3 | **Unsupported** | ≥ 3.63.0 | Deprecated |
+| Python SDK v2 | Full (deprecated) | Full | Unsupported |
+| OpenTelemetry `/api/public/otel/v1/traces` | **Unsupported** | ≥ 3.22.0 | Full |
+| Legacy `/api/public/ingestion` | **Full** | Full | Unsupported |
+
+**OSS v2 is marked "End of life"** — no security patches.
+
+Three consequences, in the order they matter:
+
+1. **#208 is built the only way it could have been.** The direct ingestion
+   client is not a shortcut taken to avoid a dependency; on this server the
+   recommended SDK cannot connect at all. Anyone reading `llm/tracing.py` and
+   wondering why it is not `from langfuse import Langfuse` should stop here.
+2. **The OTel path does not exist below server 3.22.0.** Langfuse is steering
+   all instrumentation towards it and deprecating the ingestion endpoint that
+   this firm depends on. The endpoint keeps working on self-hosted until a v4
+   upgrade, so nothing breaks by surprise — but the migration is one-way and
+   the firm is on the wrong side of it.
+3. **An upgrade is an infrastructure card, not a version bump.** v3 adds a
+   worker container, **ClickHouse**, an **S3/blob store**, and Redis. That is
+   three to four new stateful services on a Dell already running 34 containers,
+   with the backup surface (`docs/runbooks/dell-bootstrap.md` §7) growing to
+   match.
+
+**Recommendation: not this sprint.** Tracing works on v2, the sample the Month-4
+migration needs accumulates through the legacy endpoint, and the binding
+constraint remains research throughput. Revisit when either the firm wants
+OTel-based instrumentation or the EOL security posture stops being acceptable —
+and treat it as its own card with its own backup plan, not as a dependency of a
+tracing change.

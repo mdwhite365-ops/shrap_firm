@@ -71,6 +71,8 @@ class FakeClient:
         think: bool,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> FakeResult:
         self.calls.append((tier, system, prompt))
         return FakeResult(self.content)
@@ -87,6 +89,8 @@ class ExplodingClient:
         think: bool,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> FakeResult:
         raise ConnectionError("ollama said no")
 

@@ -126,6 +126,8 @@ class FakeLLM:
         think: bool | None = None,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> FakeLLMResult:
         self.calls.append({"tier": tier, "json_mode": json_mode, "think": think})
         content = self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]

@@ -285,6 +285,72 @@ async def test_latency_is_the_measured_duration_not_a_second_clock_read() -> Non
     assert generation["endTime"] == "2026-08-23T14:00:01.500000+00:00"
 
 
+# --- sessions and trace grouping -----------------------------------------------
+
+
+async def test_no_session_id_means_no_session_field() -> None:
+    http = FakeHTTP(FakeResponse(207))
+
+    await LangfuseTracer(http, _config()).record(_call())
+
+    assert "sessionId" not in _event(http, "trace-create")["body"]
+
+
+async def test_session_id_groups_a_pass() -> None:
+    # A 300-item filter pass is 300 traces. Without a session nothing in the UI
+    # says they were one run.
+    http = FakeHTTP(FakeResponse(207))
+
+    await LangfuseTracer(http, _config()).record(_call(session_id="pass-01J"))
+
+    assert _event(http, "trace-create")["body"]["sessionId"] == "pass-01J"
+
+
+async def test_a_supplied_trace_id_is_used_instead_of_minting_one() -> None:
+    http = FakeHTTP(FakeResponse(207))
+
+    await LangfuseTracer(http, _config()).record(_call(trace_id="trace-abc"))
+
+    assert _event(http, "trace-create")["body"]["id"] == "trace-abc"
+    assert _event(http, "generation-create")["body"]["traceId"] == "trace-abc"
+
+
+async def test_two_calls_sharing_a_trace_id_land_on_one_trace() -> None:
+    """The escalation path: one item scored locally, then again on a cloud tier.
+
+    That is one unit of work with two generations, not two units.
+    """
+
+    http = FakeHTTP(FakeResponse(207))
+    tracer = LangfuseTracer(http, _config())
+
+    await tracer.record(_call(trace_id="item-7", tier="local-classification"))
+    await tracer.record(_call(trace_id="item-7", tier="cloud-default"))
+
+    first = next(e for e in http.requests[0][1]["batch"] if e["type"] == "generation-create")
+    second = next(e for e in http.requests[1][1]["batch"] if e["type"] == "generation-create")
+    assert first["body"]["traceId"] == second["body"]["traceId"] == "item-7"
+    # Distinct generations under one trace, not one overwritten twice.
+    assert first["body"]["id"] != second["body"]["id"]
+
+
+async def test_client_threads_session_and_trace_ids_through() -> None:
+    http = RoutingHTTP(_ollama_ok(), FakeResponse(207))
+    client = TierLLMClient(TierRegistry({}), http, tracer=LangfuseTracer(http, _config()))
+
+    await client.complete(
+        TIER_LOCAL_CLASSIFICATION,
+        prompt="x",
+        task="score-news-item",
+        trace_id="item-7",
+        session_id="pass-01J",
+    )
+
+    trace = next(e for e in http.trace_requests[0]["batch"] if e["type"] == "trace-create")
+    assert trace["body"]["id"] == "item-7"
+    assert trace["body"]["sessionId"] == "pass-01J"
+
+
 # --- failures ------------------------------------------------------------------
 
 

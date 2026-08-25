@@ -379,6 +379,8 @@ class CompletionClient(Protocol):
         think: bool,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> Any: ...
 
 
@@ -418,7 +420,7 @@ async def run_bar(
                 system=bar.system_prompt,
                 json_mode=True,
                 think=False,
-                task="research.bar-experiment",
+                task="evaluate-archetype-bar",
                 metadata={"bar": bar.key, "item_id": item.item_id},
             )
         except Exception as exc:  # recorded in the result, never swallowed

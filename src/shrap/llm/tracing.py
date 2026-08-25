@@ -38,11 +38,34 @@ wrong, both confirmed against Langfuse's published OpenAPI spec:
   input/output and a silently shortened sample would satisfy the letter of that
   while quietly corrupting the migration evaluation.
 
-The deployed image is ``langfuse/langfuse:2``, where ``/api/public/ingestion`` is
-the only ingestion path. Langfuse Cloud has since deprecated it in favour of an
-OpenTelemetry endpoint, and self-hosted deployments keep it until they upgrade to
-v4 — so that deprecation is a note for whoever does that upgrade, not a reason to
-build against an endpoint this deployment does not serve.
+**Why this is hand-rolled rather than the Langfuse SDK.** The deployed image is
+``langfuse/langfuse:2``, and Langfuse's own compatibility matrix rules out every
+current client against it:
+
+===========================  ==========================================
+Client                       OSS v2 (this deployment)
+===========================  ==========================================
+Python SDK v4 (current)      Unsupported
+Python SDK v3                Unsupported
+Python SDK v2                Full — but deprecated
+OTel ``/api/public/otel/*``  Unsupported (needs server >= 3.22.0)
+``/api/public/ingestion``    **Full**
+===========================  ==========================================
+
+So the legacy ingestion endpoint is not a shortcut around the SDK; on this server
+it is the only supported path, and the SDK the docs recommend cannot talk to it
+at all. **OSS v2 is also marked end of life**, which is a real finding rather
+than a footnote — see KI-032. Upgrading to v3+ adds a worker container,
+ClickHouse, a blob store and Redis, so it is an infrastructure card and the
+decision is Mike's.
+
+**On masking, which the baseline asks about.** Nothing is masked, and that is an
+assessment rather than an omission. What reaches this layer is public-source
+text: SEC filing bodies, news headlines, arXiv abstracts, and the firm's own
+prompts. No credential passes through it — ADR-0003 confines broker keys to
+broker-facing containers, and the LLM path is not one of them. Two things would
+change the answer and should reopen it: a prompt built from anything
+user-supplied, or a Langfuse instance reachable by anyone but Mike.
 """
 
 from __future__ import annotations
@@ -116,12 +139,15 @@ class TracedCall:
     """
 
     task: str
-    """What the call was *for* — ``tech-watcher.filter``, ``news.classify``.
+    """What the call was *for*, named verb-first — ``score-filing-item``.
 
-    llm-routing.md slices the migration sample "by task type and regime", so a
-    trace named after its tier would be unsliceable: several unrelated jobs share
-    ``local-classification``, and telling them apart afterwards is exactly what
-    the evaluator needs to do.
+    Two constraints meet in this field. llm-routing.md slices the migration
+    sample "by task type and regime", so a trace named after its *tier* would be
+    unsliceable: several unrelated jobs share ``local-classification``. And
+    Langfuse's tracing guidance asks for active language, verbs first, at low
+    cardinality — ``score-news-item``, never ``score-news-item-8945``. Anything
+    run-specific belongs in :attr:`metadata`, which is why the item id lives
+    there and not in the name.
     """
 
     tier: str
@@ -137,6 +163,32 @@ class TracedCall:
     model_parameters: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
     error: str | None = None
+
+    trace_id: str | None = None
+    """Join this generation onto an existing trace instead of minting one.
+
+    A trace is meant to be "one self-contained unit of work", and for most of
+    the firm that is one completion. The exception is the escalation path: the
+    Filing Processor and News Analyzer score an item locally and, when it looks
+    material, score the *same item* again on a cloud tier. That is one unit of
+    work with two generations, not two units — so the caller mints one id and
+    passes it to both legs, and the second leg shows up under the first's trace
+    rather than as an unrelated row.
+
+    Re-sending ``trace-create`` with an id already seen is an upsert, so the
+    trace ends up carrying the last leg's output — which for an escalation is
+    the verdict that actually won.
+    """
+
+    session_id: str | None = None
+    """Groups every trace from one pass.
+
+    A filter pass over 300 items produces 300 traces. Individually correct and
+    collectively unreadable: nothing in the UI says they were one run, so "what
+    did the 09:00 pass do" cannot be asked. Sessions are how Langfuse expects
+    that to be expressed, and the pass is the natural unit — one session per
+    pass, one trace per item.
+    """
 
     @property
     def failed(self) -> bool:
@@ -167,7 +219,7 @@ class LangfuseTracer:
             )
 
     async def _record(self, call: TracedCall) -> None:
-        trace_id = str(ULID())
+        trace_id = call.trace_id or str(ULID())
         prompt, prompt_clipped = _clip_text(call.prompt, self._config.max_field_chars)
         system, system_clipped = _clip(call.system, self._config.max_field_chars)
         output, output_clipped = _clip(call.content, self._config.max_field_chars)
@@ -194,6 +246,8 @@ class LangfuseTracer:
             "metadata": metadata,
             "tags": [call.tier, call.provider, call.model],
         }
+        if call.session_id is not None:
+            trace_body["sessionId"] = call.session_id
         if self._config.release is not None:
             trace_body["release"] = self._config.release
 

@@ -26,6 +26,7 @@ from typing import Any, Protocol, cast
 import httpx
 import structlog
 from redis.asyncio import Redis
+from ulid import ULID
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
@@ -208,7 +209,13 @@ async def score_pass(
     relevant = 0
     published = 0
     escalated = 0
+    # One session per pass, one trace per item. Without the session a 200-item
+    # pass is 200 unrelated rows and "what did the 09:00 pass do" cannot be
+    # asked; without the shared trace id the escalation below looks like a
+    # second, unrelated scoring of the same headline.
+    session_id = str(ULID())
     for item in items:
+        item_trace_id = str(ULID())
         prompt = build_prompt(item.headline, item.summary, item.symbols)
         local = await llm.complete(
             tier=config.local_tier,
@@ -216,8 +223,10 @@ async def score_pass(
             system=NEWS_SYSTEM_PROMPT,
             json_mode=True,
             think=False,
-            task="news-analyzer.classify",
+            task="score-news-item",
             metadata={"item_id": item.item_id, "prompt_version": NEWS_PROMPT_VERSION},
+            trace_id=item_trace_id,
+            session_id=session_id,
         )
         verdict = parse_news_response(item.item_id, local.content, item.symbols)
         # History row first (KI-007): a crash before the mark re-scores the
@@ -237,12 +246,14 @@ async def score_pass(
                 system=NEWS_SYSTEM_PROMPT,
                 json_mode=True,
                 think=False,
-                task="news-analyzer.classify",
+                task="score-news-item",
                 metadata={
                     "item_id": item.item_id,
                     "prompt_version": NEWS_PROMPT_VERSION,
                     "escalation": True,
                 },
+                trace_id=item_trace_id,
+                session_id=session_id,
             )
             cloud_verdict = parse_news_response(item.item_id, cloud.content, item.symbols)
             await store.append_verdict(
