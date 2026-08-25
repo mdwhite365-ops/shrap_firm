@@ -110,3 +110,28 @@ def test_publishing_is_atomic_in_name(tmp_path: Path) -> None:
     _publish(partial, final)
 
     assert list(tmp_path.iterdir()) == [], "a rejected run left a file behind"
+
+
+def test_docker_command_is_overridable_for_hosts_without_a_docker_group(
+    tmp_path: Path,
+) -> None:
+    """`DOCKER="sudo docker"` must split into two words, not one command name.
+
+    The Dell does not put the deploying user in the `docker` group, so the
+    first real run of this script died on a raw "permission denied ...
+    docker.sock" from inside a dump stage. An array, not a bare string.
+    """
+
+    harness = f'set -uo pipefail; DOCKER="sudo docker"; source "{SCRIPT}"; '
+    harness += 'printf "%s|" "${DOCKER_CMD[@]}"'
+    result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "sudo|docker|"
+
+
+def test_docker_command_defaults_to_plain_docker() -> None:
+    harness = f'set -uo pipefail; source "{SCRIPT}"; printf "%s|" "${{DOCKER_CMD[@]}}"'
+    result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+
+    assert result.stdout == "docker|"
