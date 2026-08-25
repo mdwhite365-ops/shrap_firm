@@ -135,3 +135,39 @@ def test_docker_command_defaults_to_plain_docker() -> None:
     result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
 
     assert result.stdout == "docker|"
+
+
+def test_an_unknown_verifier_kind_is_refused(tmp_path: Path) -> None:
+    """A typo in the `kind` argument must not silently publish unverified.
+
+    The failure this guards is a future edit adding a dump type and misspelling
+    its verifier — which would otherwise fall through and rename the file.
+    """
+
+    partial = tmp_path / "shrap-postgres-2026-08-25.dump.partial"
+    final = tmp_path / "shrap-postgres-2026-08-25.dump"
+    partial.write_bytes(gzip.compress(os.urandom(8192)))
+
+    harness = f'set -uo pipefail; source "{SCRIPT}"; publish "{partial}" "{final}" nonsense'
+    result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+
+    assert result.returncode != 0
+    assert not final.exists()
+    assert "unknown verifier" in result.stderr.lower()
+
+
+def test_the_size_floor_is_overridable_per_dump(tmp_path: Path) -> None:
+    """Globals are a few hundred bytes; the shared floor would reject them."""
+
+    partial = tmp_path / "shrap-postgres-globals-2026-08-25.sql.gz.partial"
+    final = tmp_path / "shrap-postgres-globals-2026-08-25.sql.gz"
+    # Distinct role names, so it compresses like a real globals dump rather
+    # than like eight copies of one line.
+    roles = "".join(f"CREATE ROLE shrap_{os.urandom(6).hex()} LOGIN;\n" for _ in range(12))
+    partial.write_bytes(gzip.compress(roles.encode()))
+
+    harness = f'set -uo pipefail; source "{SCRIPT}"; publish "{partial}" "{final}" gzip 64'
+    result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert final.exists()

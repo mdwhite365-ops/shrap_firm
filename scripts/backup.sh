@@ -64,38 +64,88 @@ volume_for() {
 }
 
 # Verify then publish. Nothing lands in $DEST under its real name until it has
-# passed both checks, so the presence of a file is itself the assertion.
+# passed its checks, so the presence of a file is itself the assertion.
+#
+# `kind` picks the integrity check. `gzip` is a container-format check; `pgdump`
+# asks pg_restore to parse the archive's table of contents, which is a much
+# stronger statement — it proves the dump is a structurally valid archive that
+# pg_restore can read, not merely that the bytes decompress.
 publish() {
-    local partial="$1" final="$2" size
+    local partial="$1" final="$2" kind="${3:-gzip}" min="${4:-$MIN_BYTES}" size
     [ -s "$partial" ] || { rm -f "$partial"; fail "$(basename "$final") is empty"; }
     size="$(wc -c < "$partial")"
-    if [ "$size" -lt "$MIN_BYTES" ]; then
+    if [ "$size" -lt "$min" ]; then
         rm -f "$partial"
-        fail "$(basename "$final") is only ${size}B (under ${MIN_BYTES}B) — treating as a failed dump"
+        fail "$(basename "$final") is only ${size}B (under ${min}B) — treating as a failed dump"
     fi
-    if ! gzip -t "$partial" 2>/dev/null; then
-        rm -f "$partial"
-        fail "$(basename "$final") is not a valid gzip"
-    fi
+    case "$kind" in
+        gzip)
+            if ! gzip -t "$partial" 2>/dev/null; then
+                rm -f "$partial"
+                fail "$(basename "$final") is not a valid gzip"
+            fi
+            ;;
+        pgdump)
+            if ! "${DOCKER_CMD[@]}" exec -i shrap_postgres pg_restore --list \
+                > /dev/null 2>&1 < "$partial"; then
+                rm -f "$partial"
+                fail "$(basename "$final") is not an archive pg_restore can read"
+            fi
+            ;;
+        *) fail "unknown verifier kind: $kind" ;;
+    esac
     mv "$partial" "$final"
-    log "ok: $(basename "$final") (${size}B)"
+    log "ok: $(basename "$final") (${size}B, verified: $kind)"
 }
 
 # --- Postgres: the one that matters -------------------------------------------
 # Every order, fill, risk decision, verdict, equity point and strategy record.
 # Credentials come from the container's own environment, which is the same
 # pattern every ad-hoc psql query in this project uses.
+#
+# **This is a TimescaleDB database and that changes the procedure.** The first
+# real run produced three pg_dump warnings about circular foreign keys on
+# `continuous_agg`, ending "You might not be able to restore the dump" — which
+# is the one sentence that matters in a backup script.
+#
+# Per Tiger Data's logical-backup docs: back up one database at a time with
+# `pg_dump -Fc` rather than reaching for `pg_dumpall`, and restore through
+# `pg_restore` bracketed by `timescaledb_pre_restore()` and
+# `timescaledb_post_restore()`. A plain `psql < dump.sql` restore — which is
+# what this script's first version implied — does not run those and leaves the
+# Timescale catalogs wrong.
+#
+# Roles and tablespaces live outside any single database, so they are dumped
+# separately by `dump_globals`. A per-database dump alone restores tables owned
+# by roles that do not exist.
 dump_postgres() {
     local container="$1" label="$2"
-    local final="$DEST/shrap-${label}-${STAMP}.sql.gz"
+    local final="$DEST/shrap-${label}-${STAMP}.dump"
     local partial="${final}.partial"
-    log "dumping $label from $container"
-    if ! "${DOCKER_CMD[@]}" exec -i "$container" sh -c 'pg_dumpall -U "$POSTGRES_USER"' \
-        | gzip > "$partial"; then
+    log "dumping $label from $container (custom format, one database)"
+    if ! "${DOCKER_CMD[@]}" exec -i "$container" \
+        sh -c 'pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > "$partial"; then
         rm -f "$partial"
-        fail "pg_dumpall failed for $container"
+        fail "pg_dump failed for $container"
     fi
-    publish "$partial" "$final"
+    publish "$partial" "$final" pgdump
+}
+
+# Roles, passwords and tablespaces. Small, plain SQL, restored before the
+# database dumps so the owners referenced inside them exist.
+dump_globals() {
+    local container="$1" label="$2"
+    local final="$DEST/shrap-${label}-globals-${STAMP}.sql.gz"
+    local partial="${final}.partial"
+    log "dumping globals from $container"
+    if ! "${DOCKER_CMD[@]}" exec -i "$container" \
+        sh -c 'pg_dumpall --globals-only -U "$POSTGRES_USER"' | gzip > "$partial"; then
+        rm -f "$partial"
+        fail "pg_dumpall --globals-only failed for $container"
+    fi
+    # Globals are a few hundred bytes on a small cluster, so the shared floor
+    # would reject a legitimate dump.
+    publish "$partial" "$final" gzip 64
 }
 
 # --- Redis: flush to disk first, then copy the volume -------------------------
@@ -167,12 +217,14 @@ main() {
     log "destination $DEST"
     mkdir -p "$DEST" || fail "cannot create $DEST"
     preflight
+    dump_globals shrap_postgres postgres
     dump_postgres shrap_postgres postgres
 
     # Langfuse moved to Cloud on 2026-08-25 (KI-032). The local instance still
     # runs, so it is still backed up — skipped rather than failed if it is
     # retired, so decommissioning it does not break the nightly job.
     if "${DOCKER_CMD[@]}" inspect shrap_langfuse_db >/dev/null 2>&1; then
+        dump_globals shrap_langfuse_db langfuse
         dump_postgres shrap_langfuse_db langfuse
     else
         log "skip: shrap_langfuse_db is not running"
@@ -182,11 +234,12 @@ main() {
     dump_qdrant
 
     log "pruning backups older than ${RETENTION_DAYS} days"
-    find "$DEST" -maxdepth 1 -name 'shrap-*' -type f -mtime "+${RETENTION_DAYS}" -delete
+    find "$DEST" -maxdepth 1 -name 'shrap-*' ! -name '*.partial' -type f \
+        -mtime "+${RETENTION_DAYS}" -delete
 
     # Leave any .partial behind visible rather than tidying it away — its
     # presence is the record that a run died part-way.
-    log "done. $(find "$DEST" -maxdepth 1 -name 'shrap-*.gz' -type f | wc -l) archives present"
+    log "done. $(find "$DEST" -maxdepth 1 \( -name 'shrap-*.gz' -o -name 'shrap-*.dump' \) -type f | wc -l) archives present"
 }
 
 # Only run when executed, not when sourced. `tests/operations/test_backup_script.py`

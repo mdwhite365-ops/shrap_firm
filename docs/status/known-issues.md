@@ -1599,6 +1599,32 @@ a failed `pg_dumpall` piped into `gzip` produces a well-formed ~20-byte file
 that satisfies every check except being a backup. `tests/operations/
 test_backup_script.py` pins exactly that case.
 
+### The first run found a second problem (#214)
+
+`shrap` is a **TimescaleDB** database, and the first real backup said so:
+
+    pg_dump: warning: there are circular foreign-key constraints on this table:
+    pg_dump: detail: continuous_agg
+    pg_dump: hint: You might not be able to restore the dump...
+
+Per Tiger Data's logical-backup docs, a Timescale database is backed up one
+database at a time with `pg_dump -Fc`, and restored through `pg_restore`
+bracketed by `timescaledb_pre_restore()` and `timescaledb_post_restore()` —
+and **never with `pg_restore -j`**, which does not rebuild the Timescale
+catalogs correctly.
+
+The script's first version used `pg_dumpall` and the runbook's restore was a
+plain `psql < dump.sql`, which runs neither function. **It would have produced a
+backup whose documented restore path was wrong** — the same class of failure as
+having no backup, and harder to notice because the file exists and looks right.
+
+#214 switches to `pg_dump -Fc` per database plus a separate
+`pg_dumpall --globals-only` for roles and tablespaces (a database dump alone
+restores tables owned by roles that do not exist), and verifies each dump by
+asking `pg_restore --list` to parse its table of contents — a stronger check
+than `gzip -t`, because it proves pg_restore can read the archive rather than
+merely that the bytes decompress.
+
 ### What remains, and it is the part that matters
 
 Installing it. `docs/runbooks/dell-bootstrap.md` §4.2 has the steps: create
@@ -1611,7 +1637,13 @@ that failed, but cron mails failures to a local mailbox nothing on this host
 reads — the same silence that hid KI-010's dead ingest leg for 18 days and every
 one of the six trading defects.
 
+**And test a restore.** The runbook has the procedure and a throwaway-database
+recipe. The script verifies each dump is an archive `pg_restore` can parse,
+which is a real check and not the same claim as *a restore was performed and the
+data came back*. Nobody has made the second claim yet.
+
 **Then check a week later that it is still running.** The lesson of this issue is
 not that a path was wrong; it is that a procedure written into a runbook in
-Month 1 was never once verified to have run.
+Month 1 was never once verified to have run — and that when it finally ran, it
+found two more problems in ten minutes.
 

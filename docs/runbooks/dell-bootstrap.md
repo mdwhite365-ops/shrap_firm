@@ -329,7 +329,7 @@ The script writes to `<name>.partial`, checks gzip integrity and a plausible min
 
     ls -la /mnt/backups/
 
-You should see `shrap-postgres-<date>.sql.gz` at a few MB, plus redis and qdrant archives. **If the Postgres dump is missing, stop and fix that before scheduling anything** — it is the one holding every order, fill, risk decision, verdict and equity point.
+You should see `shrap-postgres-<date>.dump` at a few MB, `shrap-postgres-globals-<date>.sql.gz` at a few hundred bytes, plus redis and qdrant archives. **If the Postgres dump is missing, stop and fix that before scheduling anything** — it is the one holding every order, fill, risk decision, verdict and equity point.
 
 **Then schedule it.** On TrueNAS SCALE, prefer a Cron Job in the UI (System Settings → Advanced → Cron Jobs) over a host crontab, because TrueNAS manages the latter and can overwrite it:
 
@@ -349,10 +349,40 @@ Appending to a log is not optional. The script exits non-zero and says which sta
 
 Retention defaults to 30 days (`BACKUP_RETENTION_DAYS`) and the script prunes as it goes. ZFS snapshots on the backup dataset add a second layer.
 
-**Restoring** is the part nobody tests until they need it:
+**Restoring** is the part nobody tests until they need it — and for this database the obvious command is wrong.
 
-    gunzip -c /mnt/backups/shrap-postgres-<date>.sql.gz \
-      | docker exec -i shrap_postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres'
+`shrap` is a **TimescaleDB** database. Its first backup emitted three `pg_dump` warnings about circular foreign keys on `continuous_agg`, ending *"You might not be able to restore the dump."* Tiger Data's logical-backup procedure requires bracketing the restore with two function calls, and forbids parallel restore:
+
+    # 1. roles and tablespaces first — table owners must exist before the tables
+    gunzip -c /mnt/backups/shrap-postgres-globals-<date>.sql.gz \
+      | sudo docker exec -i shrap_postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres'
+
+    # 2. prepare the target database
+    sudo docker exec -i shrap_postgres sh -c \
+      'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"'
+    sudo docker exec -i shrap_postgres sh -c \
+      'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT timescaledb_pre_restore();"'
+
+    # 3. restore. NOT with -j: parallel restore does not rebuild the
+    #    TimescaleDB catalogs correctly.
+    sudo docker exec -i shrap_postgres sh -c \
+      'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner' \
+      < /mnt/backups/shrap-postgres-<date>.dump
+
+    # 4. back to normal operation — skipping this leaves the database in
+    #    restore mode, which looks fine until something writes.
+    sudo docker exec -i shrap_postgres sh -c \
+      'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT timescaledb_post_restore();"'
+
+**Test this before you need it.** Restore into a throwaway database rather than over the live one, and confirm a row count you recognise:
+
+    sudo docker exec -i shrap_postgres sh -c 'createdb -U "$POSTGRES_USER" restore_test'
+    # ...steps 2-4 above against -d restore_test...
+    sudo docker exec -i shrap_postgres sh -c \
+      'psql -qAX -U "$POSTGRES_USER" -d restore_test -c "SELECT count(*) FROM trading.paper_order_events;"'
+    sudo docker exec -i shrap_postgres sh -c 'dropdb -U "$POSTGRES_USER" restore_test'
+
+**Nobody has run that yet.** The script verifies each dump is an archive `pg_restore` can parse, which is a real check and not the same claim as "a restore was performed and the data came back."
 
 **Off-host copy is still out of scope for this sprint** but should be added before the firm holds material live capital — typically `rclone` to an encrypted bucket on the same schedule. Note what that means today: the Dell is a single host with no HA and no replication, so a pool failure is still total loss even with these backups working.
 
