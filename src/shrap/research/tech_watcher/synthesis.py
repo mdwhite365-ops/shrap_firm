@@ -196,6 +196,8 @@ class CompletionClient(Protocol):
         think: bool | None = None,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> Any: ...
 
 
@@ -368,8 +370,9 @@ async def synthesis_pass(
             system=SYNTHESIS_SYSTEM_PROMPT,
             json_mode=True,
             temperature=0.4,
-            task="tech-watcher.synthesis",
+            task="synthesize-candidate",
             metadata={"archetype": cluster.archetype, "cluster_size": len(cluster.items)},
+            session_id=batch_id,
         )
         llm_model = result.model
         try:

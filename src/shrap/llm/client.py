@@ -91,6 +91,8 @@ class TierLLMClient:
         think: bool | None = None,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> LLMResult:
         """Complete a prompt on whatever model serves ``tier``.
 
@@ -107,6 +109,11 @@ class TierLLMClient:
 
         ``metadata`` is merged into the trace, for whatever a caller wants to
         slice on later: a source feed, a prompt version, a regime.
+
+        ``trace_id`` joins this call onto an existing trace rather than opening
+        a new one — the escalation path scores one item twice and that is one
+        unit of work, not two. ``session_id`` groups every trace from one pass,
+        so a 300-item filter run reads as a run rather than 300 loose rows.
         """
 
         binding = self._registry.resolve(tier)
@@ -138,6 +145,8 @@ class TierLLMClient:
                 temperature=temperature,
                 think=think,
                 metadata=metadata,
+                trace_id=trace_id,
+                session_id=session_id,
                 content=None,
                 input_tokens=None,
                 output_tokens=None,
@@ -156,6 +165,8 @@ class TierLLMClient:
             temperature=temperature,
             think=think,
             metadata=metadata,
+            trace_id=trace_id,
+            session_id=session_id,
             content=result.content,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
@@ -176,6 +187,8 @@ class TierLLMClient:
         temperature: float,
         think: bool | None,
         metadata: Mapping[str, Any] | None,
+        trace_id: str | None,
+        session_id: str | None,
         content: str | None,
         input_tokens: int | None,
         output_tokens: int | None,
@@ -205,6 +218,8 @@ class TierLLMClient:
                 output_tokens=output_tokens,
                 model_parameters=parameters,
                 metadata=dict(metadata) if metadata else {},
+                trace_id=trace_id,
+                session_id=session_id,
                 error=error,
             )
         )

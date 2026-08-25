@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-08-23 (`main` at #208 — LLM calls are traced, once Langfuse has keys)
+**Last updated:** 2026-08-25 (`main` at #208 — LLM calls are traced, once Langfuse has keys)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -905,6 +905,20 @@ as systems tests, so a weak fortnight is what the evaluation predicted.
   observability outage stop the Tech Watcher filtering. **It traces nothing
   until Mike creates API keys in the Langfuse UI** — see the runbook's new
   §3.4a, which treats "reachable" and "traced" as different claims.
+
+  Then audited against **Langfuse's own instrumentation skill**, vendored at
+  `.claude/skills/langfuse/`. Four gaps found and fixed: no session grouping
+  (a 300-item pass was 300 unrelated traces), the local→cloud escalation read
+  as two units of work rather than one item scored twice, task names were not
+  verb-first, and masking had never been assessed (it now is — public-source
+  text only, ADR-0003 keeps credentials out of this layer).
+
+  The audit also found **KI-032**: the deployed `langfuse/langfuse:2` is **end
+  of life**, and no current Langfuse SDK — nor the OTel endpoint the project is
+  steering everyone towards — can talk to it. The direct ingestion client is
+  therefore the only supported path on this server, not a shortcut. Upgrading
+  means ClickHouse, a blob store and a worker container; recommended **not this
+  sprint**.
 
 **The first trustworthy reading:** IR +0.84 and −0.45 over nine sessions,
 t-statistics of +0.16 and −0.09. The tool printed a number above the promote

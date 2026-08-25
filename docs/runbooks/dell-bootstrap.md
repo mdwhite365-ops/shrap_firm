@@ -205,7 +205,27 @@ That line proves the keys were read. It does **not** prove a trace landed — th
     sudo docker compose logs --since 1h tech-watcher | grep -E "llm.trace_(failed|rejected)"
     # want: no output
 
-KI-018 closes when a trace is **visible in the Langfuse UI** under project `shrap-firm`, not when the code merges and not when the startup line appears. Traces are named by task — `tech-watcher.filter`, `filing-processor.classify` — so the project view should show one row per completion with its full prompt and response.
+KI-018 closes when a trace is **visible in the Langfuse UI** under project `shrap-firm`, not when the code merges and not when the startup line appears. Traces are named verb-first by task — `filter-world-changer-item`, `score-filing-item` — so the project view should show one row per completion with its full prompt and response.
+
+Two things to check while you are there, because they are the parts no test can prove:
+
+- **Sessions view.** A filter pass should appear as *one session* containing one trace per item, not as a wall of unrelated rows.
+- **A News Analyzer or Filing Processor escalation.** It should be *one trace with two generations* — the local score and the cloud re-score of the same item — not two separate traces.
+
+### 3.4b The self-audit loop (do this once, after the first traces land)
+
+Langfuse's own guidance is that instrumentation is not finished when the code compiles: you run the path, fetch the trace back, and check it against the live best-practices page. That loop has **never been run for Shrap** — it needs keys, which is what §3.4a is for.
+
+Fetch a trace back with the CLI (keys from `infra/.env`, host is the tunnelled URL, not the container address):
+
+    export LANGFUSE_PUBLIC_KEY=pk-lf-...
+    export LANGFUSE_SECRET_KEY=sk-lf-...
+    export LANGFUSE_HOST=http://localhost:3000
+    npx langfuse-cli api traces list --limit 5
+
+Then read it against `https://langfuse.com/docs/observability/best-practices` — fetched fresh, not from memory, because the guidance changes. The question to ask of each observation is the skill's: *is everything a reader would need, to understand what context the model had when it decided, actually here?*
+
+The vendored skill at `.claude/skills/langfuse/` documents the full workflow.
 
 ### 3.5 Prometheus - all scrape targets UP
 

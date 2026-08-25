@@ -171,6 +171,8 @@ class CompletionClient(Protocol):
         think: bool | None = None,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> Any: ...
 
 
@@ -308,7 +310,7 @@ async def propose(
         json_mode=True,
         temperature=temperature,
         think=True,
-        task="hypothesis-generator.propose",
+        task="propose-hypothesis",
         metadata={"item_id": item.item_id},
     )
     return parse_proposal(item, result.content, result.model)

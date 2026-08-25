@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import structlog
+from ulid import ULID
 
 from shrap.llm.registry import TIER_LOCAL_CLASSIFICATION
 from shrap.research.hypothesis_generator.literature import (
@@ -139,6 +140,8 @@ class CompletionClient(Protocol):
         think: bool | None = None,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> Any: ...
 
 
@@ -305,6 +308,9 @@ async def literature_pass(
         rows = await conn.fetch(SELECT_UNFILTERED_LITERATURE_SQL, SOURCE_ARXIV_QFIN, max_items)
 
     verdicts: list[LiteratureVerdict] = []
+    # One session per pass — the live filter and the re-filter each call this
+    # once, so the id spans exactly one batch.
+    session_id = str(ULID())
     consecutive_failures = 0
     for row in rows:
         item_id = str(row["item_id"])
@@ -317,8 +323,9 @@ async def literature_pass(
                 system=LITERATURE_SYSTEM_PROMPT,
                 json_mode=True,
                 think=False,
-                task="tech-watcher.literature-filter",
+                task="filter-literature-item",
                 metadata={"item_id": item_id, "prompt_version": LITERATURE_PROMPT_VERSION},
+                session_id=session_id,
             )
         except Exception as e:
             # One timeout should not cost the rest of the batch an hour. The
@@ -567,6 +574,9 @@ async def literature_refilter_pass(
         )
 
     verdicts: list[LiteratureRefilterVerdict] = []
+    # One session per pass — the live filter and the re-filter each call this
+    # once, so the id spans exactly one batch.
+    session_id = str(ULID())
     consecutive_failures = 0
     for row in rows:
         item_id = str(row["item_id"])
@@ -579,12 +589,13 @@ async def literature_refilter_pass(
                 system=LITERATURE_SYSTEM_PROMPT,
                 json_mode=True,
                 think=False,
-                task="tech-watcher.literature-filter",
+                task="filter-literature-item",
                 metadata={
                     "item_id": item_id,
                     "prompt_version": LITERATURE_PROMPT_VERSION,
                     "refilter": True,
                 },
+                session_id=session_id,
             )
         except Exception as e:
             consecutive_failures += 1
