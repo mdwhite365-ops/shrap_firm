@@ -143,6 +143,66 @@ async def _assess(officer: RiskOfficer, quantity: int = 4, side: str = "buy") ->
     )
 
 
+# --- exits the broker would reject (KI-033) -----------------------------------
+
+
+async def test_a_residue_worth_less_than_a_dollar_is_refused_not_submitted() -> None:
+    """The `U` residue: 0.012648483 shares at $45 is $0.57.
+
+    Alpaca will not take a fractional order under $1, so approving this
+    produces an order that is rejected at the venue and re-emitted next
+    session — the shape of #193, an error that cannot succeed on retry.
+    Refusing here says so once, and names the manual remedy.
+    """
+
+    from shrap.risk_compliance.risk_officer.officer import REASON_BELOW_BROKER_MINIMUM
+
+    store = FakeStore(
+        positions=(Position(ticker="AAPL", quantity=0.012648483, market_value=0.57),),
+        price=45.24,
+    )
+    officer = _officer(store, FakeSwitchStore())
+
+    assessment = await officer.assess(
+        ticker="AAPL",
+        side="sell",
+        quantity=0.012648483,
+        strategy_ids=[STRATEGY],
+        regime_label="late-cycle-melt-up",
+        now=NOW,
+    )
+
+    assert not assessment.approved
+    assert assessment.reason_code == REASON_BELOW_BROKER_MINIMUM
+    assert any("cleared by hand" in note for note in assessment.notes)
+
+
+async def test_a_fractional_exit_above_the_minimum_is_approved_in_full() -> None:
+    """XLE at 0.0236 shares is $1.48 — sellable, and must not be scaled.
+
+    An exit closes the position; the stage fraction applies to entries. #196
+    scaled exits and shorted the remainder.
+    """
+
+    store = FakeStore(
+        positions=(Position(ticker="AAPL", quantity=0.023641439, market_value=1.48),),
+        price=62.55,
+    )
+    officer = _officer(store, FakeSwitchStore())
+
+    assessment = await officer.assess(
+        ticker="AAPL",
+        side="sell",
+        quantity=0.023641439,
+        strategy_ids=[STRATEGY],
+        regime_label="late-cycle-melt-up",
+        now=NOW,
+    )
+
+    assert assessment.approved
+    assert assessment.approved_quantity == 0.023641439
+
+
 # --- the happy path -----------------------------------------------------------
 
 

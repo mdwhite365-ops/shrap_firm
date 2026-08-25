@@ -134,10 +134,14 @@ class TargetState:
     stamped in — the per-strategy idempotency guard. A ``(strategy, ticker)``
     with no row is treated as :data:`FLAT_TARGET` (flat, never seen).
 
-    ``last_quantity`` is the share count of the entry signal, carried so the exit
-    can sell the position that was opened rather than re-sizing at a later price.
-    Re-sizing an exit would leave a residual (price up) or oversell into a short
-    (price down), so the quantity is remembered, not recomputed.
+    ``last_quantity`` is the share count of the entry signal. **Nothing sizes
+    from it any more.** It was once the basis for exits — sell what was bought,
+    rather than re-size at a later price — and that was wrong for a reason the
+    docstring did not anticipate: it records the *pre-Risk-Officer intent*, and
+    the Officer scales every order, so the stored number is routinely several
+    times the position the account actually holds. Closing on it sold the
+    position and shorted the remainder (KI-030). Since #192 the exit reads the
+    broker's position instead, and this field is kept for the audit trail alone.
 
     It records *intent*, not fills. Reconciling intent against what the broker
     actually filled is KI-005's job, and this is why the runner's per-order cap

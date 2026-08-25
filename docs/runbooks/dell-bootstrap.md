@@ -52,7 +52,7 @@ If the toolkit check fails, fix it before bringing up the stack. Ollama will ref
 
 ### 1.5 Filesystem
 
-- A directory `/mnt/Apps/shrap_firm` exists on the Dell, owned by the deploying user.
+- A directory `/mnt/Archive/shrap/shrap_firm` exists on the Dell, owned by the deploying user. (This runbook said `/mnt/Archive/shrap/shrap_firm` until 2026-08-25; the deployment has always been under `/mnt/Archive/shrap`, and the wrong path was copied into working instructions more than once.)
 - A directory `/mnt/backups` exists on the Dell, on a dataset with snapshots enabled.
 - The Docker named volumes live under the Docker root (`/var/lib/docker/volumes/` by default on TrueNAS SCALE). We do **not** bind-mount user data paths into the containers - named volumes are the contract.
 
@@ -66,7 +66,7 @@ The deployment cannot proceed without a real `.env` (see step 2.2). Confirm you 
 
 ### 2.1 Clone the repo
 
-    cd /mnt/Apps
+    cd /mnt/Archive/shrap
     git clone <repo-url> shrap_firm
     cd shrap_firm/infra
 
@@ -314,13 +314,13 @@ The contract: **named volumes are the only durable state**. Back them up, you ca
 
 Postgres logical dump:
 
-    0 2 * * * docker compose -f /mnt/Apps/shrap_firm/infra/docker-compose.yml \
+    0 2 * * * docker compose -f /mnt/Archive/shrap/shrap_firm/infra/docker-compose.yml \
       exec -T postgres pg_dumpall -U "$SHRAP_DB_USER" \
       | gzip > /mnt/backups/shrap-postgres-$(date +\%F).sql.gz
 
 Redis BGSAVE + AOF copy:
 
-    15 2 * * * docker compose -f /mnt/Apps/shrap_firm/infra/docker-compose.yml \
+    15 2 * * * docker compose -f /mnt/Archive/shrap/shrap_firm/infra/docker-compose.yml \
       exec -T redis redis-cli BGSAVE \
       && sleep 30 \
       && docker run --rm -v shrap_firm_redis_data:/data -v /mnt/backups:/backup alpine \
@@ -333,7 +333,7 @@ Qdrant snapshot (HTTP API):
 
 Langfuse Postgres logical dump:
 
-    45 2 * * * docker compose -f /mnt/Apps/shrap_firm/infra/docker-compose.yml \
+    45 2 * * * docker compose -f /mnt/Archive/shrap/shrap_firm/infra/docker-compose.yml \
       exec -T langfuse-db pg_dumpall -U "$LANGFUSE_DB_USER" \
       | gzip > /mnt/backups/shrap-langfuse-$(date +\%F).sql.gz
 
@@ -349,7 +349,7 @@ The "boring" upgrade procedure, with downtime acknowledged:
 2. Merge to main.
 3. On the Dell:
 
-       cd /mnt/Apps/shrap_firm
+       cd /mnt/Archive/shrap/shrap_firm
        git pull
        cd infra
        docker compose pull

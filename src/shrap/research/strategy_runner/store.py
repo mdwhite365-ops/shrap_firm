@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS research.strategy_runner_state (
     last_target DOUBLE PRECISION NOT NULL,
     last_side TEXT,
     last_session_date DATE NOT NULL,
-    last_quantity INTEGER NOT NULL DEFAULT 0,
+    last_quantity DOUBLE PRECISION NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (strategy_id, ticker)
 )
@@ -47,7 +47,29 @@ CREATE TABLE IF NOT EXISTS research.strategy_runner_state (
 # an exit sells the recorded quantity.
 ALTER_RUNNER_STATE_ADD_QUANTITY_SQL = """
 ALTER TABLE research.strategy_runner_state
-ADD COLUMN IF NOT EXISTS last_quantity INTEGER NOT NULL DEFAULT 1
+ADD COLUMN IF NOT EXISTS last_quantity DOUBLE PRECISION NOT NULL DEFAULT 1
+""".strip()
+
+# The column shipped as INTEGER, when a quantity was a whole number of shares.
+# #195 made quantities fractional and Postgres kept accepting the writes by
+# ROUNDING them, exactly as `risk.decisions` did until #199 — a 0.0126-share
+# position recorded as 0. Guarded on the current type so it is a no-op on a
+# database that already carries the wider one, and so re-running it is free.
+#
+# Nothing sizes from this column any more (#192 made exits read the broker's
+# position instead), so the impact was confined to the audit trail. It is fixed
+# because a column that disagrees with the book is how three of the last five
+# trading defects started.
+ALTER_RUNNER_STATE_FRACTIONAL_QUANTITY_SQL = """
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'research' AND table_name = 'strategy_runner_state'
+          AND column_name = 'last_quantity' AND data_type = 'integer') THEN
+        ALTER TABLE research.strategy_runner_state
+            ALTER COLUMN last_quantity TYPE DOUBLE PRECISION;
+    END IF;
+END $$
 """.strip()
 
 # Same reasoning as the quantity migration: the table exists in production, so
@@ -157,6 +179,7 @@ class PostgresStrategyRunnerStateStore:
             await conn.execute(CREATE_RESEARCH_SCHEMA_SQL)
             await conn.execute(CREATE_RUNNER_STATE_TABLE_SQL)
             await conn.execute(ALTER_RUNNER_STATE_ADD_QUANTITY_SQL)
+            await conn.execute(ALTER_RUNNER_STATE_FRACTIONAL_QUANTITY_SQL)
             await conn.execute(ALTER_RUNNER_STATE_ADD_SLOT_SQL)
 
     async def read_state(self) -> dict[tuple[str, str], TargetState]:
@@ -179,7 +202,10 @@ class PostgresStrategyRunnerStateStore:
                 last_target=float(row["last_target"]),
                 last_side=None if last_side is None else str(last_side),
                 last_session_date=_as_date(row["last_session_date"]),
-                last_quantity=0 if last_quantity is None else int(last_quantity),
+                # float(), not int(). The column is DOUBLE PRECISION and
+                # TargetState declares a float; casting here would put the
+                # narrowing back one layer down from where it was removed.
+                last_quantity=0.0 if last_quantity is None else float(last_quantity),
                 last_slot=SESSION_SLOT if last_slot is None else str(last_slot),
             )
         return state
@@ -267,6 +293,7 @@ def _as_date(value: object) -> date | None:
 __all__ = [
     "ALTER_RUNNER_STATE_ADD_QUANTITY_SQL",
     "ALTER_RUNNER_STATE_ADD_SLOT_SQL",
+    "ALTER_RUNNER_STATE_FRACTIONAL_QUANTITY_SQL",
     "CREATE_RUNNER_STATE_TABLE_SQL",
     "SELECT_LATEST_EQUITY_SQL",
     "SELECT_RUNNER_STATE_SQL",

@@ -38,7 +38,11 @@ from shrap.risk_compliance.risk_officer.monitor import (
     check_daily_loss,
     check_strategy_drawdown,
 )
-from shrap.risk_compliance.risk_officer.sizing import SizingDecision, size_intent
+from shrap.risk_compliance.risk_officer.sizing import (
+    MIN_TRADEABLE_NOTIONAL,
+    SizingDecision,
+    size_intent,
+)
 from shrap.risk_compliance.risk_officer.store import RiskStore
 from shrap.risk_compliance.risk_officer.switch_store import (
     RedisSwitchStore,
@@ -60,6 +64,7 @@ REASON_RISK_STATE_UNAVAILABLE = "RISK_STATE_UNAVAILABLE"
 REASON_NO_ACCOUNT = "STRATEGY_HAS_NO_ACCOUNT"
 REASON_UNKNOWN_STRATEGY = "UNKNOWN_STRATEGY"
 REASON_SELL_WITHOUT_POSITION = "SELL_WITHOUT_POSITION"
+REASON_BELOW_BROKER_MINIMUM = "BELOW_BROKER_MINIMUM"
 
 # How much price history the correlation clustering reads per name. Roughly a
 # quarter of trading days — long enough for a 60-day correlation with slack,
@@ -313,9 +318,25 @@ class RiskOfficer:
         held_shares = book.shares(symbol)
 
         if is_sell and px is not None and held_shares > 0.0:
+            closing = min(quantity, held_shares)
+            # A position worth less than the broker's minimum cannot be sold
+            # through the API at all. Approving it produces an order that is
+            # rejected at the venue and re-emitted next session — the shape of
+            # KI-031 and #193, an error that cannot succeed on retry. Refusing
+            # here says so once, in a reason code that names the remedy.
+            if 0.0 < closing * px < MIN_TRADEABLE_NOTIONAL:
+                return RiskAssessment.refused(
+                    REASON_BELOW_BROKER_MINIMUM,
+                    f"{symbol} exit of {closing:g} shares is worth "
+                    f"${closing * px:.4f}, under the ${MIN_TRADEABLE_NOTIONAL:.2f} "
+                    "minimum a fractional order can carry. The broker would reject "
+                    "this, so it is not submitted. Residues this small have to be "
+                    "cleared by hand in the broker's dashboard.",
+                    account_id,
+                )
             sizing = SizingDecision(
                 requested_quantity=quantity,
-                approved_quantity=min(quantity, held_shares),
+                approved_quantity=closing,
                 stage=stage or "unknown",
                 stage_fraction=1.0,
                 regime_multiplier=1.0,
@@ -537,6 +558,7 @@ class RiskOfficer:
 __all__ = [
     "DRAWDOWN_LOOKBACK",
     "PRICE_HISTORY_BARS",
+    "REASON_BELOW_BROKER_MINIMUM",
     "REASON_NO_ACCOUNT",
     "REASON_RISK_STATE_UNAVAILABLE",
     "REASON_UNKNOWN_STRATEGY",
