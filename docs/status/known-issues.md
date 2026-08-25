@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-08-25 (**KI-033** — no position under one share could ever be closed, 52 silent refusals; **KI-034** — the backup crons may point at a path that does not exist)
+**Last updated:** 2026-08-25 (**KI-034** — the firm has never had a backup, verified; **KI-033** — no position under one share could ever be closed)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -1547,34 +1547,71 @@ $0.57 will not** — it is below the broker's fractional minimum and needs
 clearing by hand in the Alpaca dashboard. That was already on Mike's list; it is
 now the only part of this that stays manual.
 
-## KI-034 — The backup runbook points at a directory that does not exist
+## KI-034 — The firm has never had a backup
 
-**Status:** Doc fixed 2026-08-25 (#211). **Whether backups have ever run is
-unverified and Mike's to check.**
+**Status:** Script shipped 2026-08-25 (#212). **Open until Mike installs and
+verifies it** — a script in the repo is not a backup.
 
-`docs/runbooks/dell-bootstrap.md` gave the deployment path as
-`/mnt/Apps/shrap_firm` in seven places. The deployment is at
-`/mnt/Archive/shrap/shrap_firm` and appears always to have been.
+This was first written as "the runbook points at a wrong path, so the crons have
+been failing nightly." **That was too generous.** Checked on the Dell:
 
-Two of those seven were prerequisites and clone instructions, which is
-harmless — anyone following them once would have noticed. **Three were the
-nightly backup cron entries:**
+    $ crontab -l | grep shrap
+    no crontab for truenas_admin
 
-    0 2 * * * docker compose -f /mnt/Apps/shrap_firm/infra/docker-compose.yml ...
+    $ ls -la /mnt/backups/
+    ls: cannot access '/mnt/backups/': No such file or directory
 
-If those were installed as written, every one of them has failed at
-`docker compose -f` on a missing file, nightly, since Month 1. Cron mails
-failures to the local user by default and nothing on this host reads that
-mailbox — the same silence that hid KI-010's dead ingest leg for 18 days and
-every one of the trading defects.
+The cron entries were never installed and the destination directory has never
+existed. Every order, fill, risk decision, verdict, equity point, strategy
+record, filing and research item the firm has produced since Month 1 sits in
+Docker named volumes on a **single host with no HA, no replication and no
+dumps.** A pool failure is total loss of the firm's memory.
 
-**The doc is fixed. The crontab is not** — a doc change cannot repair an
-installed cron entry. Check it:
+### The documented procedure would not have worked either
 
-    crontab -l | grep shrap
-    ls -la /mnt/backups/
+Four separate cron lines, three defects between them:
 
-An empty `/mnt/backups`, or dumps with old timestamps, means the Postgres and
-Langfuse logical dumps the runbook promises have never existed. Given that
-`pg_data` holds every order, verdict and equity point the firm has produced,
-that is worth ten minutes today.
+1. **`$SHRAP_DB_USER` is not set in cron.** Cron runs with a minimal
+   environment; the variable lives in `infra/.env`. Every dump would have run
+   `pg_dumpall -U ""`.
+2. **`> /mnt/backups/x.sql.gz` creates the file regardless of whether the dump
+   succeeded.** A failed backup leaves a truncated `.gz` that looks like a
+   backup from `ls`. That is worse than no file: it converts a visible absence
+   into an invisible corruption discovered during a restore.
+3. **The Qdrant line was not a backup at all.** `curl -X POST .../snapshots >
+   file.json` writes the API *response* to disk; the snapshot stays inside the
+   container volume.
+
+The path error that surfaced this (`/mnt/Apps/shrap_firm` against an actual
+`/mnt/Archive/shrap/shrap_firm`, in seven places) was fixed in #211 and was the
+least of it.
+
+### What shipped (#212)
+
+`scripts/backup.sh` — one script, because four cron lines fail in four
+independent silences. It reads credentials from inside each container rather
+than from an environment it cannot control, writes to `<name>.partial`, verifies
+gzip integrity **and** a plausible minimum size, and only then renames.
+
+**A file present under its real name has been verified.** The size floor matters
+as much as the integrity check: `gzip -t` passes happily on an empty archive, so
+a failed `pg_dumpall` piped into `gzip` produces a well-formed ~20-byte file
+that satisfies every check except being a backup. `tests/operations/
+test_backup_script.py` pins exactly that case.
+
+### What remains, and it is the part that matters
+
+Installing it. `docs/runbooks/dell-bootstrap.md` §4.2 has the steps: create
+`/mnt/backups`, run the script by hand once and look at the output, then
+schedule it through the **TrueNAS UI** cron rather than a host crontab, which
+TrueNAS manages and can overwrite.
+
+Append to a log when scheduling. The script exits non-zero and names the stage
+that failed, but cron mails failures to a local mailbox nothing on this host
+reads — the same silence that hid KI-010's dead ingest leg for 18 days and every
+one of the six trading defects.
+
+**Then check a week later that it is still running.** The lesson of this issue is
+not that a path was wrong; it is that a procedure written into a runbook in
+Month 1 was never once verified to have run.
+

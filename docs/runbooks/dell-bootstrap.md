@@ -310,36 +310,46 @@ Then `systemctl restart docker` (the stack will need `docker compose up -d` agai
 
 The contract: **named volumes are the only durable state**. Back them up, you can restore. Lose them, the firm's memory is gone.
 
-**Nightly cron on the Dell** (TrueNAS task scheduler or a host crontab):
+> **Verified 2026-08-25: there had never been a backup.** `crontab -l` returned *"no crontab for truenas_admin"* and `/mnt/backups` did not exist. This section previously listed four cron lines that were never installed — and would not have worked if they had been, because each referenced `$SHRAP_DB_USER`, which is set in `infra/.env` and **not** in cron's environment. See KI-034.
 
-Postgres logical dump:
+Everything is now one script, `scripts/backup.sh`, for one reason: four independent cron lines fail in four independent silences, and the old ones redirected with `>`, which creates the destination file whether or not the dump succeeded. **A failed backup left a truncated `.gz` that looks like a backup from `ls`** — worse than leaving nothing, because it converts a visible absence into an invisible corruption you find during a restore.
 
-    0 2 * * * docker compose -f /mnt/Archive/shrap/shrap_firm/infra/docker-compose.yml \
-      exec -T postgres pg_dumpall -U "$SHRAP_DB_USER" \
-      | gzip > /mnt/backups/shrap-postgres-$(date +\%F).sql.gz
+The script writes to `<name>.partial`, checks gzip integrity and a plausible minimum size, and only then renames. **A file present under its real name has been verified.** A leftover `.partial` is the record of a run that died part-way; it is deliberately not tidied up.
 
-Redis BGSAVE + AOF copy:
+**Install it:**
 
-    15 2 * * * docker compose -f /mnt/Archive/shrap/shrap_firm/infra/docker-compose.yml \
-      exec -T redis redis-cli BGSAVE \
-      && sleep 30 \
-      && docker run --rm -v shrap_firm_redis_data:/data -v /mnt/backups:/backup alpine \
-         tar czf /backup/shrap-redis-$(date +\%F).tar.gz -C /data .
+    sudo mkdir -p /mnt/backups
+    sudo chown "$(id -u):$(id -g)" /mnt/backups
 
-Qdrant snapshot (HTTP API):
+    # verify by hand first — it takes a minute and prints what it did
+    /mnt/Archive/shrap/shrap_firm/scripts/backup.sh
 
-    30 2 * * * curl -s -X POST http://127.0.0.1:6333/snapshots \
-      > /mnt/backups/shrap-qdrant-$(date +\%F).json
+    ls -la /mnt/backups/
 
-Langfuse Postgres logical dump:
+You should see `shrap-postgres-<date>.sql.gz` at a few MB, plus redis and qdrant archives. **If the Postgres dump is missing, stop and fix that before scheduling anything** — it is the one holding every order, fill, risk decision, verdict and equity point.
 
-    45 2 * * * docker compose -f /mnt/Archive/shrap/shrap_firm/infra/docker-compose.yml \
-      exec -T langfuse-db pg_dumpall -U "$LANGFUSE_DB_USER" \
-      | gzip > /mnt/backups/shrap-langfuse-$(date +\%F).sql.gz
+**Then schedule it.** On TrueNAS SCALE, prefer a Cron Job in the UI (System Settings → Advanced → Cron Jobs) over a host crontab, because TrueNAS manages the latter and can overwrite it:
 
-Retention on `/mnt/backups`: keep 30 days, prune older with a `find -mtime +30 -delete` companion cron. ZFS snapshots on the backup dataset add a second layer of protection.
+    Command:  /mnt/Archive/shrap/shrap_firm/scripts/backup.sh >> /mnt/backups/backup.log 2>&1
+    Schedule: 0 2 * * *
+    Run as:   root
 
-**Off-host copy is out of scope for this sprint** but should be added before the firm holds material live capital - typically `rclone` to an encrypted cloud bucket on the same schedule.
+Appending to a log is not optional. The script exits non-zero and says which stage failed, and **cron mails failures to a local mailbox nothing on this host reads** — the same silence that hid KI-010's dead ingest leg for 18 days.
+
+**Check it is actually running**, a week later and then occasionally:
+
+    ls -la /mnt/backups/ | tail
+    tail -20 /mnt/backups/backup.log
+    find /mnt/backups -name 'shrap-postgres-*' -mtime -2 | wc -l   # want >= 1
+
+Retention defaults to 30 days (`BACKUP_RETENTION_DAYS`) and the script prunes as it goes. ZFS snapshots on the backup dataset add a second layer.
+
+**Restoring** is the part nobody tests until they need it:
+
+    gunzip -c /mnt/backups/shrap-postgres-<date>.sql.gz \
+      | docker exec -i shrap_postgres sh -c 'psql -U "$POSTGRES_USER" -d postgres'
+
+**Off-host copy is still out of scope for this sprint** but should be added before the firm holds material live capital — typically `rclone` to an encrypted bucket on the same schedule. Note what that means today: the Dell is a single host with no HA and no replication, so a pool failure is still total loss even with these backups working.
 
 ### 4.3 Upgrades
 

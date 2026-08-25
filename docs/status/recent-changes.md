@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-08-25 (`main` at #211 — fractional quantities survive the whole path; five sub-share positions were untradeable)
+**Last updated:** 2026-08-25 (`main` at #212 — the firm has never had a backup; fractional quantities now survive the whole path)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -950,6 +950,19 @@ as systems tests, so a weak fortnight is what the evaluation predicted.
 - PR #211 also — **KI-034**: the runbook's deploy path was wrong in seven
   places, three of them the nightly backup crons. Whether those backups have
   ever run is unverified.
+
+- PR #212 — **The firm has never had a backup (KI-034).** Not "the crons point
+  at a wrong path": `crontab -l` returned *no crontab for truenas_admin* and
+  `/mnt/backups` did not exist. Every order, fill, verdict and equity point
+  since Month 1 has lived in Docker volumes on a single host with no HA, no
+  replication and no dumps. The documented procedure would not have worked
+  either — it referenced `$SHRAP_DB_USER`, which cron does not set; it
+  redirected with `>`, so a failed dump left a truncated `.gz` that looks like a
+  backup; and its Qdrant line wrote the snapshot API's *response* to disk while
+  the snapshot stayed in the container. `scripts/backup.sh` replaces all four
+  cron lines, verifies gzip integrity **and** a minimum size before renaming a
+  `.partial` into place, and exits non-zero naming the stage that failed. **Open
+  until installed** — a script in the repo is not a backup.
 
 **The first trustworthy reading:** IR +0.84 and −0.45 over nine sessions,
 t-statistics of +0.16 and −0.09. The tool printed a number above the promote
