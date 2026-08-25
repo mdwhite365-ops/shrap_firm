@@ -38,7 +38,7 @@ from ulid import ULID
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
-from shrap.llm import TierLLMClient, TierRegistry
+from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
 from shrap.research.bar_experiment import (
     Bar,
     BarCall,
@@ -219,14 +219,17 @@ async def run(
         if dry_run or not items:
             return "", None, [], bars
 
-        registry = TierRegistry(dict(os.environ))
+        env = dict(os.environ)
+        registry = TierRegistry(env)
         model = registry.resolve(tier).model
 
         started_at = datetime.now(UTC)
         run_id = str(ULID())
         calls: list[BarCall] = []
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS) as http:
-            client = TierLLMClient(registry, cast(Any, http))
+            client = TierLLMClient(
+                registry, cast(Any, http), tracer=tracer_from_env(env, cast(Any, http))
+            )
             for bar in bars:
                 log.info("bar_experiment.bar_started", bar=bar.key, items=len(items))
                 bar_calls = await run_bar(bar, cast(Any, client), items, tier)

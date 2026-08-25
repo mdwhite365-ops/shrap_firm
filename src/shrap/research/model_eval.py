@@ -125,6 +125,8 @@ class CompletionClient(Protocol):
         json_mode: bool = False,
         temperature: float = 0.2,
         think: bool | None = None,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Any: ...
 
 
@@ -275,6 +277,8 @@ async def run_one(
             system=item.system,
             json_mode=True,
             think=False,
+            task="research.model-eval",
+            metadata={"item_id": item.item_id, "repeat": repeat, "candidate_model": model},
         )
     except Exception as e:
         return CallResult(

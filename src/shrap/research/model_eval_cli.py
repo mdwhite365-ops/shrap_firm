@@ -36,7 +36,7 @@ from ulid import ULID
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
-from shrap.llm import TierLLMClient
+from shrap.llm import TierLLMClient, tracer_from_env
 from shrap.research.model_eval import (
     SELECT_EVAL_CORPUS_SQL,
     TASK_FILTER,
@@ -192,9 +192,14 @@ async def run(
         env = dict(os.environ)
         started_at = datetime.now(UTC)
         async with httpx.AsyncClient(timeout=http_timeout) as http:
+            # Hoisted out of the factory: it resolves once per run, not once per
+            # candidate model, so the enabled/disabled line is logged once.
+            tracer = tracer_from_env(env, cast(Any, http))
 
             def factory(model: str) -> Any:
-                return TierLLMClient(registry_for_model(env, tier, model), cast(Any, http))
+                return TierLLMClient(
+                    registry_for_model(env, tier, model), cast(Any, http), tracer=tracer
+                )
 
             results = await run_plan(plan, factory)
         finished_at = datetime.now(UTC)

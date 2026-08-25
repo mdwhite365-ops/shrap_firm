@@ -370,7 +370,15 @@ def bars_by_key(keys: Sequence[str] | None = None) -> tuple[Bar, ...]:
 
 class CompletionClient(Protocol):
     async def complete(
-        self, tier: str, prompt: str, *, system: str, json_mode: bool, think: bool
+        self,
+        tier: str,
+        prompt: str,
+        *,
+        system: str,
+        json_mode: bool,
+        think: bool,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Any: ...
 
 
@@ -410,6 +418,8 @@ async def run_bar(
                 system=bar.system_prompt,
                 json_mode=True,
                 think=False,
+                task="research.bar-experiment",
+                metadata={"bar": bar.key, "item_id": item.item_id},
             )
         except Exception as exc:  # recorded in the result, never swallowed
             calls.append(

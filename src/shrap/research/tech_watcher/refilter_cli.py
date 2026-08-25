@@ -23,13 +23,14 @@ import os
 import httpx
 
 from shrap.common.db import create_asyncpg_pool
-from shrap.llm import TierLLMClient, TierRegistry
+from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
 from shrap.llm.registry import TIER_LOCAL_CLASSIFICATION
 from shrap.research.tech_watcher.filter import refilter_pass
 
 
 async def _run(args: argparse.Namespace) -> str:
-    registry = TierRegistry(dict(os.environ))
+    env = dict(os.environ)
+    registry = TierRegistry(env)
     # A verdict's identity is (prompt version, model), so the pass needs to know
     # which model would score these items now — otherwise a model swap under an
     # unchanged prompt selects nothing.
@@ -50,7 +51,7 @@ async def _run(args: argparse.Namespace) -> str:
             )
             return f"current model for tier {args.tier}: {current_model}\n" + report.render()
         async with httpx.AsyncClient(follow_redirects=True) as http:
-            llm = TierLLMClient(registry, http)
+            llm = TierLLMClient(registry, http, tracer=tracer_from_env(env, http))
             report = await refilter_pass(
                 pool,
                 llm,

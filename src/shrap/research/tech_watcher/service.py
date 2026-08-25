@@ -26,7 +26,7 @@ from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher
 from shrap.intelligence.filing_processor.client import EdgarFilingClient
-from shrap.llm import TierLLMClient, TierRegistry
+from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
 from shrap.research.hypothesis_generator.literature import PostgresLiteratureStore
 from shrap.research.tech_watcher.candidates import PostgresCandidateStore
 from shrap.research.tech_watcher.edgar_text import edgar_text_pass
@@ -304,8 +304,9 @@ async def run(
     async with httpx.AsyncClient(follow_redirects=True) as http:
         llm_stages: LLMStages | None = None
         if llm_enabled:
-            registry = TierRegistry(llm_env if llm_env is not None else dict(os.environ))
-            llm = TierLLMClient(registry, http)
+            resolved_env = llm_env if llm_env is not None else dict(os.environ)
+            registry = TierRegistry(resolved_env)
+            llm = TierLLMClient(registry, http, tracer=tracer_from_env(resolved_env, http))
 
             async def _run_filter() -> object:
                 return await filter_pass(pool, llm, max_items=filter_max_items)

@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-08-04 (**KI-030** — the Runner sold positions it never held; **KI-031** — the status loop jammed a month on the firm's first order. First fills and two real defects on the same day)
+**Last updated:** 2026-08-23 (**KI-018** — LLM calls are instrumented as of #208, and stay untraced until Langfuse has API keys)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -675,8 +675,10 @@ anything wants to react to a new strategy, `register()` needs to publish.
 
 ## KI-018 — Langfuse is deployed and nothing writes to it
 
-**Status:** Open, found 2026-07-28 by the full-firm audit. Blocking for a Month-4
-exit criterion.
+**Status:** Code shipped 2026-08-23 (#208). **Not yet verified against the live
+Langfuse**, and deliberately not marked closed until it is — see "What remains"
+below. Found 2026-07-28 by the full-firm audit; blocking for a Month-4 exit
+criterion.
 
 `infra/docker-compose.yml` runs Langfuse and a dedicated Postgres for it, with a
 persistent volume. A grep across `src/` for `langfuse` returns **zero matches**.
@@ -709,6 +711,46 @@ a model rejected an item is not reconstructible.
 rather than each agent — every LLM-using agent already routes through it, so one
 card covers all of them. Tracked as Phase 3.1 in
 `docs/roadmap/implementation-timeline.md`.
+
+### What shipped (#208, 2026-08-23)
+
+`src/shrap/llm/tracing.py` posts each completion to Langfuse's ingestion API as
+a trace plus a generation, carrying full input and output, token counts, model
+parameters and latency. `TierLLMClient.complete()` calls it, so all **eleven**
+call sites across the Tech Watcher (filter, literature filter, synthesis), News
+Analyzer, Filing Processor, Hypothesis Generator and the two research harnesses
+are covered by construction rather than by remembering.
+
+Three decisions worth keeping:
+
+- **Tracing fails open.** Every failure is caught, logged `llm.trace_failed` and
+  swallowed. The Risk Officer fails *closed* for the opposite reason; here, a
+  tracer that raised would let an observability outage stop the Tech Watcher
+  from filtering, trading a real capability for a bookkeeping one.
+- **Calls carry a `task` name**, not just a tier — `tech-watcher.filter`,
+  `filing-processor.classify`. llm-routing.md slices the migration sample "by
+  task type", several unrelated jobs share one tier, and a trace named after the
+  tier cannot be sliced back apart. The local pass and its cloud escalation
+  deliberately share a task name so the two models land in one comparable
+  sample; the tier distinguishes them.
+- **Clipping is declared.** Fields over `LANGFUSE_MAX_FIELD_CHARS` are marked
+  `input_truncated` / `output_truncated` in the trace metadata. llm-routing.md
+  asks for *full* input/output, and a silently shortened sample would satisfy
+  the letter of that while corrupting the evaluation.
+
+### What remains, and why this is not closed
+
+**Nothing is traced until Langfuse issues API keys, and only Mike can do that.**
+They are created per project from the Langfuse UI (Settings → API Keys), not by
+the compose stack. Until `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set
+in `infra/.env`, every agent logs `llm.tracing_disabled` at startup and behaves
+exactly as it did before — which is the state this issue describes.
+
+Closing it needs the check in `docs/runbooks/dell-bootstrap.md`: keys set,
+containers recreated, and **a trace visible in the Langfuse UI**. The firm has
+marked things done on the strength of merged code before; `make doc-drift`
+called every status doc `ok` on a day the handoff said "Orders: none yet" and
+six had filled. Merged is not running.
 
 ## KI-019 — `02-architecture.md` describes a trading engine that was never built
 

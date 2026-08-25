@@ -11,7 +11,9 @@ cost the model eval two runs.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -60,7 +62,15 @@ class FakeClient:
         self.calls: list[tuple[str, str, str]] = []
 
     async def complete(
-        self, tier: str, prompt: str, *, system: str, json_mode: bool, think: bool
+        self,
+        tier: str,
+        prompt: str,
+        *,
+        system: str,
+        json_mode: bool,
+        think: bool,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> FakeResult:
         self.calls.append((tier, system, prompt))
         return FakeResult(self.content)
@@ -68,7 +78,15 @@ class FakeClient:
 
 class ExplodingClient:
     async def complete(
-        self, tier: str, prompt: str, *, system: str, json_mode: bool, think: bool
+        self,
+        tier: str,
+        prompt: str,
+        *,
+        system: str,
+        json_mode: bool,
+        think: bool,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> FakeResult:
         raise ConnectionError("ollama said no")
 

@@ -137,6 +137,8 @@ class CompletionClient(Protocol):
         json_mode: bool = False,
         temperature: float = 0.2,
         think: bool | None = None,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> Any: ...
 
 
@@ -315,6 +317,8 @@ async def literature_pass(
                 system=LITERATURE_SYSTEM_PROMPT,
                 json_mode=True,
                 think=False,
+                task="tech-watcher.literature-filter",
+                metadata={"item_id": item_id, "prompt_version": LITERATURE_PROMPT_VERSION},
             )
         except Exception as e:
             # One timeout should not cost the rest of the batch an hour. The
@@ -575,6 +579,12 @@ async def literature_refilter_pass(
                 system=LITERATURE_SYSTEM_PROMPT,
                 json_mode=True,
                 think=False,
+                task="tech-watcher.literature-filter",
+                metadata={
+                    "item_id": item_id,
+                    "prompt_version": LITERATURE_PROMPT_VERSION,
+                    "refilter": True,
+                },
             )
         except Exception as e:
             consecutive_failures += 1
