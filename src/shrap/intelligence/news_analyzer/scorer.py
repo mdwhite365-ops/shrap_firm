@@ -85,6 +85,8 @@ class CompletionClient(Protocol):
         think: bool | None = None,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> Any: ...
 
 

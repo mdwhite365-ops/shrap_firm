@@ -31,6 +31,7 @@ from typing import Any, Protocol, cast
 import httpx
 import structlog
 from redis.asyncio import Redis
+from ulid import ULID
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
@@ -359,11 +360,16 @@ async def score_pass(
     items_scored = 0
     published = 0
     escalated = 0
+    # See the News Analyzer for the reasoning: session groups the pass, and the
+    # per-item trace keeps a local score and its cloud escalation as one unit of
+    # work rather than two unrelated ones.
+    session_id = str(ULID())
     for filing in filings:
         sections = split_item_sections(filing.full_text)
         fallback_symbols = (filing.symbol,)
         verdict_rows: list[dict[str, Any]] = []
         for item_code in filing.item_codes:
+            item_trace_id = str(ULID())
             prompt = build_prompt(
                 filing.company, item_code, sections.get(item_code, ""), fallback_symbols
             )
@@ -373,12 +379,14 @@ async def score_pass(
                 system=FILING_SYSTEM_PROMPT,
                 json_mode=True,
                 think=False,
-                task="filing-processor.classify",
+                task="score-filing-item",
                 metadata={
                     "accession": filing.accession,
                     "item_code": item_code,
                     "prompt_version": FILING_PROMPT_VERSION,
                 },
+                trace_id=item_trace_id,
+                session_id=session_id,
             )
             verdict = parse_filing_response(
                 filing.accession, item_code, local.content, fallback_symbols
@@ -402,13 +410,15 @@ async def score_pass(
                     system=FILING_SYSTEM_PROMPT,
                     json_mode=True,
                     think=False,
-                    task="filing-processor.classify",
+                    task="score-filing-item",
                     metadata={
                         "accession": filing.accession,
                         "item_code": item_code,
                         "prompt_version": FILING_PROMPT_VERSION,
                         "escalation": True,
                     },
+                    trace_id=item_trace_id,
+                    session_id=session_id,
                 )
                 cloud_verdict = parse_filing_response(
                     filing.accession, item_code, cloud.content, fallback_symbols

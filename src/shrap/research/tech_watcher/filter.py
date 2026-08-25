@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import structlog
+from ulid import ULID
 
 from shrap.llm.registry import TIER_LOCAL_CLASSIFICATION
 from shrap.research.tech_watcher.archetypes import ARCHETYPE_KEYS, archetype_filter_prompt_block
@@ -178,6 +179,8 @@ class CompletionClient(Protocol):
         think: bool | None = None,
         task: str | None = None,
         metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> Any: ...
 
 
@@ -370,6 +373,10 @@ async def _score_items(
 ) -> list[FilterVerdict]:
     """Score and persist each item. Shared by the live pass and the re-filter."""
 
+    # One session per pass. `_score_items` is called exactly once per pass,
+    # so minting here means the id spans the batch and nothing else.
+    session_id = str(ULID())
+
     verdicts: list[FilterVerdict] = []
     for item in items:
         result = await llm.complete(
@@ -378,8 +385,9 @@ async def _score_items(
             system=FILTER_SYSTEM_PROMPT,
             json_mode=True,
             think=False,
-            task="tech-watcher.filter",
+            task="filter-world-changer-item",
             metadata={"item_id": item.item_id, "prompt_version": FILTER_PROMPT_VERSION},
+            session_id=session_id,
         )
         verdict = parse_filter_response(item.item_id, result.content)
         decided_at = datetime.now(UTC)
