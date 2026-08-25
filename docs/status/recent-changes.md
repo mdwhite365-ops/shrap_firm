@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-08-25 (`main` at #210 — LLM calls are traced, once Langfuse has keys)
+**Last updated:** 2026-08-25 (`main` at #211 — fractional quantities survive the whole path; five sub-share positions were untradeable)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -933,6 +933,23 @@ as systems tests, so a weak fortnight is what the evaluation predicted.
   Same shape as the trading path's defect family — a fact declared in more than
   one place, where the copies are free to disagree. Net −117 lines, and a parity
   test so the single declaration cannot drift from the client it describes.
+
+- PR #211 — **No position under one share could ever be closed (KI-033).** The
+  Pre-Trade Checker rejected fractional quantities as malformed — correct when
+  written, because every order was whole shares, and never revisited when #195
+  made fractional orders normal. Because that gate sits *upstream* of the Risk
+  Officer, the fractional arithmetic in #195, #196, #198 and #199 was correct
+  and unreachable. The Runner emitted exits daily; the gate truncated them to
+  `0` and refused them as `INVALID_QUANTITY`; **52 refusals** accumulated and no
+  order was ever submitted. Not just residues — `RIOT` at 0.1875 and `MARA` at
+  0.75 were equally untradeable, so since #195 the firm could open positions it
+  could not close. Also: the last `INTEGER` quantity column (`last_quantity`)
+  widened *and* its `int()` read-cast removed, and sub-$1 exits now refuse with
+  `BELOW_BROKER_MINIMUM` rather than being submitted to a broker that rejects
+  them.
+- PR #211 also — **KI-034**: the runbook's deploy path was wrong in seven
+  places, three of them the nightly backup crons. Whether those backups have
+  ever run is unverified.
 
 **The first trustworthy reading:** IR +0.84 and −0.45 over nine sessions,
 t-statistics of +0.16 and −0.09. The tool printed a number above the promote

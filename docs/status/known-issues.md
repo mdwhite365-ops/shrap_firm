@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-08-25 (**KI-018** — LLM calls are instrumented as of #208 and stay untraced until Langfuse has API keys; **KI-032** — the Langfuse server is end of life)
+**Last updated:** 2026-08-25 (**KI-033** — no position under one share could ever be closed, 52 silent refusals; **KI-034** — the backup crons may point at a path that does not exist)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -1452,3 +1452,129 @@ constraint remains research throughput. Revisit when either the firm wants
 OTel-based instrumentation or the EOL security posture stops being acceptable —
 and treat it as its own card with its own backup plan, not as a dependency of a
 tracing change.
+
+## KI-033 — No position smaller than one share could ever be closed
+
+**Status:** Fixed 2026-08-25 (#211). Found by asking why the broker showed
+fractional positions that never went away.
+
+`PreTradeChecker._parse_requested_quantity` rejected any fractional quantity as
+malformed. The docstring said so plainly:
+
+> *"Parse quantity strictly; fractional values are vetoed, not rounded. The risk
+> gate should be conservative. A fractional share/order quantity is rejected as
+> malformed in this Month 1 stub instead of being silently floored or rounded."*
+
+**That was correct when it was written.** Every order was a whole number of
+shares, so a fraction arriving at the gate genuinely did mean something upstream
+had broken.
+
+**#195 made fractional orders the normal case** and nothing revisited the
+declaration. The Risk Officer scales every order by `stage_fraction x
+regime_multiplier` — 0.1875 today — so a one-share intent is *supposed* to arrive
+as 0.1875 shares. And because this gate runs **upstream of the Risk Officer**,
+none of the fractional arithmetic added in #195, #196, #198 or #199 ever ran for
+these orders. Every one of those cards was correct and unreachable.
+
+### What it looked like from outside
+
+Positions that never went away. Six names sat in the book for weeks:
+
+| Ticker | Held | Value |
+|---|---|---|
+| `U` | 0.012648483 | $0.57 |
+| `XLE` | 0.023641439 | $1.48 |
+| `DKNG` | 0.060078927 | $1.55 |
+| `PYPL` | 0.03287553 | $2.04 |
+| `NIO` | 0.709543569 | $3.17 |
+| `MARA` | 0.448764161 | $5.45 |
+
+The Runner emitted an exit for each, every session. The gate truncated the
+quantity to `0`, and `0` then failed the positivity check as `INVALID_QUANTITY`.
+**52 refusals** sat in `risk.decisions` with `requested_quantity = 0`, and no
+order was ever submitted — which is why the order table showed nothing at all
+for those names after 2026-08-19 and made it look like the Runner had stopped
+trying.
+
+**It was never only about residues.** `int(0.1875)` is 0 too, so `RIOT` at
+0.1875 and `MARA` at 0.75 — positions the firm opened deliberately and sized
+correctly — were equally untradeable. Since #195 the firm could open positions
+it was structurally incapable of closing.
+
+### Four wrong hypotheses first, and why
+
+Before finding it, the session proposed: the Runner never emits the sell; the
+Runner's state machine thinks it is already flat; Alpaca rejects the order under
+its $1 minimum and the firm retries daily; the residues are ordinary scaled
+positions. Every one was wrong, and every one was *downstream* of a gate that
+refused the order before any of them could apply.
+
+The query that settled it was two lines against `risk.decisions`, and it should
+have been the first thing run rather than the fifth. **When an order does not
+appear at the broker, read the refusal table before theorising about the
+broker.**
+
+### The pattern, for the fifth time
+
+From CLAUDE.md, written before this instance: *when a card changes a type or
+inserts a stage, ask what downstream already declared about what reaches it.*
+
+- `last_quantity` reconstructed the position from intent (#192).
+- `market_value / latest_close` reconstructed a share count that was recorded
+  directly (#198).
+- An `INTEGER` column reconstructed a fractional quantity as a whole one (#199).
+- **A gate declared quantities whole and refused the ones that were not (#211).**
+
+### Also fixed in #211
+
+- **`research.strategy_runner_state.last_quantity` was still `INTEGER`** — the
+  last surviving column of the #199 family. It read `0` next to broker positions
+  of `0.0126`. Widened, with the same guarded migration, *and* the `int()` cast
+  on the read path removed — widening the column alone would have put the
+  narrowing back one layer down.
+- **Sub-minimum exits now refuse with `BELOW_BROKER_MINIMUM`.** With the
+  truncation fixed, a $0.57 residue would be approved and submitted to a broker
+  that rejects fractional orders under $1 — trading a silent gate refusal for a
+  silent venue rejection, daily, which is the #193 shape again. The refusal names
+  the remedy: dust that small has to be cleared by hand in the dashboard.
+- **`TargetState.last_quantity`'s docstring** still described exits sizing from
+  it, which #192 stopped doing.
+
+### What this does not fix
+
+The five names above $1 should clear on the next session that runs. **`U` at
+$0.57 will not** — it is below the broker's fractional minimum and needs
+clearing by hand in the Alpaca dashboard. That was already on Mike's list; it is
+now the only part of this that stays manual.
+
+## KI-034 — The backup runbook points at a directory that does not exist
+
+**Status:** Doc fixed 2026-08-25 (#211). **Whether backups have ever run is
+unverified and Mike's to check.**
+
+`docs/runbooks/dell-bootstrap.md` gave the deployment path as
+`/mnt/Apps/shrap_firm` in seven places. The deployment is at
+`/mnt/Archive/shrap/shrap_firm` and appears always to have been.
+
+Two of those seven were prerequisites and clone instructions, which is
+harmless — anyone following them once would have noticed. **Three were the
+nightly backup cron entries:**
+
+    0 2 * * * docker compose -f /mnt/Apps/shrap_firm/infra/docker-compose.yml ...
+
+If those were installed as written, every one of them has failed at
+`docker compose -f` on a missing file, nightly, since Month 1. Cron mails
+failures to the local user by default and nothing on this host reads that
+mailbox — the same silence that hid KI-010's dead ingest leg for 18 days and
+every one of the trading defects.
+
+**The doc is fixed. The crontab is not** — a doc change cannot repair an
+installed cron entry. Check it:
+
+    crontab -l | grep shrap
+    ls -la /mnt/backups/
+
+An empty `/mnt/backups`, or dumps with old timestamps, means the Postgres and
+Langfuse logical dumps the runbook promises have never existed. Given that
+`pg_data` holds every order, verdict and equity point the firm has produced,
+that is worth ten minutes today.
