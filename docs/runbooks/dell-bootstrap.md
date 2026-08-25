@@ -321,8 +321,11 @@ The script writes to `<name>.partial`, checks gzip integrity and a plausible min
     sudo mkdir -p /mnt/backups
     sudo chown "$(id -u):$(id -g)" /mnt/backups
 
-    # verify by hand first — it takes a minute and prints what it did
-    /mnt/Archive/shrap/shrap_firm/scripts/backup.sh
+    # verify by hand first — it takes a minute and prints what it did.
+    # `truenas_admin` is not in the `docker` group on this host, so an
+    # interactive run needs sudo for the daemon socket. DOCKER='sudo docker'
+    # keeps the archives owned by your user rather than root.
+    DOCKER='sudo docker' /mnt/Archive/shrap/shrap_firm/scripts/backup.sh
 
     ls -la /mnt/backups/
 
@@ -333,6 +336,8 @@ You should see `shrap-postgres-<date>.sql.gz` at a few MB, plus redis and qdrant
     Command:  /mnt/Archive/shrap/shrap_firm/scripts/backup.sh >> /mnt/backups/backup.log 2>&1
     Schedule: 0 2 * * *
     Run as:   root
+
+Running as root is what makes the bare `docker` calls work unattended — `DOCKER='sudo docker'` is only needed for an interactive run as `truenas_admin`. The script checks daemon access up front and, if it cannot reach it, says which of the two you need rather than failing part-way through a dump.
 
 Appending to a log is not optional. The script exits non-zero and says which stage failed, and **cron mails failures to a local mailbox nothing on this host reads** — the same silence that hid KI-010's dead ingest leg for 18 days.
 

@@ -39,6 +39,14 @@ STAMP="$(date +%F)"
 # passes `gzip -t` happily, so integrity alone does not prove content.
 MIN_BYTES="${BACKUP_MIN_BYTES:-1024}"
 
+# How to invoke Docker. `truenas_admin` is not in the `docker` group on this
+# host, so an interactive run needs sudo; the scheduled run is root and does
+# not. Read into an array so DOCKER="sudo docker" splits into two words rather
+# than being looked up as a single command named "sudo docker".
+# `|| true`: a here-string always supplies a terminated line so `read` returns 0,
+# but `set -e` would turn any surprise into an exit before the first log line.
+read -r -a DOCKER_CMD <<< "${DOCKER:-docker}" || true
+
 log() { printf '[backup %s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 fail() { printf '[backup %s] FAILED: %s\n' "$(date +%H:%M:%S)" "$*" >&2; exit 1; }
 
@@ -48,7 +56,7 @@ fail() { printf '[backup %s] FAILED: %s\n' "$(date +%H:%M:%S)" "$*" >&2; exit 1;
 # `infra_redis_data` are both plausible and only one is real.
 volume_for() {
     local container="$1" mountpoint="$2" name
-    name="$(docker inspect -f \
+    name="$("${DOCKER_CMD[@]}" inspect -f \
         "{{range .Mounts}}{{if eq .Destination \"$mountpoint\"}}{{.Name}}{{end}}{{end}}" \
         "$container" 2>/dev/null)" || fail "cannot inspect $container"
     [ -n "$name" ] || fail "no volume mounted at $mountpoint in $container"
@@ -82,7 +90,7 @@ dump_postgres() {
     local final="$DEST/shrap-${label}-${STAMP}.sql.gz"
     local partial="${final}.partial"
     log "dumping $label from $container"
-    if ! docker exec -i "$container" sh -c 'pg_dumpall -U "$POSTGRES_USER"' \
+    if ! "${DOCKER_CMD[@]}" exec -i "$container" sh -c 'pg_dumpall -U "$POSTGRES_USER"' \
         | gzip > "$partial"; then
         rm -f "$partial"
         fail "pg_dumpall failed for $container"
@@ -100,8 +108,8 @@ dump_redis() {
     local partial="${final}.partial"
     local volume waited=0
     log "BGSAVE on $container"
-    docker exec -i "$container" redis-cli BGSAVE >/dev/null || fail "redis BGSAVE failed"
-    while docker exec -i "$container" redis-cli INFO persistence 2>/dev/null \
+    "${DOCKER_CMD[@]}" exec -i "$container" redis-cli BGSAVE >/dev/null || fail "redis BGSAVE failed"
+    while "${DOCKER_CMD[@]}" exec -i "$container" redis-cli INFO persistence 2>/dev/null \
         | grep -q 'rdb_bgsave_in_progress:1'; do
         waited=$((waited + 2))
         [ "$waited" -gt 120 ] && fail "redis BGSAVE still running after 120s"
@@ -109,7 +117,7 @@ dump_redis() {
     done
     volume="$(volume_for "$container" /data)"
     log "archiving volume $volume"
-    docker run --rm -v "$volume":/data:ro -v "$DEST":/backup alpine \
+    "${DOCKER_CMD[@]}" run --rm -v "$volume":/data:ro -v "$DEST":/backup alpine \
         tar czf "/backup/$(basename "$partial")" -C /data . \
         || { rm -f "$partial"; fail "redis volume archive failed"; }
     publish "$partial" "$final"
@@ -125,27 +133,46 @@ dump_qdrant() {
     local final="$DEST/shrap-qdrant-${STAMP}.tar.gz"
     local partial="${final}.partial"
     local volume
-    if ! docker inspect "$container" >/dev/null 2>&1; then
+    if ! "${DOCKER_CMD[@]}" inspect "$container" >/dev/null 2>&1; then
         log "skip: $container is not running"
         return 0
     fi
     volume="$(volume_for "$container" /qdrant/storage)"
     log "archiving volume $volume"
-    docker run --rm -v "$volume":/data:ro -v "$DEST":/backup alpine \
+    "${DOCKER_CMD[@]}" run --rm -v "$volume":/data:ro -v "$DEST":/backup alpine \
         tar czf "/backup/$(basename "$partial")" -C /data . \
         || { rm -f "$partial"; fail "qdrant volume archive failed"; }
     publish "$partial" "$final"
 }
 
+# Check daemon access once, up front, and say what to do about it. The first
+# real run of this script failed on a raw "permission denied ... docker.sock"
+# buried inside a stage failure, which is an accurate message that does not tell
+# you the fix.
+preflight() {
+    "${DOCKER_CMD[@]}" info >/dev/null 2>&1 && return 0
+    fail "cannot reach the Docker daemon as $(id -un). This host does not put
+    the deploying user in the 'docker' group, so an interactive run needs:
+
+        sudo /mnt/Archive/shrap/shrap_firm/scripts/backup.sh
+
+    or, to keep the destination writable by your own user:
+
+        DOCKER='sudo docker' $0 $DEST
+
+    A scheduled run under root needs neither."
+}
+
 main() {
     log "destination $DEST"
     mkdir -p "$DEST" || fail "cannot create $DEST"
+    preflight
     dump_postgres shrap_postgres postgres
 
     # Langfuse moved to Cloud on 2026-08-25 (KI-032). The local instance still
     # runs, so it is still backed up — skipped rather than failed if it is
     # retired, so decommissioning it does not break the nightly job.
-    if docker inspect shrap_langfuse_db >/dev/null 2>&1; then
+    if "${DOCKER_CMD[@]}" inspect shrap_langfuse_db >/dev/null 2>&1; then
         dump_postgres shrap_langfuse_db langfuse
     else
         log "skip: shrap_langfuse_db is not running"
