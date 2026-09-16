@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-08-25 (`main` at #212 — the firm has never had a backup; fractional quantities now survive the whole path)
+**Last updated:** 2026-09-16 (`main` at #214 — a backup that actually runs and actually restores, after three attempts)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -963,6 +963,18 @@ as systems tests, so a weak fortnight is what the evaluation predicted.
   cron lines, verifies gzip integrity **and** a minimum size before renaming a
   `.partial` into place, and exits non-zero naming the stage that failed. **Open
   until installed** — a script in the repo is not a backup.
+- PR #213 — **The backup script could not reach Docker on the host it runs on.**
+  First real run of #212 on the Dell died on `permission denied ... /var/run/docker.sock`:
+  `truenas_admin` is not in the `docker` group, which is why every interactive
+  command in this project has been `sudo docker`. The script called bare `docker`.
+- PR #214 — **The Postgres backup would not have restored.** Past the permission
+  error, `pg_dumpall` warned of circular foreign-key constraints on
+  `continuous_agg` — a TimescaleDB catalog table. `shrap` is a Timescale
+  database and the script was dumping it as plain Postgres, so the artifact it
+  produced was not restorable. Checked against Tiger Data's logical-backup
+  documentation rather than from memory. **Three PRs to get one backup that
+  works, each failure only visible on the next real run** — the pattern worth
+  keeping from #212–#214 is that none of them were found by reading the script.
 
 **The first trustworthy reading:** IR +0.84 and −0.45 over nine sessions,
 t-statistics of +0.16 and −0.09. The tool printed a number above the promote
