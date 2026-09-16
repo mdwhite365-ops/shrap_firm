@@ -1,4 +1,4 @@
-# Session handoff — 2026-08-23
+# Session handoff — 2026-09-16
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -13,6 +13,50 @@ claims go false; leaving them adjacent to current numbers is worse than losing
 them, and `git log` has the history.
 
 ---
+
+## Merged since this file was last reconciled (#209–#214)
+
+None of it changes the headline below: the constraint is still research
+throughput, and no strategy is above the promote floor.
+
+- **#209** — Audited #208's Langfuse tracing against Langfuse's own published
+  guidance. The finding was not about the code: **the deployed server is end of
+  life.** `langfuse/langfuse:2` is OSS v2, and the compatibility matrix rules
+  out every current client against it.
+- **#210** — One `CompletionClient`, not eight. Eight modules had each declared
+  the protocol themselves; structural typing made that legal until the copies
+  had to agree, and two consecutive PRs each meant editing all eight.
+- **#211** — **KI-033:** no position under one share could ever be closed. The
+  Pre-Trade Checker vetoed fractional quantities as malformed, which was correct
+  until entries themselves became fractional.
+- **#212–#214** — **KI-034: the firm had never had a backup.** Not a wrong path
+  — `crontab -l` returned *no crontab*, and `/mnt/backups` did not exist. Then
+  the script could not reach Docker (`truenas_admin` is not in the `docker`
+  group), and then its dump would not have *restored*, because `shrap` is a
+  TimescaleDB database being dumped as plain Postgres.
+
+**Three PRs to get one working backup, and each failure was only visible on the
+next real run.** None were found by reading the script. The same shape as the
+five trading-path fixes: the defect is not in the code you are looking at, it is
+in what the code assumed about the thing it talks to.
+
+## Open, not merged: the Regime Router (ADR-0010 §4)
+
+Branch `phase1/regime-router-ki-012` implements the strategy-activation gate
+ADR-0010 accepted on 2026-05-31 and nothing ever built — **KI-012 §4**.
+Strategies gain `regime_fit`/`regime_kill`; a dormant strategy's *entries* are
+suppressed while its *exits* are never blocked.
+
+**Nothing changes on merge** — every strategy in the registry carries
+`None`/`None`, so opting one in is a deliberate CLI act. It is the plumbing for
+the two cards that actually address research throughput, and both depend on this
+schema rather than stacking on it (KI-001):
+
+- **Card #2 — Hypothesis Generator regime anchoring.** Tag `regime_fit`/
+  `regime_kill` on every new proposal. This is the card that answers "generate
+  strategies for different regime scenarios."
+- **Card #3 — Strategy Evaluator.** Require both tags to promote; compute IR
+  within the target regime's periods.
 
 ## Where the firm stands at sprint end
 

@@ -1,13 +1,21 @@
 # Implementation timeline
 
-**Last updated:** 2026-07-31 (`main` at #175; #129–#175 were missing from this file)
+**Last updated:** 2026-09-16 (`main` at #214)
 **Supersedes** `docs/roadmap/paper-spine-tree.md` as the answer to "what's next."
 That document is the Month-1/2 paper-spine plan; its last card (Card 18) shipped
 weeks ago and it has not tracked anything since.
 
-**Time remaining:** roughly four to five weeks. The sprint ends when classes
-start (late August 2026). Mike has 1–2 hours/day, spent reviewing rather than
-implementing.
+**Time remaining: none — the 4-month sprint (May–Aug 2026) is over.** This file
+said "roughly four to five weeks" until 2026-09-16, which had been false for
+about three weeks. Whatever happens next is post-sprint work at whatever pace
+classes leave, and it should be planned as that rather than as a sprint still
+running. Mike has 1–2 hours/day, spent reviewing rather than implementing.
+
+**What the sprint produced, stated plainly:** a firm that trades autonomously
+and correctly, that can now measure itself, and that has **zero strategies above
+the promote floor**. The spine works; the research funnel that is supposed to
+fill it does not yet produce anything worth trading. That is the honest exit
+state, and it is the thing any post-sprint plan has to start from.
 
 This file exists because "what's next" was being reconstructed from four
 documents each session, and one of them was stale enough to produce a command
@@ -258,7 +266,9 @@ now.
 |---|---|---|
 | 3.1 | ~~**Instrument LLM calls into Langfuse**~~ **CODE SHIPPED (#208), NOT YET VERIFIED** | KI-018. `src/shrap/llm/tracing.py` traces every completion through `TierLLMClient` — all eleven call sites — with full input/output, token counts and a `task` name so the sample can be sliced the way llm-routing.md's migration protocol requires. Tracing fails open: an observability outage must not stop the Tech Watcher filtering. **Nothing is traced until Langfuse issues API keys, which only Mike can create** (Settings → API Keys → `infra/.env`). Until then every agent logs `llm.tracing_disabled` and runs exactly as before. Closing needs a trace visible in the UI — see `docs/runbooks/dell-bootstrap.md` §3.4a. |
 | 3.2 | **Health Monitor agent-level checks** | It checks six infrastructure targets (redis, postgres, qdrant, docker, node, tailscale) and nothing about whether the firm is *working*. KI-010's silent ingest-leg death — USASpending stopped for 18 days unnoticed — is exactly what this would catch. |
-| 3.3 | **Regime Router** | ADR-0010 §4, tracked by KI-012. The Regime Classifier has been deployed since Month 2 and gates nothing; regime output does not reach the order path at all. |
+| 3.3 | ~~**Regime Router**~~ **BUILT, IN REVIEW** (`phase1/regime-router-ki-012`) | ADR-0010 §4, tracked by KI-012. Accepted 2026-05-31, unbuilt for three months. Strategies gain `regime_fit`/`regime_kill`; a dormant strategy's **entries** are suppressed and its **exits** are never blocked, so a regime change cannot strand a position. **Nothing changes on merge** — every registry row is `None`/`None`, so opting a strategy in is a deliberate CLI act. Implemented as a library inside the Strategy Runner rather than a 35th container: `is_dormant(label, fit, kill) -> bool` is pure and synchronous. |
+| 3.3a | **Hypothesis Generator regime anchoring** (Card #2) | 3.3. Tag `regime_fit`/`regime_kill` on every new proposal, per `docs/regimes/README.md`: *"strategies proposed without a regime anchor are rejected at intake."* **This is the card that actually answers "generate strategies for different regime scenarios"** — 3.3 only builds the plumbing it plugs into. Depends on 3.3's schema, so it follows the merge rather than stacking (KI-001). |
+| 3.3b | **Evaluator: mandatory regime tags + regime-stratified promotion** (Card #3) | 3.3, 3.3a. *"The Strategy Evaluator refuses to promote a strategy that has not declared both."* Today it backtests full history regardless of regime, which is how a strategy that only works in one environment gets an IR that averages across all of them. |
 | 3.4 | **KI-015 ruling** (friction stress is a scenario, not a bound) | Mike's. Cheap. Should land before any strategy is promoted on the strength of surviving it. |
 
 ---

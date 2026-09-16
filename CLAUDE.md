@@ -13,6 +13,15 @@ This is **Shrap**, a self-developing multi-agent trading firm. The repo name is 
 
 The trading path was fixed **five times in ten days** (#192, #193, #195, #196, #198, #199), every defect silent and none raising an error. Three were introduced by the sessions that fixed the others. The recurring shape: **a component reconstructed a fact that was already recorded, and the reconstruction disagreed** — intent standing in for position, `market_value / price` standing in for a share count, an `INTEGER` column standing in for a fractional quantity. When a card changes a type or inserts a stage, ask what downstream already declared about what reaches it.
 
+**The same shape, again, in the backups (#212–#214).** Three PRs to get one
+backup that works: the crons were never installed, then the script could not
+reach Docker (`truenas_admin` is not in the `docker` group — this is why every
+interactive command here is `sudo docker`), then its dump would not have
+*restored*, because `shrap` is TimescaleDB being dumped as plain Postgres. **Each
+failure was only visible on the next real run; none were findable by reading the
+script.** Assume a component is wrong about what it talks to until it has run
+against the real thing.
+
 **Always-on services (34 containers, verified 2026-07-31):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger. **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker.
 
 Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike reviews and merges; never stack PRs — see KI-001).
@@ -22,7 +31,7 @@ Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike
 > **Check the status docs before trusting them.** They have now fallen behind
 > `main` three times — #72–#80, #92–#101, and #129–#175, the last being
 > forty-six PRs of finished work still described as pending. Run
-> **`make doc-drift`** first (last reconciled at **#206**). When it fails, trust
+> **`make doc-drift`** first (last reconciled at **#214**). When it fails, trust
 > `git log`, `docker compose ps` and the database over any document.
 >
 > **`make doc-drift` compares PR numbers, not claims.** On 2026-08-04 it
@@ -51,7 +60,7 @@ All ten foundational docs are drafted: vision, architecture (all open questions 
 - **Commit messages:** `docs: ...` for doc work, `chore: ...` for setup, `feat: ...`/`fix: ...`/`test: ...` for code.
 
 ## Key project constraints
-- 4-month sprint (May–Aug 2026), classes start after
+- **The 4-month sprint (May–Aug 2026) is over.** Classes have started; this is post-sprint work at whatever pace they leave. Don't plan as though a deadline is still running — and don't let "the sprint ends soon" justify skipping a step.
 - Mike has 1-2 hours/day for this project
 - Agents do most of the building; Mike is architect/reviewer
 - 50-stock universe (locked), regime-conditional strategies, structural analysis department
