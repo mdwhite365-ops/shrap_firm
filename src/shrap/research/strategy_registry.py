@@ -151,7 +151,7 @@ SELECT
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
     code_ref, account_id, created_at, updated_at,
     parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
-    revision_reason
+    revision_reason, regime_fit, regime_kill
 FROM research.strategies
 WHERE lineage_root_id = $1
 ORDER BY created_at, strategy_id
@@ -188,6 +188,23 @@ WHERE account_id IS NOT NULL
 
 UPDATE_STRATEGY_ACCOUNT_SQL = """
 UPDATE research.strategies SET account_id = $2, updated_at = now() WHERE strategy_id = $1
+""".strip()
+
+# ADR-0010 §4: Regime Router — strategies declare which regimes they fit and which
+# kill them. regime_fit is a list of regime labels where the strategy should be
+# active; regime_kill is a list of regimes where it should be dormant. Both nullable
+# — None on either means "no opinion," and the strategy stays unconditionally active
+# until Mike deliberately opts it in via CLI, informed by the strategy's regime card.
+ALTER_STRATEGIES_ADD_REGIME_GATE_SQL = """
+ALTER TABLE research.strategies
+ADD COLUMN IF NOT EXISTS regime_fit JSONB,
+ADD COLUMN IF NOT EXISTS regime_kill JSONB
+""".strip()
+
+UPDATE_STRATEGY_REGIME_GATE_SQL = """
+UPDATE research.strategies
+SET regime_fit = $2, regime_kill = $3, updated_at = now()
+WHERE strategy_id = $1
 """.strip()
 
 CREATE_TRANSITIONS_TABLE_SQL = """
@@ -230,12 +247,14 @@ INSERT INTO research.strategies (
     parent_strategy_id,
     lineage_root_id,
     derived_from_evaluation_id,
-    revision_reason
+    revision_reason,
+    regime_fit,
+    regime_kill
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7,
     $8::jsonb, $9::jsonb, $10::jsonb, $11, $12::jsonb, $13::jsonb, $14, $15, $15,
-    $16, $17, $18, $19
+    $16, $17, $18, $19, $20::jsonb, $21::jsonb
 )
 ON CONFLICT (strategy_id) DO NOTHING
 """.strip()
@@ -246,7 +265,7 @@ SELECT
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
     code_ref, account_id, created_at, updated_at,
     parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
-    revision_reason
+    revision_reason, regime_fit, regime_kill
 FROM research.strategies
 WHERE strategy_id = $1
 """.strip()
@@ -257,7 +276,7 @@ SELECT
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
     code_ref, account_id, created_at, updated_at,
     parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
-    revision_reason
+    revision_reason, regime_fit, regime_kill
 FROM research.strategies
 WHERE status = $1
 ORDER BY updated_at DESC
@@ -269,7 +288,7 @@ SELECT
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
     code_ref, account_id, created_at, updated_at,
     parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
-    revision_reason
+    revision_reason, regime_fit, regime_kill
 FROM research.strategies
 WHERE spec_hash = $1
 """.strip()
@@ -280,7 +299,7 @@ SELECT
     anchor, tickers, spec, spec_hash, regime_sizing_modifier, kill_criteria,
     code_ref, account_id, created_at, updated_at,
     parent_strategy_id, lineage_root_id, derived_from_evaluation_id,
-    revision_reason
+    revision_reason, regime_fit, regime_kill
 FROM research.strategies
 ORDER BY created_at DESC, strategy_id
 """.strip()
@@ -441,6 +460,14 @@ class StrategyRecord:
     """Why this revision exists, in words. Required for any revision: it is what
     lets a person read the lineage later and recognise a parameter sweep."""
 
+    regime_fit: list[str] | None = None
+    """Regime labels this strategy is expected to perform well in (ADR-0010 §4).
+    None means "no opinion" — the strategy is unconditionally active."""
+
+    regime_kill: list[str] | None = None
+    """Regime labels that should immediately deactivate this strategy (ADR-0010 §4).
+    None means "no opinion" — kill takes precedence over fit if both are set."""
+
     @property
     def is_revision(self) -> bool:
         return self.parent_strategy_id is not None
@@ -498,6 +525,7 @@ class PostgresStrategyRegistry:
             # still be correct but rewrites it needlessly.
             await conn.execute(BACKFILL_STRATEGIES_LINEAGE_ROOT_SQL)
             await conn.execute(CREATE_STRATEGIES_LINEAGE_INDEX_SQL)
+            await conn.execute(ALTER_STRATEGIES_ADD_REGIME_GATE_SQL)
             await conn.execute(CREATE_STRATEGIES_ACCOUNT_UNIQUE_INDEX_SQL)
             await conn.execute(CREATE_STRATEGIES_SPEC_HASH_INDEX_SQL)
             await conn.execute(CREATE_STRATEGIES_STATUS_INDEX_SQL)
@@ -597,6 +625,8 @@ class PostgresStrategyRegistry:
                     lineage_root,
                     record.derived_from_evaluation_id,
                     record.revision_reason,
+                    _json_or_none(record.regime_fit),
+                    _json_or_none(record.regime_kill),
                 )
                 if not str(result).endswith(" 1"):
                     return False
@@ -650,6 +680,31 @@ class PostgresStrategyRegistry:
             normalized = None
         async with self._pool.acquire() as conn:
             await conn.execute(UPDATE_STRATEGY_ACCOUNT_SQL, strategy_id, normalized)
+            row = await conn.fetchrow(SELECT_STRATEGY_SQL, strategy_id)
+        if row is None:
+            raise StrategyNotFoundError(f"strategy {strategy_id} does not exist")
+        return _record_from_row(row)
+
+    async def set_regime_gate(
+        self,
+        strategy_id: str,
+        regime_fit: list[str] | None,
+        regime_kill: list[str] | None,
+    ) -> StrategyRecord:
+        """Set the regime gate for a strategy (ADR-0010 §4, Regime Router).
+
+        regime_fit: list of regime labels the strategy performs well in.
+        regime_kill: list of regime labels that should deactivate it.
+        Both None means "no opinion" — the strategy is unconditionally active.
+
+        This is how Mike opts a strategy into regime-conditional activation,
+        informed by the strategy's regime card and backtest results.
+        """
+
+        fit_json = _json_or_none(regime_fit) if regime_fit is not None else None
+        kill_json = _json_or_none(regime_kill) if regime_kill is not None else None
+        async with self._pool.acquire() as conn:
+            await conn.execute(UPDATE_STRATEGY_REGIME_GATE_SQL, strategy_id, fit_json, kill_json)
             row = await conn.fetchrow(SELECT_STRATEGY_SQL, strategy_id)
         if row is None:
             raise StrategyNotFoundError(f"strategy {strategy_id} does not exist")
@@ -769,7 +824,7 @@ def transition_event_payload(transition: StrategyTransition) -> dict[str, Any]:
     }
 
 
-def _json_or_none(value: dict[str, Any] | None) -> str | None:
+def _json_or_none(value: dict[str, Any] | list[str] | None) -> str | None:
     if value is None:
         return None
     return json.dumps(value, separators=(",", ":"))
@@ -784,6 +839,8 @@ def _json_loaded(value: object) -> Any:
 def _record_from_row(row: Mapping[str, Any]) -> StrategyRecord:
     anchor = _json_loaded(row["anchor"])
     regime = _json_loaded(row["regime_sizing_modifier"])
+    regime_fit = _json_loaded(row.get("regime_fit"))
+    regime_kill = _json_loaded(row.get("regime_kill"))
     return StrategyRecord(
         strategy_id=str(row["strategy_id"]),
         name=str(row["name"]),
@@ -806,6 +863,8 @@ def _record_from_row(row: Mapping[str, Any]) -> StrategyRecord:
         lineage_root_id=_opt_str(row, "lineage_root_id"),
         derived_from_evaluation_id=_opt_str(row, "derived_from_evaluation_id"),
         revision_reason=_opt_str(row, "revision_reason"),
+        regime_fit=regime_fit if isinstance(regime_fit, list) else None,
+        regime_kill=regime_kill if isinstance(regime_kill, list) else None,
     )
 
 

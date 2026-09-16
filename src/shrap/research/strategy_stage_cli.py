@@ -25,6 +25,9 @@ Subcommands::
     shrap-strategy-stage move <strategy_id> --to paper --reason "..." [--dry-run]
     shrap-strategy-stage assign-account <strategy_id> --account-id PA3ABCDEF
     shrap-strategy-stage assign-account <strategy_id> --clear
+    shrap-strategy-stage set-regime-gate <strategy_id>
+                         --fit late-cycle-melt-up,crisis-recovery --kill wartime
+    shrap-strategy-stage set-regime-gate <strategy_id> [--fit ...] [--kill ...]
 
 On the ``shrap-universe-promote`` / ``shrap-tech-watcher-promote`` precedent:
 plain argparse, env-var DSN default, no long-running loop.
@@ -55,6 +58,7 @@ from shrap.research.strategy_registry import (
     stream_for_transition,
     transition_event_payload,
 )
+from shrap.risk_compliance.risk_officer.limits import REGIME_BANDS
 
 MANUAL_ACTOR = "mike"
 MANUAL_TRIGGER_KIND = "manual"
@@ -359,6 +363,65 @@ async def assign_account(
     return "\n".join(lines)
 
 
+async def set_regime_gate(
+    registry: PostgresStrategyRegistry,
+    strategy_id: str,
+    *,
+    regime_fit: list[str] | None,
+    regime_kill: list[str] | None,
+    dry_run: bool = False,
+) -> str:
+    """Set the regime gate for a strategy (ADR-0010 §4, Regime Router).
+
+    regime_fit: comma-separated list of regime labels the strategy performs well in.
+    regime_kill: comma-separated list of regime labels that should deactivate it.
+
+    Both None (neither --fit nor --kill supplied) means "no opinion" — the strategy
+    remains unconditionally active. This is how Mike opts a strategy into regime-
+    conditional activation, informed by the strategy's regime card and backtest
+    results.
+
+    Regime labels must be valid (in REGIME_BANDS): late-cycle-melt-up, crisis-recovery,
+    stagflation, wartime.
+    """
+
+    # Validate regime labels
+    known_regimes = set(REGIME_BANDS.keys())
+    if regime_fit:
+        unknown_fit = set(regime_fit) - known_regimes
+        if unknown_fit:
+            raise SystemExit(f"unknown regime labels in --fit: {sorted(unknown_fit)}")
+    if regime_kill:
+        unknown_kill = set(regime_kill) - known_regimes
+        if unknown_kill:
+            raise SystemExit(f"unknown regime labels in --kill: {sorted(unknown_kill)}")
+
+    record = await registry.get(strategy_id)
+    if record is None:
+        raise SystemExit(f"refused: no strategy {strategy_id!r}")
+
+    if dry_run:
+        fit_str = ", ".join(regime_fit) if regime_fit else "(unset)"
+        kill_str = ", ".join(regime_kill) if regime_kill else "(unset)"
+        return (
+            f"DRY RUN — would set regime gate for {record.name} ({strategy_id}):\n"
+            f"  regime_fit: {fit_str}\n"
+            f"  regime_kill: {kill_str}"
+        )
+
+    updated = await registry.set_regime_gate(strategy_id, regime_fit, regime_kill)
+    fit_str = ", ".join(updated.regime_fit) if updated.regime_fit else "(unset)"
+    kill_str = ", ".join(updated.regime_kill) if updated.regime_kill else "(unset)"
+    lines = [
+        f"{record.name} ({strategy_id}): regime gate updated",
+        f"  regime_fit: {fit_str}",
+        f"  regime_kill: {kill_str}",
+        "\nTakes effect on the next strategy-runner pass. Dormant strategies suppress NEW entries "
+        "but do not force exits of existing positions.",
+    ]
+    return "\n".join(lines)
+
+
 async def _run(args: argparse.Namespace) -> str:
     pool = await create_asyncpg_pool(args.dsn)
     redis: Redis | None = None
@@ -379,6 +442,17 @@ async def _run(args: argparse.Namespace) -> str:
                 registry,
                 args.strategy_id,
                 account_id=None if args.clear else args.account_id,
+                dry_run=args.dry_run,
+            )
+
+        if args.action == "set-regime-gate":
+            fit_list = [x.strip() for x in args.fit.split(",")] if args.fit else None
+            kill_list = [x.strip() for x in args.kill.split(",")] if args.kill else None
+            return await set_regime_gate(
+                registry,
+                args.strategy_id,
+                regime_fit=fit_list,
+                regime_kill=kill_list,
                 dry_run=args.dry_run,
             )
 
@@ -439,6 +513,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Unassign, freeing the account for another strategy",
     )
     assign.add_argument(
+        "--dry-run", action="store_true", help="Show what would happen; write nothing"
+    )
+
+    regime = sub.add_parser(
+        "set-regime-gate",
+        help="Set the regime gate for a strategy (ADR-0010 §4, Regime Router)",
+    )
+    regime.add_argument("strategy_id")
+    regime.add_argument(
+        "--fit",
+        default=None,
+        help="Comma-separated regime labels the strategy performs well in "
+        "(late-cycle-melt-up, crisis-recovery, stagflation, wartime)",
+    )
+    regime.add_argument(
+        "--kill",
+        default=None,
+        help="Comma-separated regime labels that should deactivate the strategy",
+    )
+    regime.add_argument(
         "--dry-run", action="store_true", help="Show what would happen; write nothing"
     )
 

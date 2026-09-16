@@ -54,10 +54,11 @@ What this agent cannot do:
 
 ## Cross-references
 
-**Depends on:** Regime Classifier, Regime Router (which strategies are active), every
-active strategy implementation, Watch List Curator and Filing Deep Reader (structural
-biases), News Analyzer / Sentiment Monitor (intelligence inputs), Risk Officer (veto
-channel), Sweep Detector.
+**Depends on:** Regime Classifier, Strategy Runner's Regime Router
+(`src/shrap/research/strategy_runner/regime_router.py` — determines which strategies are
+active per ADR-0010 §4), every active strategy implementation, Watch List Curator and Filing
+Deep Reader (structural biases), News Analyzer / Sentiment Monitor (intelligence inputs),
+Risk Officer (veto channel), Sweep Detector.
 **Depended on by:** Risk Officer (pre-trade check), Execution Agent (consumer), Daily
 Briefing, Audit Logger.
 **Related ADRs:** ADR-0006 (envelope), forthcoming ADR on no-real-money invariant.

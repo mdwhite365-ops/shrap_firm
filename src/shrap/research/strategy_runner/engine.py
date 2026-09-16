@@ -44,9 +44,11 @@ Invariants enforced in this module (the service enforces the delivery ones):
 - **Fail-safe.** Any per-strategy error (bad spec, factory error, missing or
   insufficient bars) skips *that* strategy with a recorded reason. It never
   raises out of :func:`plan_session` and never emits a partial signal.
-- **Regime is informational only.** ``regime_label`` rides along in the payload
-  but never gates emission — regime is a sizing modifier, not an entry/exit
-  gate.
+- **Regime gates entries (ADR-0010 §4).** The Regime Router suppresses new entries
+  (not exits) when a strategy's ``regime_kill`` list includes the current regime
+  or its ``regime_fit`` list excludes it. Regime is a sizing modifier for the Risk
+  Officer and an activation gate for strategies — ``regime_label`` rides along in
+  the payload for observability.
 
 The record -> signal binding is the reused Strategy Evaluator
 :data:`~shrap.research.strategy_evaluator.pipeline.StrategyFactory` seam, so the
@@ -63,6 +65,7 @@ from typing import TYPE_CHECKING, Any
 from shrap.research.strategy_evaluator.strategy import BarSample, PanelWindow, PricePanel
 from shrap.research.strategy_registry import StrategyRecord
 from shrap.research.strategy_runner.cadence import SESSION_SLOT, read_cadence, slot_for
+from shrap.research.strategy_runner.regime_router import is_dormant
 from shrap.research.strategy_runner.sizing import SizingRefused, size_position
 
 if TYPE_CHECKING:
@@ -400,6 +403,9 @@ def _plan_strategy(
     # pass can serve a daily rule and a five-minute rule without either knowing
     # the other exists. Absence of a cadence means daily (see `.cadence`).
     slot = slot_for(read_cadence(item.record.spec), now)
+    # Regime Router (ADR-0010 §4): check if this strategy is dormant in the
+    # current regime. Computed once per strategy, applied to all its tickers.
+    dormant = is_dormant(regime_label, item.record.regime_fit, item.record.regime_kill)
     try:
         if already_ran(strategy_id, item.tickers, stored_state, session_date, slot):
             return _skip(strategy_id, f"already ran this session at slot {slot}")
@@ -453,6 +459,21 @@ def _plan_strategy(
             # derive — the Reconciliation Agent already writes them.
             position = float(held.get(ticker.upper(), 0.0))
             prev_inv = position > 0.0
+
+            # Regime Router (ADR-0010 §4): suppress entries when dormant, but
+            # never suppress exits — dormancy blocks entries, not exits. An
+            # existing position under a regime that would normally kill the
+            # strategy still exits on signal so the account doesn't get trapped
+            # in a position by a regime change.
+            if dormant and now_inv and not prev_inv:
+                # Entry suppressed by regime dormancy. Forcing both flags flat
+                # before the branching below means no signal is emitted and the
+                # state row records flat — the same shape a failed-sizing entry
+                # writes (`stored_target = 0.0`), so next session reads "never
+                # entered" rather than mistaking this for a position to exit.
+                now_inv = False
+                weight = 0.0
+                notes.append(f"{ticker}: regime-dormant ({regime_label}) — entry suppressed")
 
             if position < 0.0:
                 # A short on a long-only strategy. Never intended, and an exit

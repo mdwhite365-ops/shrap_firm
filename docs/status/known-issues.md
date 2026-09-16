@@ -483,15 +483,16 @@ Maker — that would put unevaluated signals on the order path.
 
 ## KI-012 — ADR-0010 is accepted and substantially unimplemented
 
-**Status:** Open, found 2026-07-27. Tracked by ADR-0013 §4.
+**Status:** Partially resolved 2026-09-16 (§4 Regime Router implemented; §3, §5, §6 remain
+open). Found 2026-07-27. Tracked by ADR-0013 §4.
 
 ADR-0010 (Accepted 2026-05-31) corrected ADR-0007's exclusivity claim and made
-four decisions that have no implementation two months later:
+four decisions that have been implemented unevenly:
 
 | ADR-0010 | Status |
 |---|---|
 | §3 Structural Analysis as a separate department | Zero agents; `docs/agents/structural-analysis/` does not exist |
-| §4 Regime Classifier as a strategy-activation gate | No Regime Router; classifier output gates nothing |
+| §4 Regime Classifier as a strategy-activation gate | **RESOLVED 2026-09-16**: Regime Router implemented in `src/shrap/research/strategy_runner/regime_router.py`, integrated into Strategy Runner via per-strategy `regime_fit`/`regime_kill` gates. Closes KI-012 for this section. Pending: Hypothesis Generator regime anchoring (Card #2) and Strategy Evaluator regime-aware promotion (Card #3). |
 | §5 Forced-Proxy as Framework #2 via ADR-0011 | ADR-0011 never written; `docs/decisions/` runs 0001–0010, 0012 |
 | §6 Multiple theses in parallel | Only Framework #1 exists |
 
