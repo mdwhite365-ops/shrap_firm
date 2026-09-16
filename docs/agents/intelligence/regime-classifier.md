@@ -49,14 +49,19 @@ principle 7, recorded here rather than silently drifting:
 
 ## Purpose
 
-The Regime Classifier produces a single piece of context the Risk Officer reads
-to modulate position sizing: "what kind of market are we in, right now, and what
-historical periods does it most resemble." Per ADR-0007, the classifier is a
-**sizing modifier, not a strategy-activation gate.** Strategies are activated by
-infrastructure graph state and Bottleneck Scout events; this agent's output tells
-the Risk Officer how much size those active strategies are allowed to take in the
-current environment, and which historical analogs argue for caution or
-aggression.
+The Regime Classifier produces context for two distinct consumers (ADR-0010 §4):
+
+1. **Risk Officer (primary):** uses regime label to modulate position sizing —
+   what kind of market are we in, and what exposure caps should bind?
+2. **Strategy Router (ADR-0010 §4, via the Strategy Runner):** uses regime to
+   determine which strategies should be active/dormant — some strategies fit
+   specific regimes and should not trade in others.
+
+This agent's output tells the Risk Officer how much size active strategies are
+allowed to take in the current environment, and which historical analogs argue
+for caution or aggression. It also tells the Regime Router which strategies have
+declared a regime fit or kill condition, so it can suppress entries in regimes
+the strategy is not designed for.
 
 It operates in two layers, which are kept deliberately separate so failures in one do not
 silently corrupt the other:
@@ -78,10 +83,12 @@ they are visible in the data. It is a classifier, not a forecaster. It also cann
 calibrated probability that its label is "correct" in any frequentist sense; the regime
 taxonomy is a human-defined ontology and the confidence scores it emits are internal
 consistency metrics, not posterior probabilities. Mike should read confidence as "how
-unanimous the underlying features are," not "how likely we are right." Because the
-classifier is now a sizing modifier rather than a strategy gate, a wrong label produces
-wrong sizing rather than wrong activation — still consequential, but a smaller blast
-radius than under the v0.1 framing.
+unanimous the underlying features are," not "how likely we are right."
+
+A wrong label produces both wrong sizing (Risk Officer side) and potentially wrong
+strategy activation (Router side): a strategy dormanted for a regime will not emit entries,
+and one deactivated in an unsafe regime is protected. The Router also allows existing
+positions to exit on signal even when dormant — dormancy is an entry gate, not an exit trap.
 
 ## Trigger
 
@@ -100,13 +107,15 @@ radius than under the v0.1 framing.
 
 **Depends on:** Market Structure Reader (term structure, breadth), Intelligence
 Department's macro feeds, Operations Department (data freshness guarantees).
-**Depended on by:** **Risk Officer** (primary consumer — sizing modifier). Daily
-Briefing Agent (reads label and analogs for Mike's morning summary). Strategy
-Evaluator (uses regime label to stratify backtest splits for out-of-distribution
-checks, but no longer for activation gating). The Hypothesis Generator, Regime
-Router, and Decision Maker no longer consume this agent directly — strategy
-activation is driven by Bottleneck Scout events under ADR-0007.
-**Related ADRs:** ADR-0004 (observability), ADR-0006 (Redis Streams envelope),
+**Depended on by:** **Risk Officer** (primary consumer — sizing modifier per ADR-0007).
+**Regime Router** (strategy activation gating per ADR-0010 §4 — implemented in the
+Strategy Runner, `src/shrap/research/strategy_runner/regime_router.py`). Daily Briefing
+Agent (reads label and analogs for Mike's morning summary). Strategy Evaluator (uses
+regime label to stratify backtest splits for out-of-distribution checks). The Hypothesis
+Generator no longer consumes this for activation — it focuses on research thesis generation.
+**Related ADRs:** ADR-0007 (original research funnel), ADR-0010 §4 (Regime Classifier as
+dual-consumer: sizing and activation gating), ADR-0004 (observability), ADR-0006 (Redis
+Streams envelope),
 ADR-0007 (Research thesis — the decision that moved this agent and changed its
 downstream consumer).
 **Related architecture sections:** `docs/02-architecture.md` §Intelligence

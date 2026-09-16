@@ -8,7 +8,8 @@ Fabricated strategies + bar panels + stored state exercise every branch of
 - missing / insufficient bars skip the strategy (never emit);
 - the per-(strategy, session) dedupe prevents a second pass;
 - a broken factory skips one strategy without touching the others (fail-safe);
-- regime is informational, never a gate;
+- regime gates entries for strategies that declared a fit/kill list, never
+  gates one that did not, and never blocks an exit (ADR-0010 §4);
 - the emitted payload schema matches the Strategy Fixture exactly and its
   confidence clears the real Decision Maker threshold;
 - entries are sized in dollars against account equity, exits sell the recorded
@@ -280,11 +281,109 @@ def test_factory_error_skips_only_that_strategy() -> None:
 # --- payload / regime ---------------------------------------------------------
 
 
-def test_regime_label_is_informational_not_a_gate() -> None:
+def test_regime_label_does_not_gate_a_strategy_with_no_regime_metadata() -> None:
+    """Untagged strategies are unconditionally active, as before the Router.
+
+    Every strategy in the registry carries ``regime_fit``/``regime_kill`` of
+    ``None`` today, so this is the guarantee that merging the Router changes
+    nothing until a strategy is deliberately opted in.
+    """
     strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 1.0})
     plan = _plan_one(strategy=strategy, item=_input("s1", "NVDA", 5), stored={}, regime_label=None)
     assert [s.side for s in plan.signals] == [SIDE_BUY]  # still fires with no regime
     assert plan.signals[0].payload["regime_label"] == UNKNOWN_REGIME
+
+
+# --- regime router gate (ADR-0010 §4) -----------------------------------------
+
+
+def _gated_input(
+    strategy_id: str,
+    ticker: str,
+    n_bars: int,
+    *,
+    fit: list[str] | None = None,
+    kill: list[str] | None = None,
+) -> StrategyInput:
+    item = _input(strategy_id, ticker, n_bars)
+    return replace(item, record=replace(item.record, regime_fit=fit, regime_kill=kill))
+
+
+def test_dormant_strategy_suppresses_a_new_entry() -> None:
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 1.0})
+    plan = _plan_one(
+        strategy=strategy,
+        item=_gated_input("s1", "NVDA", 5, kill=["wartime"]),
+        stored={},
+        regime_label="wartime",
+    )
+    assert plan.signals == ()
+    assert any("regime-dormant" in note for note in plan.sizing_notes)
+
+
+def test_suppressed_entry_records_flat_not_invested() -> None:
+    """The state row must not read as a position next session.
+
+    This is the failure shape that bit the firm five times in ten days: a
+    stored target that disagrees with what the account holds turns the next
+    pass into an exit for stock the firm never bought.
+    """
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 1.0})
+    plan = _plan_one(
+        strategy=strategy,
+        item=_gated_input("s1", "NVDA", 5, kill=["wartime"]),
+        stored={},
+        regime_label="wartime",
+    )
+    (write,) = plan.state_writes
+    assert write.last_target == 0.0
+    assert write.last_side is None
+
+
+def test_dormant_strategy_still_exits_an_existing_position() -> None:
+    """Dormancy is an entry gate, never an exit trap.
+
+    A regime change must not strand the account in a position the strategy
+    itself wants to close.
+    """
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 0.0})
+    plan = _plan_one(
+        strategy=strategy,
+        item=_gated_input("s1", "NVDA", 5, kill=["wartime"]),
+        stored={
+            ("s1", "NVDA"): TargetState(
+                last_target=1.0,
+                last_side=SIDE_BUY,
+                last_session_date=YESTERDAY,
+                last_quantity=10.0,
+            )
+        },
+        regime_label="wartime",
+        held={"NVDA": 10.0},
+    )
+    assert [(s.side, s.ticker) for s in plan.signals] == [(SIDE_SELL, "NVDA")]
+
+
+def test_active_strategy_in_a_fit_regime_still_enters() -> None:
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 1.0})
+    plan = _plan_one(
+        strategy=strategy,
+        item=_gated_input("s1", "NVDA", 5, fit=["late-cycle-melt-up"]),
+        stored={},
+        regime_label="late-cycle-melt-up",
+    )
+    assert [s.side for s in plan.signals] == [SIDE_BUY]
+
+
+def test_fit_miss_suppresses_the_entry() -> None:
+    strategy = FakeStrategy(name="t", warmup=3, weights={"NVDA": 1.0})
+    plan = _plan_one(
+        strategy=strategy,
+        item=_gated_input("s1", "NVDA", 5, fit=["late-cycle-melt-up"]),
+        stored={},
+        regime_label="stagflation",
+    )
+    assert plan.signals == ()
 
 
 def test_payload_carries_strategy_id_and_transition_justification() -> None:
