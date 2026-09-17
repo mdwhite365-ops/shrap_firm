@@ -57,6 +57,10 @@ from shrap.risk_compliance.rate_limit import RateLimitConfig, RateLimitRedis, Re
 from shrap.risk_compliance.risk_officer.limits import PortfolioLimits
 from shrap.risk_compliance.risk_officer.monitor import SEVERITY_INFO
 from shrap.risk_compliance.risk_officer.officer import RiskOfficer, SweepResult
+from shrap.risk_compliance.risk_officer.posterior_reader import (
+    EVAL_PROTOCOL_VERSION,
+    PostgresPosteriorReader,
+)
 from shrap.risk_compliance.risk_officer.store import DecisionRow, RiskStore
 from shrap.risk_compliance.risk_officer.switch_store import RedisSwitchStore, SwitchRedis
 from shrap.risk_compliance.tier3_membership import Tier3MembershipGate
@@ -575,6 +579,7 @@ async def run(
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
     portfolio_limits_enforcement: bool = False,
+    posterior_sizing: bool = False,
     portfolio_limits: PortfolioLimits | None = None,
     monitor_interval_seconds: float = 300.0,
 ) -> None:
@@ -663,12 +668,32 @@ async def run(
             pool = await create_asyncpg_pool(postgres_dsn)
         risk_store = RiskStore(pool)
         await risk_store.ensure_schema()
+        # Reads `research.evaluations`, which this agent does not own — the
+        # repo's "reader, never owner" convention, same as the registry above.
+        # Left None the officer sizes exactly as it did before posteriors
+        # existed, so a rebuild cannot quietly change position sizes.
+        posteriors = (
+            PostgresPosteriorReader(pool, protocol_version=EVAL_PROTOCOL_VERSION)
+            if posterior_sizing
+            else None
+        )
         officer = RiskOfficer(
             store=risk_store,
             switch_store=RedisSwitchStore(cast(SwitchRedis, redis)),
             registry=PostgresStrategyRegistry(pool),
             limits=limits,
+            posteriors=posteriors,
         )
+        if posterior_sizing:
+            log.warning(
+                "risk_officer.posterior_sizing_on",
+                note=(
+                    "positions are sized from the Evaluator's posterior, not from the "
+                    "stage fraction; every strategy measured so far sizes SMALLER, and "
+                    "an unreadable posterior refuses the order rather than sizing flat "
+                    "(KI-036)"
+                ),
+            )
         # Redis is a cache of the Postgres log, and a Redis flush or restart
         # would silently clear every switch. Rebuilding at startup means a halt
         # survives the thing most likely to end it by accident.

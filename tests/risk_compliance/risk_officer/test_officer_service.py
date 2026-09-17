@@ -672,3 +672,129 @@ def test_share_counts_and_market_values_are_separate_readings() -> None:
     assert book.shares("AAPL") == 5.0
     assert book.by_ticker["AAPL"] == 500.0
     assert book.shares("MSFT") == 0.0  # not held
+
+
+# --- sizing on evidence instead of on a stage label (#228, KI-036) ------------
+
+
+class FakePosteriors:
+    """Stands in for PosteriorLookup. Can be absent, present, or broken."""
+
+    def __init__(self, posterior: Any = None, *, raises: bool = False) -> None:
+        self._posterior = posterior
+        self._raises = raises
+        self.asked: list[str] = []
+
+    async def latest_posterior(self, strategy_id: str) -> Any:
+        from shrap.risk_compliance.risk_officer.posterior_reader import PosteriorUnavailable
+
+        if self._raises:
+            raise PosteriorUnavailable(f"cannot read posterior for {strategy_id}")
+        self.asked.append(strategy_id)
+        return self._posterior
+
+
+def _officer_with_posteriors(
+    store: FakeStore, switches: FakeSwitchStore, posteriors: Any
+) -> RiskOfficer:
+    return RiskOfficer(
+        store=store,  # type: ignore[arg-type]
+        switch_store=switches,  # type: ignore[arg-type]
+        registry=FakeRegistry(),
+        limits=PortfolioLimits(),
+        posteriors=posteriors,
+    )
+
+
+async def test_omitting_the_lookup_never_asks_for_a_posterior() -> None:
+    """The default must be byte-identical to the behaviour before this existed.
+
+    This is a live paper account that trades each morning, so evidence-based
+    sizing is opt-in at construction. #221 is the precedent: a read the Runner
+    never made left it one rebuild from silently not trading.
+    """
+
+    store, switches = FakeStore(), FakeSwitchStore()
+    baseline = await _assess(_officer(store, switches))
+
+    spy = FakePosteriors(None)
+    with_lookup_absent = await _assess(_officer(store, switches))
+
+    assert spy.asked == []
+    assert baseline.approved_quantity == with_lookup_absent.approved_quantity
+
+
+async def test_a_measured_strategy_is_sized_smaller_than_its_stage_allows() -> None:
+    """The point of the whole card.
+
+    `paper` grants a flat 0.25 because a human moved the strategy there.
+    Momentum 126/21 actually measured IR 0.448, which after the selection
+    discount supports 0.147 — so the evidence sizes it to roughly 59% of what
+    the label did.
+    """
+
+    from shrap.risk_compliance.risk_officer.posterior import posterior_from_backtest
+
+    store, switches = FakeStore(), FakeSwitchStore()
+    by_stage = await _assess(_officer(store, switches))
+    by_evidence = await _assess(
+        _officer_with_posteriors(
+            store,
+            switches,
+            FakePosteriors(
+                posterior_from_backtest(information_ratio=0.448, standard_error=0.47, attempts=4)
+            ),
+        )
+    )
+
+    assert by_evidence.approved_quantity < by_stage.approved_quantity
+
+
+async def test_an_unevaluated_strategy_falls_back_to_its_stage() -> None:
+    """`None` is not an error — there is simply nothing measured to size on."""
+
+    store, switches = FakeStore(), FakeSwitchStore()
+    by_stage = await _assess(_officer(store, switches))
+    no_posterior = await _assess(_officer_with_posteriors(store, switches, FakePosteriors(None)))
+
+    assert no_posterior.approved is by_stage.approved
+    assert no_posterior.approved_quantity == by_stage.approved_quantity
+
+
+async def test_an_unreadable_posterior_refuses_rather_than_sizing_flat() -> None:
+    """Fail-closed, and the reason this card is not a one-line wiring change.
+
+    Every posterior the firm has measured is BELOW the flat 0.25 stage
+    fraction, so falling back on a read failure would size positions UP at
+    exactly the moment the firm lost the ability to justify them. Fail-open on
+    a risk control is the failure nobody notices.
+    """
+
+    from shrap.risk_compliance.risk_officer.officer import REASON_POSTERIOR_UNAVAILABLE
+
+    result = await _assess(
+        _officer_with_posteriors(FakeStore(), FakeSwitchStore(), FakePosteriors(raises=True))
+    )
+
+    assert not result.approved
+    assert result.reason_code == REASON_POSTERIOR_UNAVAILABLE
+    assert result.approved_quantity == 0
+
+
+async def test_an_exit_is_never_blocked_by_an_unreadable_posterior() -> None:
+    """#192-#199 and KI-030 are five defects that resized or blocked exits.
+
+    An exit that cannot execute is strictly worse than one sized by a stale
+    belief, so the reducing path must not consult the posterior at all.
+    """
+
+    store = FakeStore(positions=(Position("AAPL", 10.0, 1_000.0),))
+
+    result = await _assess(
+        _officer_with_posteriors(store, FakeSwitchStore(), FakePosteriors(raises=True)),
+        quantity=4,
+        side="sell",
+    )
+
+    assert result.approved
+    assert result.approved_quantity == 4

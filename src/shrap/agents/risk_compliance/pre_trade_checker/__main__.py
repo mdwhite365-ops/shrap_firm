@@ -29,6 +29,7 @@ def main() -> None:
             group=settings.service_name,
             consumer=settings.instance_id,
             portfolio_limits_enforcement=settings.portfolio_limits_enforcement,
+            posterior_sizing=settings.posterior_sizing,
             portfolio_limits=settings.portfolio_limits(),
             monitor_interval_seconds=settings.monitor_interval_seconds,
         )

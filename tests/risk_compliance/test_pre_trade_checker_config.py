@@ -46,6 +46,10 @@ def test_settings_redacted_output_is_log_safe() -> None:
         "retry_delay_seconds": 1.0,
         "log_level": "INFO",
         "portfolio_limits_enforcement": False,
+        # Off by default and it must stay that way: turning it on cuts live
+        # position sizes (KI-036) and makes the gate refuse on an unreadable
+        # posterior, so it is a governance decision rather than a default.
+        "posterior_sizing": False,
         "monitor_interval_seconds": 300.0,
         "portfolio_limits": {
             "max_ticker_weight": 0.20,
