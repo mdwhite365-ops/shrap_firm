@@ -11,6 +11,22 @@ about three weeks. Whatever happens next is post-sprint work at whatever pace
 classes leave, and it should be planned as that rather than as a sprint still
 running. Mike has 1–2 hours/day, spent reviewing rather than implementing.
 
+**Shipped 2026-09-16/17 (#215–#221):** the Regime Router (ADR-0010 §4, closing
+KI-012 §4), the intraday panel path and its `--timeframe` flag, and the Kelly
+posterior that fills sizing's empty slot — plus two fixes for regressions those
+PRs introduced, both found only by running on the Dell. All of it is apparatus
+for measuring and allocating.
+
+**Measured 2026-09-17 (KI-035), and it reorders everything below.** The
+autonomous research loop has produced **one** strategy in its life, scoring IR
+−0.006; the other 14 are Mike-seeded textbook factors that the evaluations
+correctly find dead. The Hypothesis Generator is starved, not broken —
+`research.literature_items` holds nine rows total, all processed. **The seven
+`capability-gap` rows are the build list**, cheapest first: market
+capitalisation (absent from every table, free from EDGAR XBRL), then 10-K full
+text and news text (both already ingested elsewhere in the firm). Anything that
+measures or allocates rather than feeding the funnel should wait behind them.
+
 **What the sprint produced, stated plainly:** a firm that trades autonomously
 and correctly, that can now measure itself, and that has **zero strategies above
 the promote floor**. The spine works; the research funnel that is supposed to

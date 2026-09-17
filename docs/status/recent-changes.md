@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-09-16 (`main` at #214 — a backup that actually runs and actually restores, after three attempts)
+**Last updated:** 2026-09-17 (`main` at #221 — a measurement session, and KI-035: the research loop has produced one strategy, ever)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -975,6 +975,20 @@ as systems tests, so a weak fortnight is what the evaluation predicted.
   documentation rather than from memory. **Three PRs to get one backup that
   works, each failure only visible on the next real run** — the pattern worth
   keeping from #212–#214 is that none of them were found by reading the script.
+
+- PR #215–#221 (2026-09-16/17) — **the measurement session.** Regime Router
+  (#215, ADR-0010 §4, closing KI-012 §4) · status docs reconciled and the
+  stage-fraction tension retired as arithmetic (#216) · intraday panel path
+  (#217) and the `--timeframe` flag that made it callable (#219) · the Kelly
+  posterior that fills sizing's empty slot (#218) · plus **two self-inflicted
+  regressions found only by running on the Dell**: #217 broke
+  `shrap-strategy-evaluate` at import including the daily path (#220), and #215
+  left the Runner one rebuild away from silently not trading (#221).
+- **KI-035, measured the same night:** the autonomous research loop has produced
+  **one** strategy in its life, scoring IR −0.006. The Hypothesis Generator is
+  starved, not broken — `research.literature_items` holds nine rows total. The
+  seven `capability-gap` rows are a prioritised build list and the cheapest item
+  is market capitalisation, absent from every table.
 
 **The first trustworthy reading:** IR +0.84 and −0.45 over nine sessions,
 t-statistics of +0.16 and −0.09. The tool printed a number above the promote
