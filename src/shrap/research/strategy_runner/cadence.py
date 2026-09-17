@@ -49,9 +49,13 @@ SESSION_SLOT = "session"
 # anything shorter would re-decide on data that has not moved.
 MIN_INTERVAL_MINUTES = 1
 
+# One regular NYSE session, 09:30-16:00 ET. The bar-count arithmetic below and
+# the interval ceiling are the same fact, so it is named once.
+REGULAR_SESSION_MINUTES = 390
+
 # Ceiling. Beyond a session's length an "intraday" cadence is a daily one with
 # extra steps, and declaring it that way hides the intent.
-MAX_INTERVAL_MINUTES = 390
+MAX_INTERVAL_MINUTES = REGULAR_SESSION_MINUTES
 
 DEFAULT_INTERVAL_MINUTES = 5
 
@@ -134,6 +138,52 @@ def slot_for(cadence: Cadence, now: datetime) -> str:
     return f"{floored // 60:02d}:{floored % 60:02d}"
 
 
+def bars_per_session(cadence: Cadence) -> int:
+    """How many bars of this cadence's grain one regular session contains.
+
+    One for a daily strategy; ``390 // interval`` for an intraday one. Floored,
+    so a cadence that does not divide the session evenly reports the number of
+    *whole* bars — asking for one more than exists is how a warmup window comes
+    up a session short.
+    """
+
+    if not cadence.is_intraday or cadence.interval_minutes is None:
+        return 1
+    return max(REGULAR_SESSION_MINUTES // cadence.interval_minutes, 1)
+
+
+def sessions_for_warmup(cadence: Cadence, warmup_bars: int) -> int:
+    """Trading sessions needed to supply ``warmup_bars`` bars at this cadence.
+
+    **This is the conversion whose absence would have been expensive.** A
+    strategy's ``warmup`` is counted in *bars*, and the daily path could treat
+    bars and sessions as the same unit because at a daily grain they are. At
+    five minutes a 200-bar warmup is under three sessions, but read as 200
+    sessions it spans a calendar year — and a year of 5-minute bars for fifty
+    names is roughly 24.6 million rows, fetched to compute a signal that needed
+    three days of them.
+
+    It would not have raised. It would have been slow, then slower as the
+    universe grew.
+    """
+
+    per_session = bars_per_session(cadence)
+    needed = max(warmup_bars, 1)
+    return -(-needed // per_session)  # ceil, without importing math for one call
+
+
+def alpaca_timeframe(cadence: Cadence) -> str:
+    """The Alpaca timeframe token for this cadence's bar grain.
+
+    Matches ``market_data.intraday_bars.timeframe``, which stores the same
+    token the client requested, so this is also the value to filter reads on.
+    """
+
+    if not cadence.is_intraday or cadence.interval_minutes is None:
+        return "1Day"
+    return f"{cadence.interval_minutes}Min"
+
+
 __all__ = [
     "CADENCES",
     "CADENCE_DAILY",
@@ -142,8 +192,12 @@ __all__ = [
     "DEFAULT_INTERVAL_MINUTES",
     "MAX_INTERVAL_MINUTES",
     "MIN_INTERVAL_MINUTES",
+    "REGULAR_SESSION_MINUTES",
     "SESSION_SLOT",
     "Cadence",
+    "alpaca_timeframe",
+    "bars_per_session",
     "read_cadence",
+    "sessions_for_warmup",
     "slot_for",
 ]

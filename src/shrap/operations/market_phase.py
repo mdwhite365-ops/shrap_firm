@@ -27,6 +27,7 @@ zoneinfo rather than by hand.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -38,6 +39,10 @@ DEFAULT_CALENDAR = "XNYS"
 DEFAULT_TIMEZONE = "America/New_York"
 DEFAULT_PRE_OPEN = time(4, 0)
 DEFAULT_EXTENDED_END = time(20, 0)
+
+# Which calendar day a UTC instant belongs to is an exchange-local question: a
+# bar at 00:30 UTC is the prior session's after-hours in New York.
+_EXCHANGE_TZ = ZoneInfo(DEFAULT_TIMEZONE)
 
 # NYSE never closes for more than a long weekend; two weeks of lookahead
 # always contains the next session.
@@ -180,3 +185,60 @@ def build_schedule(
 
     transitions.sort(key=lambda t: t.at)
     return PhaseSchedule(calendar=calendar_name, transitions=tuple(transitions))
+
+
+def regular_session_bounds(
+    start: date,
+    end: date,
+    *,
+    calendar_name: str = DEFAULT_CALENDAR,
+) -> dict[date, tuple[datetime, datetime]]:
+    """``{session_date: (open_utc, close_utc)}`` for each session in the window.
+
+    The regular session only — no pre-open, no after-hours. Exists so a consumer
+    of intraday bars can answer "was this bar inside regular trading hours?"
+    without reimplementing the calendar.
+
+    **Early closes are why this reads the calendar rather than taking 09:30-16:00
+    as given.** On a half-day the close is 13:00 ET, and Alpaca still returns
+    extended-session bars from 13:00 to 17:00. A fixed 16:00 cutoff would admit
+    three hours of post-market prints on roughly half a dozen days a year, and
+    would admit them silently — the bars are well-formed, they are simply not
+    from the session the strategy thinks it is trading.
+
+    Non-session days (weekends, holidays) are absent from the mapping rather
+    than present with an empty range, so ``bar_ts.date() not in bounds`` is a
+    complete test for "this bar is not from a trading session".
+    """
+
+    calendar = mcal.get_calendar(calendar_name)
+    frame = calendar.schedule(start_date=start.isoformat(), end_date=end.isoformat())
+    bounds: dict[date, tuple[datetime, datetime]] = {}
+    for stamp, row in frame.iterrows():
+        session = stamp.date()
+        bounds[session] = (
+            row["market_open"].to_pydatetime().astimezone(UTC),
+            row["market_close"].to_pydatetime().astimezone(UTC),
+        )
+    return bounds
+
+
+def is_regular_hours(moment: datetime, bounds: Mapping[date, tuple[datetime, datetime]]) -> bool:
+    """Whether ``moment`` falls inside its own session's regular hours.
+
+    Half-open: the opening bar counts, the closing boundary does not. A bar
+    stamped exactly at the close belongs to the after-hours side, matching how
+    :func:`build_schedule` transitions into ``after-hours`` at that instant.
+
+    Pure, so the calendar is read once per window and this is applied per bar.
+    """
+
+    if moment.tzinfo is None:
+        raise ValueError("bar timestamps must be timezone-aware to be placed in a session")
+    utc_moment = moment.astimezone(UTC)
+    session = utc_moment.astimezone(_EXCHANGE_TZ).date()
+    window = bounds.get(session)
+    if window is None:
+        return False
+    opened, closed = window
+    return opened <= utc_moment < closed

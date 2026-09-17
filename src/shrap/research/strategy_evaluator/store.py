@@ -20,9 +20,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
+from shrap.operations.market_phase import (
+    DEFAULT_CALENDAR,
+    DEFAULT_TIMEZONE,
+    is_regular_hours,
+    regular_session_bounds,
+)
 from shrap.research.ledger import EDGE_REASONS
 from shrap.research.strategy_evaluator.strategy import BarSample
 
@@ -170,6 +177,18 @@ SELECT session_date, open, high, low, close, volume
 FROM market_data.daily_bars
 WHERE ticker = $1 AND adjustment = $2 AND session_date BETWEEN $3 AND $4
 ORDER BY session_date
+""".strip()
+
+# Half-open on the upper bound, unlike the daily query's BETWEEN. A timestamp
+# range closed at both ends would include a bar stamped exactly at the boundary
+# instant, which belongs to the next window — the classic double-counted bar at
+# a chunk seam. Dates do not have this problem; timestamps do.
+SELECT_INTRADAY_BARS_SQL = """
+SELECT bar_ts, open, high, low, close, volume
+FROM market_data.intraday_bars
+WHERE ticker = $1 AND adjustment = $2 AND timeframe = $3
+  AND bar_ts >= $4 AND bar_ts < $5
+ORDER BY bar_ts
 """.strip()
 
 
@@ -348,6 +367,88 @@ class PostgresEvaluatorReader:
         ]
 
 
+class PostgresIntradayBarReader:
+    """Reads ``market_data.intraday_bars`` as a :class:`BarSample` panel.
+
+    Satisfies the same ``BarReader`` shape the Runner and Evaluator already
+    depend on, so nothing downstream learns that a panel is intraday. The bars
+    carry a ``datetime`` in ``BarSample.session_date`` rather than a ``date``;
+    ``datetime`` is a subclass of ``date`` and the panel only ever uses the field
+    as a sortable, hashable key, so ``PricePanel`` aligns a 5-minute grid exactly
+    as it aligns a daily one.
+
+    **Do not mix grains in one panel.** Comparing a ``date`` with a ``datetime``
+    raises ``TypeError``, so a panel built from both would fail on its first
+    sort rather than produce a wrong answer — loud, but only at the top of a
+    long backtest. One reader per panel.
+
+    **Regular hours are the default and extended hours are opt-in.** The
+    backfill stores what Alpaca returns, which spans 04:00-20:00 ET; a consumer
+    that forgets is trading four-in-the-morning IEX prints, where a handful of
+    shares sets a price no strategy could have traded at size. ``include_extended``
+    exists because the data is legitimately there for whoever wants it, but it
+    is never the default.
+    """
+
+    def __init__(
+        self,
+        pool: AsyncPool,
+        *,
+        timeframe: str,
+        include_extended: bool = False,
+        calendar_name: str = DEFAULT_CALENDAR,
+    ) -> None:
+        self._pool = pool
+        self._timeframe = timeframe
+        self._include_extended = include_extended
+        self._calendar_name = calendar_name
+        self._tz = ZoneInfo(DEFAULT_TIMEZONE)
+        # One-entry cache: the Runner reads every ticker over the same window, so
+        # the calendar is consulted once per pass rather than once per name.
+        self._bounds_window: tuple[date, date] | None = None
+        self._bounds: dict[date, tuple[datetime, datetime]] = {}
+
+    def _session_bounds(self, start: date, end: date) -> dict[date, tuple[datetime, datetime]]:
+        if self._bounds_window != (start, end):
+            self._bounds = regular_session_bounds(start, end, calendar_name=self._calendar_name)
+            self._bounds_window = (start, end)
+        return self._bounds
+
+    async def read_bars(
+        self, ticker: str, start: date, end: date, adjustment: str
+    ) -> list[BarSample]:
+        # Exchange-local midnight to midnight-after-``end``, so the window is a
+        # whole number of sessions however the caller's dates were derived.
+        begin_utc = datetime.combine(start, time(0, 0), tzinfo=self._tz)
+        finish_utc = datetime.combine(end + timedelta(days=1), time(0, 0), tzinfo=self._tz)
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                SELECT_INTRADAY_BARS_SQL,
+                ticker,
+                adjustment,
+                self._timeframe,
+                begin_utc,
+                finish_utc,
+            )
+        bounds = {} if self._include_extended else self._session_bounds(start, end)
+        samples: list[BarSample] = []
+        for row in rows:
+            bar_ts = row["bar_ts"]
+            if not self._include_extended and not is_regular_hours(bar_ts, bounds):
+                continue
+            samples.append(
+                BarSample(
+                    session_date=bar_ts,
+                    open=float(row["open"]),
+                    high=float(row["high"]),
+                    low=float(row["low"]),
+                    close=float(row["close"]),
+                    volume=float(row["volume"]),
+                )
+            )
+        return samples
+
+
 __all__ = [
     "ADD_EVALUATIONS_ACTIVE_METRICS_SQL",
     "ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL",
@@ -357,6 +458,7 @@ __all__ = [
     "INSERT_EVALUATION_SQL",
     "SELECT_DAILY_BARS_SQL",
     "SELECT_DRAW_COUNT_SQL",
+    "SELECT_INTRADAY_BARS_SQL",
     "SELECT_LATEST_ACTIVE_IR_SQL",
     "SELECT_LATEST_EVALUATION_AT_SQL",
     "SELECT_TICKER_TIER_SQL",
@@ -364,4 +466,5 @@ __all__ = [
     "AsyncPool",
     "PostgresEvaluationStore",
     "PostgresEvaluatorReader",
+    "PostgresIntradayBarReader",
 ]

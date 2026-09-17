@@ -89,7 +89,13 @@ from shrap.research.strategy_registry import (
     PostgresStrategyRegistry,
     StrategyRecord,
 )
-from shrap.research.strategy_runner.cadence import read_cadence, slot_for
+from shrap.research.strategy_runner.cadence import (
+    DAILY,
+    Cadence,
+    read_cadence,
+    sessions_for_warmup,
+    slot_for,
+)
 from shrap.research.strategy_runner.engine import (
     PRODUCED_BY,
     SCHEMA_VERSION,
@@ -218,10 +224,26 @@ def _parse_session_date(payload: dict[str, Any]) -> date:
     return date.fromisoformat(raw)  # ValueError on a malformed date -> poison, acked
 
 
-def _lookback_start(session_date: date, warmup: int, buffer_days: int, max_days: int) -> date:
-    """Trailing calendar window comfortably longer than ``warmup`` trading days."""
+def _lookback_start(
+    session_date: date,
+    warmup: int,
+    buffer_days: int,
+    max_days: int,
+    cadence: Cadence = DAILY,
+) -> date:
+    """Trailing calendar window comfortably longer than ``warmup`` bars.
 
-    span = min(max(warmup, 1) * 2 + buffer_days, max_days)
+    ``warmup`` is counted in **bars**, which at a daily grain is also sessions —
+    which is why this could treat the two as one unit for as long as every
+    strategy was daily. At five minutes they differ by 78x, and reading 200
+    sessions to supply a 200-bar warmup would pull roughly a calendar year of
+    intraday rows per ticker to compute a signal needing three days of them.
+    :func:`sessions_for_warmup` does the conversion; the doubling and buffer
+    below then cover holidays and thin names exactly as before.
+    """
+
+    sessions = sessions_for_warmup(cadence, warmup)
+    span = min(sessions * 2 + buffer_days, max_days)
     return session_date - timedelta(days=span)
 
 
@@ -256,7 +278,11 @@ async def _build_input(
         # A broken spec: the planner re-derives and skips it fail-safe. Read a
         # short window; the bars will be unused.
         warmup = 1
-    start = _lookback_start(session_date, warmup, buffer_days, max_days)
+    # The same spec the planner reads for its slot, read here for the window.
+    # A malformed cadence resolves to DAILY, so a typo reads a daily-sized
+    # window for a daily-behaving strategy rather than disagreeing with itself.
+    cadence = read_cadence(record.spec)
+    start = _lookback_start(session_date, warmup, buffer_days, max_days, cadence)
     bars_by_ticker: dict[str, list[BarSample]] = {}
     for ticker in tickers:
         bars_by_ticker[ticker] = await reader.read_bars(ticker, start, session_date, adjustment)
