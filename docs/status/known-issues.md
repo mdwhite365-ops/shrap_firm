@@ -1904,9 +1904,49 @@ section that says in words when a verdict is within noise. No gate changed.
 The honest successor to a threshold on a noisy statistic is a posterior, and the
 firm already has one — `risk_compliance/risk_officer/posterior.py`, shipped the
 same night (#218), sizes continuously in accumulated evidence and returns
-exactly the flat 0.25 paper fraction under zero evidence. The card that connects
-the backtest to it, instead of throwing the result at a threshold, is not
-written. **That is the ruling this issue needs.**
+exactly the flat 0.25 paper fraction under zero evidence.
+
+**Mike ruled on 2026-09-17: connect them.** Done in the same PR, because the
+connection is what makes the measurement actionable rather than merely honest:
+
+- `posterior_from_backtest()` turns a walk-forward IR into a belief. The
+  likelihood is the ratio with its own standard error; the prior is centred on
+  **no skill** (`SKEPTICAL_PRIOR_IR = 0.0`) rather than on the promote floor,
+  because "it cleared 0.50 to get here" is exactly the claim this issue
+  removed.
+- `selection_discounted_sd()` widens that standard error by
+  `sqrt(1 + ln(attempts))` — **the identical factor**
+  `verdict.required_information_ratio` uses to raise the bar. A posterior has
+  no bar to raise, so the same correction applies to the uncertainty instead,
+  which is the Bayesian statement of the same idea. A test pins the two
+  together so they cannot drift.
+- `update_posterior(..., prior=...)` chains live sessions onto the backtest
+  belief by conjugacy, so a strategy arrives at its first session already
+  believing what its backtest showed instead of resetting to a stage label.
+- The evaluation card gains a **What this is worth as a position** section.
+
+What it does to every strategy the firm has actually measured:
+
+    strategy                  backtest IR   posterior    size   today
+    momentum 126/21                +0.448      +0.293   0.147    0.25
+    momentum (paper account)       +0.306      +0.200   0.100    0.25
+    volume-shock 50                +0.236      +0.155   0.077    0.25
+    low-volatility 252             -0.495      -0.324   0.000    0.25
+    hypothesis-generator #1        -0.006      -0.005   0.000    0.25
+    (hypothetical IR 1.60)         +1.600      +1.311   0.500    0.25
+
+**Everything real sizes down.** That direction is structural rather than a
+choice of constants: any discounted backtest landing under the old `PRIOR_IR`
+of 0.5 sizes below the flat fraction, and every IR the firm has ever recorded
+is in that set. A genuinely strong result still earns the cap, so this
+reallocates toward evidence rather than cutting across the board.
+
+**Still open: the consumer.** `size_intent(posterior=...)` accepts this today
+and nothing passes it — the Risk Officer reads a stage, not an evaluation. Its
+`StrategyLookup` protocol exposes only `get(strategy_id)`, so wiring it needs a
+reader for the latest evaluation's posterior plus a decision about whether live
+sizing changes without a human in the loop. That is deliberately a separate
+card: it changes position sizes on a paper account that trades each morning.
 
 ### The shape, again
 

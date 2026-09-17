@@ -98,6 +98,22 @@ MAX_POSTERIOR_FRACTION = 0.50
 # fraction, i.e. exactly today's behaviour.
 MIN_SESSIONS = 2
 
+# The centre of the prior when a BACKTEST is the evidence: no skill.
+#
+# `PRIOR_IR` above centres on the promote floor, justified by "a strategy at
+# paper cleared an IR floor of 0.5 to get there". KI-036 measured that
+# justification away on 2026-09-17: the standard error of an annualised IR on
+# this firm's panel is ~0.47, so clearing a 0.50 floor with a reading of 0.55 --
+# or missing it with 0.448 -- are the same event as far as the data can tell.
+# Believing the floor because a gate was passed is believing a coin flip.
+#
+# Zero is the honest belief about a trading rule before its evidence is read,
+# and it is the belief the backtest then updates. The two constants coexist
+# because they answer different questions: `PRIOR_IR` is what the firm believes
+# about a strategy it has only a STAGE for, and this is what it believes about
+# one it has a MEASUREMENT for.
+SKEPTICAL_PRIOR_IR = 0.0
+
 
 @dataclass(frozen=True, slots=True)
 class SkillPosterior:
@@ -112,6 +128,21 @@ class SkillPosterior:
     n_sessions: int
     observed_ir: float | None
     """The live reading before the prior was applied. ``None`` when unmeasurable."""
+
+    backtest_ir: float | None = None
+    """The backtested information ratio this belief started from, if any.
+
+    Kept alongside ``observed_ir`` rather than folded into it because they are
+    different kinds of evidence and the difference matters when reading a
+    number back: a backtest is one measurement of the past made once, a live
+    series is the strategy being wrong in public. Only the backtest carries a
+    selection-bias discount (see :func:`posterior_from_backtest`)."""
+
+    backtest_sd: float | None = None
+    """The standard error the backtest was blended at, AFTER that discount.
+
+    Recorded because it is the number that decides how much the backtest moved
+    the belief, and it is not recoverable from the others."""
 
     @property
     def fraction(self) -> float:
@@ -131,9 +162,16 @@ class SkillPosterior:
 
     @property
     def is_evidence_based(self) -> bool:
-        """Whether any live session informed this, as opposed to the prior alone."""
+        """Whether any measurement informed this, as opposed to a prior alone.
 
-        return self.n_sessions >= MIN_SESSIONS and self.observed_ir is not None
+        A backtest counts. It is weaker evidence than live sessions and is
+        discounted for selection bias before it is used, but a belief built
+        from one is not the same as a belief built from a stage label — which
+        is the whole point of connecting the two.
+        """
+
+        live = self.n_sessions >= MIN_SESSIONS and self.observed_ir is not None
+        return live or self.backtest_ir is not None
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -141,6 +179,8 @@ class SkillPosterior:
             "sd_ir": self.sd_ir,
             "n_sessions": self.n_sessions,
             "observed_ir": self.observed_ir,
+            "backtest_ir": self.backtest_ir,
+            "backtest_sd": self.backtest_sd,
             "fraction": self.fraction,
             "evidence_based": self.is_evidence_based,
         }
@@ -161,9 +201,93 @@ def prior_posterior(
     )
 
 
+def selection_discounted_sd(standard_error: float, attempts: int) -> float:
+    """Widen a backtest's standard error for the search that produced it.
+
+    A strategy's backtest IR is not a random draw: it is the best of ``attempts``
+    tried within its lineage, so it is biased upward by the search itself. The
+    Evaluator already prices this by raising the bar it must clear --
+    :func:`shrap.research.strategy_evaluator.verdict.required_information_ratio`
+    uses ``floor * sqrt(1 + ln(attempts))``.
+
+    A posterior has no bar to raise, so the same factor is applied to the
+    *uncertainty* instead. That is the Bayesian statement of the same idea: a
+    number found by searching is known less well than one found by looking once,
+    and shrinking it toward the prior is what "known less well" means. The two
+    corrections agree by construction and cannot drift apart -- a test pins them
+    to the identical factor.
+
+    ``attempts <= 1`` is no search and no discount.
+    """
+
+    if standard_error <= 0.0:
+        raise ValueError("standard_error must be positive to weight a likelihood")
+    if attempts <= 1:
+        return standard_error
+    return standard_error * math.sqrt(1.0 + math.log(attempts))
+
+
+def posterior_from_backtest(
+    *,
+    information_ratio: float,
+    standard_error: float,
+    attempts: int = 1,
+    prior_ir: float = SKEPTICAL_PRIOR_IR,
+    prior_ir_sd: float = PRIOR_IR_SD,
+) -> SkillPosterior:
+    """Turn a walk-forward result into a belief, instead of a pass or a fail.
+
+    This is the join KI-036 argued for. The Evaluator's verdict compares the
+    backtest IR against a floor and throws the number away; on a six-year panel
+    that comparison is worth ~0.11 standard errors and decides nothing. The same
+    number, carrying its own error bar, is a perfectly good likelihood.
+
+    ``standard_error`` is :func:`shrap.research.ir_precision.ir_standard_error`
+    -- passed in rather than imported so this module keeps no dependency on the
+    research package, which is what lets it live in the Pre-Trade Checker's
+    import path.
+
+    **What it does to size, on the firm's real numbers.** Momentum 126/21 scored
+    IR 0.448 with an SE of 0.47 over four lineage attempts:
+
+        discounted SD  0.47 * sqrt(1 + ln 4)      = 0.726
+        posterior mean (0.448 / 0.726^2) / (1 + 1 / 0.726^2) = 0.293
+        fraction       0.293 * 0.50               = 0.147
+
+    versus the flat 0.25 it would get today. **Sizes go down**, because a
+    strategy that measured 0.448 against a skeptical prior is believed less than
+    one assumed to sit at the floor. That direction is not an accident of the
+    constants: any strategy whose discounted backtest lands under the old
+    ``PRIOR_IR`` of 0.5 sizes below the flat fraction, and every strategy the
+    firm has ever evaluated is in that set.
+
+    A strategy that genuinely measured well still earns more -- a discounted
+    posterior mean of 0.9 sizes at 0.45 -- so this is a reallocation toward
+    evidence, not a blanket cut.
+    """
+
+    effective_sd = selection_discounted_sd(standard_error, attempts)
+    prior_precision = 1.0 / (prior_ir_sd**2)
+    likelihood_precision = 1.0 / (effective_sd**2)
+    posterior_precision = prior_precision + likelihood_precision
+    posterior_mean = (
+        prior_ir * prior_precision + information_ratio * likelihood_precision
+    ) / posterior_precision
+
+    return SkillPosterior(
+        mean_ir=posterior_mean,
+        sd_ir=math.sqrt(1.0 / posterior_precision),
+        n_sessions=0,
+        observed_ir=None,
+        backtest_ir=information_ratio,
+        backtest_sd=effective_sd,
+    )
+
+
 def update_posterior(
     excess_series: Sequence[float],
     *,
+    prior: SkillPosterior | None = None,
     prior_ir: float = PRIOR_IR,
     prior_ir_sd: float = PRIOR_IR_SD,
 ) -> SkillPosterior:
@@ -175,13 +299,30 @@ def update_posterior(
     series the promote gate's own information ratio is computed from is the point:
     the forward measurement and the sizing decision cannot drift apart.
 
+    ``prior`` chains this onto an existing belief — normally the one
+    :func:`posterior_from_backtest` built. Conjugacy is what makes that sound:
+    the posterior of the backtest IS the prior for live trading, so a strategy
+    arrives at its first session already believing what its backtest showed, and
+    each session moves it from there. Passing ``None`` keeps the standalone
+    behaviour, where the prior is the promote floor.
+
     A series that cannot produce a ratio — fewer than two sessions, or zero
     dispersion — returns the prior rather than raising. Absence of evidence is
     not evidence, and it must not be able to size a position up.
     """
 
-    if len(excess_series) < MIN_SESSIONS:
+    if prior is not None:
+        prior_ir, prior_ir_sd = prior.mean_ir, prior.sd_ir
+
+    def _unchanged() -> SkillPosterior:
+        """The belief we came in with, live evidence having added nothing."""
+
+        if prior is not None:
+            return prior
         return prior_posterior(prior_ir=prior_ir, prior_ir_sd=prior_ir_sd)
+
+    if len(excess_series) < MIN_SESSIONS:
+        return _unchanged()
 
     n = len(excess_series)
     mean = sum(excess_series) / n
@@ -189,7 +330,7 @@ def update_posterior(
     if variance <= 0.0:
         # A flat series has no dispersion, so no ratio and no information about
         # skill — however many sessions of it there are.
-        return prior_posterior(prior_ir=prior_ir, prior_ir_sd=prior_ir_sd)
+        return _unchanged()
 
     observed_ir = mean / math.sqrt(variance) * math.sqrt(TRADING_DAYS_PER_YEAR)
 
@@ -207,6 +348,8 @@ def update_posterior(
         sd_ir=math.sqrt(1.0 / posterior_precision),
         n_sessions=n,
         observed_ir=observed_ir,
+        backtest_ir=None if prior is None else prior.backtest_ir,
+        backtest_sd=None if prior is None else prior.backtest_sd,
     )
 
 
@@ -216,8 +359,11 @@ __all__ = [
     "MIN_SESSIONS",
     "PRIOR_IR",
     "PRIOR_IR_SD",
+    "SKEPTICAL_PRIOR_IR",
     "TRADING_DAYS_PER_YEAR",
     "SkillPosterior",
+    "posterior_from_backtest",
     "prior_posterior",
+    "selection_discounted_sd",
     "update_posterior",
 ]

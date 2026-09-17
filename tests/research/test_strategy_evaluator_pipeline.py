@@ -1194,3 +1194,110 @@ def test_the_card_omits_the_precision_section_when_nothing_measured_it() -> None
     assert "### How precise is that number" not in render_evaluation_card(
         _outcome_with({"information_ratio": 0.42})
     )
+
+
+def test_the_card_says_what_the_backtest_is_worth_as_a_position() -> None:
+    """The verdict is noise; the size is not.
+
+    KI-036's conclusion in one card section. A reader who cannot trust "cleared
+    the floor" can still act on "this measurement supports 0.147 of the book".
+    """
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+
+    card = render_evaluation_card(
+        _outcome_with(
+            {
+                "information_ratio": 0.448,
+                "posterior": {
+                    "mean_ir": 0.293,
+                    "backtest_ir": 0.448,
+                    "backtest_sd": 0.726,
+                    "fraction": 0.147,
+                },
+            }
+        )
+    )
+
+    assert "### What this is worth as a position" in card
+    assert "Size fraction: 0.147" in card
+    assert "below the flat 0.25" in card
+
+
+def test_the_card_omits_the_position_section_when_no_posterior_was_built() -> None:
+    """A refusal has no measurement, so it must not imply a size."""
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+
+    assert "### What this is worth as a position" not in render_evaluation_card(
+        _outcome_with({"information_ratio": 0.42})
+    )
+
+
+def test_every_real_evaluation_carries_a_posterior() -> None:
+    """The join itself: a walk-forward result now produces a belief.
+
+    Before this, `active_metrics` held a ratio the verdict threw at a floor and
+    discarded. The posterior is computed from that same ratio, its standard
+    error, and the lineage's attempt count — so the sizing path can read the
+    measurement instead of the stage label.
+    """
+
+    from shrap.research.strategy_evaluator.engine import EvalConfig, walk_forward
+    from shrap.research.strategy_evaluator.pipeline import _with_posterior
+    from shrap.research.strategy_evaluator.strategy import BarSample, PricePanel
+
+    bars = [
+        BarSample(
+            session_date=date(2020, 1, 1) + timedelta(days=i),
+            open=100.0 + i * 0.5,
+            high=100.0 + i * 0.5,
+            low=100.0 + i * 0.5,
+            close=100.0 + i * 0.5,
+            volume=1.0e9,
+        )
+        for i in range(120)
+    ]
+
+    class AlwaysLong:
+        name = "always-long"
+        warmup = 2
+
+        def target_weights(self, window: object) -> dict[str, float]:
+            return {"AAA": 1.0}
+
+    result = walk_forward(PricePanel.from_bars({"AAA": bars}), AlwaysLong(), EvalConfig())
+    payload = _with_posterior(result.active, attempts=4)
+
+    assert "posterior" in payload
+    assert payload["posterior"]["backtest_ir"] == result.active.information_ratio
+    assert 0.0 <= float(payload["posterior"]["fraction"]) <= 0.50
+
+
+def test_searching_harder_lowers_the_size_the_same_backtest_supports() -> None:
+    """The multiple-testing correction reaching the sizing path.
+
+    Two lineages measure the identical ratio; the one that tried fourteen
+    hypotheses to find it is believed less, and therefore sized smaller. The
+    gate already priced this by raising the bar — now the size does too.
+    """
+
+    from shrap.research.ir_precision import PrecisionResult
+    from shrap.research.strategy_evaluator.engine import ActiveMetrics
+    from shrap.research.strategy_evaluator.pipeline import _with_posterior
+
+    active = ActiveMetrics(
+        information_ratio=0.448,
+        active_total_return=0.1,
+        benchmark_sharpe=0.9,
+        benchmark_total_return=0.5,
+        n_periods=1285,
+        precision=PrecisionResult.from_active_returns(
+            [0.001, -0.001] * 642, information_ratio=0.448, floor=0.50
+        ),
+    )
+
+    lucky = _with_posterior(active, attempts=1)["posterior"]["fraction"]
+    searched = _with_posterior(active, attempts=14)["posterior"]["fraction"]
+
+    assert float(searched) < float(lucky)

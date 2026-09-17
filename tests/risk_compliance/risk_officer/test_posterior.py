@@ -26,9 +26,12 @@ from shrap.risk_compliance.risk_officer.posterior import (
     FULL_SIZE_IR,
     MAX_POSTERIOR_FRACTION,
     PRIOR_IR,
+    SKEPTICAL_PRIOR_IR,
     TRADING_DAYS_PER_YEAR,
     SkillPosterior,
+    posterior_from_backtest,
     prior_posterior,
+    selection_discounted_sd,
     update_posterior,
 )
 from shrap.risk_compliance.risk_officer.sizing import size_intent
@@ -256,3 +259,178 @@ def test_regime_still_scales_on_top_of_the_posterior() -> None:
 
     assert full.approved_quantity == 100.0 * MAX_POSTERIOR_FRACTION
     assert wartime.approved_quantity == full.approved_quantity * 0.25
+
+
+# --- the backtest as evidence (2026-09-17, KI-036) ----------------------------
+
+
+def test_the_selection_discount_matches_the_gate_it_mirrors() -> None:
+    """One multiple-testing factor, two places it is applied.
+
+    The verdict raises the bar by `sqrt(1 + ln attempts)`; the posterior widens
+    the error bar by the same factor. They are the same correction stated two
+    ways, and if they ever drift apart the firm is pricing search twice with
+    different numbers.
+    """
+
+    from shrap.research.strategy_evaluator.verdict import required_information_ratio
+
+    for attempts in (1, 2, 4, 14, 50):
+        gate_factor = required_information_ratio(1.0, attempts)
+        assert selection_discounted_sd(1.0, attempts) == pytest.approx(gate_factor)
+
+
+def test_a_single_attempt_is_not_discounted() -> None:
+    """No search, no selection bias, nothing to widen."""
+
+    assert selection_discounted_sd(0.47, 1) == 0.47
+    assert selection_discounted_sd(0.47, 0) == 0.47
+
+
+def test_searching_harder_makes_the_result_count_for_less() -> None:
+    """The monotonicity the whole correction rests on."""
+
+    assert selection_discounted_sd(0.47, 14) > selection_discounted_sd(0.47, 4) > 0.47
+
+
+def test_a_non_positive_standard_error_is_refused() -> None:
+    """Zero SE would be infinite precision — a backtest that knew everything.
+
+    It would swamp the prior and any amount of live evidence, so it must not be
+    reachable by accident.
+    """
+
+    with pytest.raises(ValueError, match="standard_error must be positive"):
+        selection_discounted_sd(0.0, 4)
+
+
+def test_the_firms_best_strategy_sizes_below_the_flat_fraction() -> None:
+    """Momentum 126/21: IR 0.448, SE 0.47, four lineage attempts.
+
+    The number that makes this a real governance change rather than a
+    refactor. Today it would size at the flat 0.25 because a human moved it to
+    `paper`; on its own measurement it sizes at 0.147.
+    """
+
+    posterior = posterior_from_backtest(information_ratio=0.448, standard_error=0.47, attempts=4)
+
+    assert posterior.mean_ir == pytest.approx(0.293, abs=0.005)
+    assert posterior.fraction == pytest.approx(0.147, abs=0.005)
+    assert posterior.fraction < prior_posterior().fraction
+
+
+def test_every_strategy_the_firm_has_evaluated_sizes_down() -> None:
+    """The docstring claims the direction is structural, not a coincidence.
+
+    Any discounted backtest landing under the old PRIOR_IR of 0.5 sizes below
+    the flat fraction, and the firm's whole history of measured IRs is in that
+    set. If a future strategy escapes it, that is earned rather than a bug —
+    hence the positive control below.
+    """
+
+    for measured in (-0.495, -0.092, 0.236, 0.306, 0.415, 0.448, 0.456):
+        posterior = posterior_from_backtest(
+            information_ratio=measured, standard_error=0.47, attempts=4
+        )
+        assert posterior.fraction < 0.25, measured
+
+
+def test_a_genuinely_strong_backtest_earns_more_than_the_flat_fraction() -> None:
+    """Not a blanket cut — a reallocation toward evidence."""
+
+    posterior = posterior_from_backtest(information_ratio=1.6, standard_error=0.30, attempts=1)
+
+    assert posterior.fraction > 0.25
+
+
+def test_a_losing_backtest_gets_no_position_at_all() -> None:
+    """ "Kill more aggressively than you promote", stated continuously."""
+
+    assert (
+        posterior_from_backtest(information_ratio=-1.5, standard_error=0.40, attempts=1).fraction
+        == 0.0
+    )
+
+
+def test_the_backtest_prior_is_centred_on_no_skill_not_on_the_floor() -> None:
+    """A backtest of exactly zero must leave the belief at zero.
+
+    Centring on the promote floor would have a strategy that measured *no
+    edge at all* still sized as though it sat at 0.5, which is the assumption
+    KI-036 removed.
+    """
+
+    assert posterior_from_backtest(
+        information_ratio=0.0, standard_error=0.47
+    ).mean_ir == pytest.approx(0.0)
+    assert SKEPTICAL_PRIOR_IR == 0.0
+
+
+def test_a_backtest_belief_counts_as_evidence_based() -> None:
+    """It has no live sessions, but it is not the prior alone either."""
+
+    posterior = posterior_from_backtest(information_ratio=0.448, standard_error=0.47)
+
+    assert posterior.n_sessions == 0
+    assert posterior.observed_ir is None
+    assert posterior.is_evidence_based
+    assert posterior.to_payload()["backtest_ir"] == 0.448
+
+
+# --- chaining live evidence onto the backtest ---------------------------------
+
+
+def test_live_sessions_update_the_backtest_belief_rather_than_replacing_it() -> None:
+    """Conjugacy: the backtest's posterior IS the prior for live trading."""
+
+    backtest = posterior_from_backtest(information_ratio=0.448, standard_error=0.47, attempts=4)
+    chained = update_posterior(_series_with_ir(1.5, 200), prior=backtest)
+
+    assert chained.n_sessions == 200
+    assert chained.mean_ir > backtest.mean_ir
+    # Held between the two readings, not snapped to either.
+    assert backtest.mean_ir < chained.mean_ir < chained.observed_ir
+    # Provenance survives the update.
+    assert chained.backtest_ir == 0.448
+
+
+def test_a_strategy_arrives_at_its_first_session_believing_its_backtest() -> None:
+    """The property that makes this a connection rather than two mechanisms.
+
+    One session cannot produce a ratio, so the belief must be the backtest's —
+    unchanged, and specifically NOT reset to the promote floor.
+    """
+
+    backtest = posterior_from_backtest(information_ratio=0.448, standard_error=0.47, attempts=4)
+
+    assert update_posterior([0.001], prior=backtest) == backtest
+
+
+def test_a_flat_live_series_cannot_wash_out_the_backtest() -> None:
+    """Zero dispersion is no information, however many sessions of it there are.
+
+    Returning the floor-centred prior here would let a strategy that stopped
+    trading drift its size UP toward 0.25.
+    """
+
+    backtest = posterior_from_backtest(information_ratio=0.1, standard_error=0.47)
+
+    assert update_posterior([0.002] * 300, prior=backtest) == backtest
+
+
+def test_live_evidence_eventually_outweighs_the_backtest() -> None:
+    """Enough sessions and the backtest stops mattering — as it should."""
+
+    backtest = posterior_from_backtest(information_ratio=0.448, standard_error=0.47, attempts=4)
+    long_run = update_posterior(_series_with_ir(-0.8, 3000), prior=backtest)
+
+    assert long_run.mean_ir < 0.0
+    assert long_run.fraction == 0.0
+
+
+def test_omitting_the_prior_keeps_the_previous_behaviour_exactly() -> None:
+    """The legacy path is untouched, including the flat-0.25 property."""
+
+    assert prior_posterior().fraction == 0.25
+    series = _series_with_ir(0.9, 100)
+    assert update_posterior(series) == update_posterior(series, prior=None)
