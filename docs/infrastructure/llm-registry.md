@@ -188,6 +188,24 @@ Append-only. Newest at the bottom.
 | 2026-07-16 | `local-classification` | `qwen2.5:9b-instruct-q4_K_M` | `qwen3.5:9b-q4_K_M` | N/A — seed correction, not a swap: the v0.1 tag never existed (Qwen 2.5 has no 9B; discovered on first `ollama pull`). No incumbent ever ran, so there is nothing to shadow-eval against. `qwen3.5:9b-q4_K_M` is 6.6 GB, fits the Dell's 8 GB GTX 1080; requires Ollama >= 0.31.x (compose pin bumped 0.3.12 → 0.31.2 in the same PR). | Mike White | PR (this) |
 | 2026-07-31 | `local-classification` — **Tech Watcher filter binding only** (`SHRAP_FILTER_MODEL`) | `gpt-oss:20b-cloud` (*Low Usage*) | `qwen3.5:397b` (*Medium Usage*) | **The first real shadow-eval, and the first entry in `calibration.md` §(e).** Five models, 20 items, 2 repeats, prompt v4: `gpt-oss:20b-cloud`, `qwen3.5:397b`, `deepseek-v4-pro:cloud`, `glm-5.2`, `kimi-k2.6`. All five scored 100% schema, 100% self-consistency, 90% incumbent agreement, 0% says-relevant, **100% pairwise agreement and zero disagreements** — indistinguishable on judgement, so the call reduces to latency and tier. `qwen3.5:397b` is the lowest tier among the fast models (p95 2539ms vs the incumbent's 12769ms). Cost gate cleared on measurement: the box spent 3,320 requests that week for 1.2% of the Pro weekly allowance. Two candidates were unreachable and the errors said why, not the tags — `kimi-k2.5` retired (410), `kimi-k3` outside included usage (402). **`SHRAP_INTEL_BULK_MODEL` deliberately unchanged**: same tier alias, unevaluated task. | Mike White | PR (this) |
 | 2026-07-27 | *deployment routing only* (Tech Watcher) | `qwen3.5:9b-q4_K_M` on both tiers | `gpt-oss:20b-cloud` (filter) / `kimi-k3:cloud` (synthesis), both via the Ollama daemon's cloud proxy | **Failure evidence, not a shadow-eval.** The incumbent could not perform the task: it rejected a DOE announcement of a *fourth* reactor criticality as "a single milestone" lacking "independent replication," and named `physical-realization`'s example vocabulary (fusion ignition) for a fission item. Filter prompt v4 addressed every prompt-side cause and moved nothing — 16 items re-scored, 0 verdict changes. Consequence was structural: 8 of 8 clusters ever logged were arXiv-only, so triangulation (≥2 origins + ≥1 hard leg) could never fire and the funnel could not promote anything. See DQ-006, KI-009. | Mike White | PR (this) |
+| 2026-09-17 | `local-classification` — **Tech Watcher filter binding only** (`SHRAP_FILTER_MODEL`) | `qwen3.5:397b` | `kimi-k3` | **Forced by a retirement, not chosen for an improvement.** Ollama announced `qwen3.5:397b` retires 2026-09-25; it carried 1,361 requests in the preceding week, so this is a live dependency with eight days on it (KI-038). Four models, 20 items, 2 repeats, prompt v4 (`calibration.md` §(e) Run 2). `kimi-k3` and `deepseek-v4-pro:0813` both scored **100% schema, 0 errors**; `glm-5.3` scored **0%** (37 of 40 in prose) and is rejected. `kimi-k3` is the drop-in: **100% self-consistency and 100% pairwise agreement with the incumbent**. `deepseek-v4-pro:0813` is 2.5x faster (p50 766ms vs 1557ms) but self-disagreed once (95%), and this file's own rule is that a model which disagrees with itself cannot hold a gate — at ~8 filter calls an hour, latency is not the binding constraint it was on 2026-07-31. **`kimi-k3` was unreachable at the last eval (402, outside included usage) and now runs clean**, so the account's coverage changed, measured rather than assumed. **`SHRAP_INTEL_BULK_MODEL` deliberately unchanged** — same tier alias, different task, and it does not bind the retiring tag. | **PROPOSED — awaiting Mike's verdict in §(e)** | PR (this) |
+
+> **Update 2026-09-17 — the filter binding is proposed to move to `kimi-k3`,
+> because the incumbent is being retired.**
+>
+> This is the first binding change in this file forced by a vendor date rather
+> than by a measurement. `qwen3.5:397b` retires **2026-09-25**. The shadow eval
+> (`calibration.md` §(e) Run 2) found two clean replacements and one failure,
+> and it also found something worth more than the swap: **the incumbent no
+> longer reproduces its own historical verdicts.** Ten of the twenty sampled
+> items are ones it previously scored relevant, and it called none of them
+> relevant on this run. Whatever the corpus's 189 positives were scored under,
+> prompt v4 does not reproduce them — so "agreement with incumbent" is close to
+> uninformative here, and the promotion rests on schema adherence and
+> self-consistency instead.
+>
+> The env var means this is reversible without a deploy: set `SHRAP_FILTER_MODEL`
+> to any tag on the account and restart the Tech Watcher.
 
 ## Hard Rules
 
