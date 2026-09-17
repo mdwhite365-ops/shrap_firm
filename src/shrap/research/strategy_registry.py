@@ -270,6 +270,33 @@ FROM research.strategies
 WHERE strategy_id = $1
 """.strip()
 
+SELECT_STRATEGY_COLUMNS_SQL = """
+SELECT column_name
+FROM information_schema.columns
+WHERE table_schema = 'research' AND table_name = 'strategies'
+""".strip()
+
+
+class RegistrySchemaError(RuntimeError):
+    """The strategies table lacks a column this build's queries select."""
+
+
+def _selected_columns(sql: str) -> set[str]:
+    """The bare column names in a ``SELECT ... FROM`` list.
+
+    Deliberately small and deliberately not a SQL parser: it reads the one
+    statement shape this module writes — a comma-separated list of plain column
+    names between SELECT and FROM, no aliases, no expressions, no functions. A
+    query that stops matching that shape returns names this cannot check, which
+    is why :meth:`PostgresStrategyRegistry.missing_columns` is tested against the
+    real statement rather than a fixture.
+    """
+
+    body = sql.split("FROM", 1)[0]
+    body = body.replace("SELECT", " ", 1)
+    return {token.strip() for token in body.split(",") if token.strip()}
+
+
 SELECT_STRATEGIES_BY_STATUS_SQL = """
 SELECT
     strategy_id, name, version, archetype, status, source, thesis,
@@ -513,6 +540,58 @@ class PostgresStrategyRegistry:
 
     def __init__(self, pool: AsyncPool) -> None:
         self._pool = pool
+
+    async def verify_schema(self) -> None:
+        """Fail loudly if the table lacks a column this registry's reads select.
+
+        **For readers, which must not migrate a table they do not own.** The
+        Strategy Runner reads ``research.strategies`` every pass and owns none of
+        it; the Librarian owns it and migrates it. That split is deliberate and
+        it has one sharp edge: a reader deployed with new code against a database
+        the owner has not migrated yet issues a SELECT naming a column that does
+        not exist.
+
+        That is not hypothetical. #215 added ``regime_fit``/``regime_kill`` to
+        every SELECT here, and the migration only runs inside
+        :meth:`ensure_schema`, which the Runner never calls. It kept trading only
+        because its container was still running pre-#215 code — the next rebuild
+        would have had it fail to load any strategy, once per pass, while the
+        pass logs the error and continues. A firm that has silently stopped
+        trading looks exactly like a firm with no signals.
+
+        So this asks the database what it has, compares against what the queries
+        name, and raises with the command that fixes it. A reader that cannot
+        read should refuse to start, not discover it one pass at a time.
+        """
+
+        missing = await self.missing_columns()
+        if not missing:
+            return
+        raise RegistrySchemaError(
+            "research.strategies is missing column(s) "
+            f"{', '.join(sorted(missing))} that this build's queries select. "
+            "The owning migration has not run against this database. Apply it with:\n"
+            "    docker compose --profile tools run --rm strategy-evaluator \\\n"
+            "        shrap-strategy-stage show <any-strategy-id>\n"
+            "which calls the registry's ensure_schema() before it does anything else."
+        )
+
+    async def missing_columns(self) -> set[str]:
+        """Columns the SELECTs name that ``research.strategies`` does not have.
+
+        Derived from :data:`SELECT_STRATEGIES_BY_STATUS_SQL` rather than from a
+        hand-kept list, so adding a column to the query cannot forget to add it
+        here — the drift this whole method exists to catch.
+        """
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_STRATEGY_COLUMNS_SQL)
+        present = {str(row["column_name"]) for row in rows}
+        if not present:
+            # No table at all is a different fault with a different fix, and
+            # naming every column as "missing" would bury it.
+            return set()
+        return _selected_columns(SELECT_STRATEGIES_BY_STATUS_SQL) - present
 
     async def ensure_schema(self) -> None:
         async with self._pool.acquire() as conn:
