@@ -1726,9 +1726,31 @@ typically filed in May; computing an April market cap from it uses information
 nobody had, inflates a backtest, and produces a strategy that does not work — a
 failure that passes every test. Reads select on `filed_at`, never `as_of`.
 
-Remaining: the factor itself (rank by trailing vol, weight by cap) is a separate
-card, and the two news-text gaps look closable against data the firm already
-ingests.
+**The paper's core claim was then tested directly (#226) and it replicates** on
+the firm's fifty names over 74 month-ends:
+
+| ranking | mean Spearman rho | positive |
+|---|---|---|
+| **trailing 21d volatility** | **+0.880** (sd 0.051) | **100%** of 73 months |
+| trailing 21d return | +0.019 (sd 0.286) | 55% |
+
+Exactly what arXiv 2607.27461 claims: volatility rank is forecastable one step
+ahead, return rank is not. Worth holding two caveats alongside it. The volatility
+half is **not news** — volatility clustering is a stylised fact since Mandelbrot
+1963 — and forecastable is not profitable: the paper's edge lives in its
+portfolio construction, not in the persistence.
+
+**The return half is the finding that pays.** 21-day return rank carries no
+forecastable information on this universe, which independently corroborates the
+Evaluator killing cross-sectional momentum at IR 0.415 and 0.392. Two unrelated
+measurements, one conclusion, and the second explains the first.
+
+Remaining on this thread: the paper's method is three matrices (return
+correlation distance, plus Markov transition matrices over both ranks) feeding a
+market-neutral long-short and an opportunistic long-only sleeve. That is a
+multi-card build, not a factor, and market cap is needed at the *portfolio*
+stage rather than the forecasting one. The two news-text gaps look closable
+against data the firm already ingests.
 
 ### Why this matters more than any measurement card
 
