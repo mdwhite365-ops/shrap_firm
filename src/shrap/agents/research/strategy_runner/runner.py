@@ -784,6 +784,11 @@ async def run(
     reader = PostgresEvaluatorReader(pool)
     state_store = PostgresStrategyRunnerStateStore(pool)
     await state_store.ensure_schema()
+    # The Runner owns its state table and migrates it (above). It owns nothing in
+    # research.strategies and must not migrate that one — so it checks instead,
+    # and refuses to start rather than failing once per pass. See
+    # PostgresStrategyRegistry.verify_schema for why this exists.
+    await registry.verify_schema()
     try:
         await run_loop(
             cast(RedisStreamClient, redis),

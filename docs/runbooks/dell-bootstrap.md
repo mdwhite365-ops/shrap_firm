@@ -95,11 +95,46 @@ For a smaller local smoke subset during development, this is enough to test the 
 
     docker compose up -d redis postgres prometheus health-monitor audit-logger
 
+### 2.4a Apply schema migrations after pulling new code
+
+**Run this on every redeploy that includes a schema change, before rebuilding the
+always-on services.**
+
+    sudo docker compose --profile tools run --rm strategy-evaluator \
+        shrap-strategy-stage show <any-strategy-id>
+
+`shrap-strategy-stage` calls the strategy registry's `ensure_schema()` before it
+does anything else, so any action — `show` is the read-only one — applies
+outstanding `ALTER TABLE`s to `research.strategies`.
+
+**Why this step exists, stated plainly: until 2026-09-17 there was no step.**
+Migrations ran whenever some service carrying new code happened to start first,
+which is not a mechanism, it is a coincidence that had been holding. It stopped
+holding when #215 added `regime_fit`/`regime_kill` to every SELECT on
+`research.strategies` while the migration lived only in `ensure_schema()`. The
+services that *call* `ensure_schema` — the Librarian, the Evaluator trigger — were
+still running old images and so never ran it; the freshly rebuilt evaluator had
+new code and died on:
+
+    asyncpg.exceptions.UndefinedColumnError: column "regime_fit" does not exist
+
+The Strategy Runner reads the same table and owns none of it, so it does not
+migrate it. It kept trading purely because its image was old. Since #221 it calls
+`registry.verify_schema()` at startup and **refuses to start** against an
+unmigrated database rather than failing one pass at a time — but refusing to
+start is still an outage, and this step is what prevents it.
+
+Ordering: migrate first, then rebuild and restart the services that read the
+table.
+
 ### 2.5 Wait for health
 
     docker compose ps
 
 Every service should show `healthy` (or `running` for the few without health checks - node-exporter, cadvisor, ollama). If any service is `unhealthy` or restarting, check `docker compose logs <service>` and fix before continuing.
+
+A service that exits immediately with `research.strategies is missing column(s)`
+has hit the guard above: run 2.4a, then bring it up again.
 
 ---
 
