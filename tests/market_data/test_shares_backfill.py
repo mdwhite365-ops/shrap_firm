@@ -185,3 +185,100 @@ async def test_a_failed_ticker_map_raises_rather_than_backfilling_nothing() -> N
             user_agent=DEFAULT_USER_AGENT,
             delay_seconds=0,
         )
+
+
+# --- the concept chain, added after the first live run ------------------------
+
+CONCEPT_PAYLOAD_USGAAP = {
+    "units": {
+        "shares": [
+            {"end": "2026-06-30", "val": 12_230_000_000, "filed": "2026-07-23", "form": "10-Q"},
+        ]
+    }
+}
+
+
+class MultiClassHTTP(FakeHTTP):
+    """A registrant that tags shares per class, like GOOGL and META.
+
+    Their `dei` cover-page count does not exist as an undimensioned fact —
+    GOOGL's entire `dei` fact set is `EntityPublicFloat` — so the endpoint 404s
+    and the aggregate lives under `us-gaap` instead.
+    """
+
+    async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+        self.requests.append(url)
+        if url.endswith("company_tickers.json"):
+            return FakeResponse(COMPANY_TICKERS)
+        if "/dei/" in url:
+            return FakeResponse({}, status_code=404)
+        return FakeResponse(CONCEPT_PAYLOAD_USGAAP)
+
+
+async def test_a_multiclass_issuer_falls_back_to_us_gaap() -> None:
+    """The defect the first live run exposed: 16 of 50 names silently empty."""
+
+    result = await run_backfill(
+        MultiClassHTTP(),
+        FakeStore(),
+        tickers=["AAPL"],
+        user_agent=DEFAULT_USER_AGENT,
+        delay_seconds=0,
+    )
+
+    assert result.rows_fetched == 1
+    assert result.empty == ()
+
+
+async def test_the_dei_concept_is_still_preferred_when_present() -> None:
+    """Cover-page count is nearer the filing date; us-gaap is quarter-end."""
+
+    http = FakeHTTP()
+
+    result = await run_backfill(
+        http, FakeStore(), tickers=["AAPL"], user_agent=DEFAULT_USER_AGENT, delay_seconds=0
+    )
+
+    assert result.rows_fetched == 2
+    assert not any("us-gaap" in u for u in http.requests)
+
+
+async def test_a_ticker_with_no_data_anywhere_is_reported_separately() -> None:
+    """`unmapped=8` implied 42 worked. 26 did. That gap is now named.
+
+    A size-ranked factor silently missing GOOGL and META, while the tool reports
+    success, is the failure this distinction prevents.
+    """
+
+    class EmptyEverywhere(FakeHTTP):
+        async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+            self.requests.append(url)
+            if url.endswith("company_tickers.json"):
+                return FakeResponse(COMPANY_TICKERS)
+            return FakeResponse({}, status_code=404)
+
+    result = await run_backfill(
+        EmptyEverywhere(),
+        FakeStore(),
+        tickers=["AAPL", "MSFT", "SPY"],
+        user_agent=DEFAULT_USER_AGENT,
+        delay_seconds=0,
+    )
+
+    assert result.unmapped == ("SPY",)
+    assert result.empty == ("AAPL", "MSFT")
+    summary = result.summary()
+    assert "covered=0" in summary
+    assert "no_data=AAPL,MSFT" in summary
+
+
+async def test_the_summary_reports_coverage_not_just_failures() -> None:
+    result = await run_backfill(
+        FakeHTTP(),
+        FakeStore(),
+        tickers=["AAPL", "MSFT", "SPY"],
+        user_agent=DEFAULT_USER_AGENT,
+        delay_seconds=0,
+    )
+
+    assert "covered=2" in result.summary()

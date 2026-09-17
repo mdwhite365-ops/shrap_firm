@@ -46,6 +46,26 @@ from datetime import date
 SHARES_CONCEPT = "EntityCommonStockSharesOutstanding"
 SHARES_TAXONOMY = "dei"
 
+# Tried in order until one yields rows.
+#
+# **The `dei` cover-page count is absent for multi-class issuers**, which is not a
+# rare edge: it cost GOOGL, META, PYPL, COIN, PLTR and eleven more of the firm's
+# fifty names on the first real run. Those registrants tag the count per share
+# class with a dimension, and `companyfacts`/`companyconcept` expose only
+# undimensioned facts — GOOGL's entire `dei` fact set is `EntityPublicFloat`.
+#
+# `us-gaap:CommonStockSharesOutstanding` carries the aggregate for those names
+# (GOOGL: 88 entries, 12.23e9 as of 2026-06-30, which is Alphabet's combined
+# A+B+C). It is a balance-sheet figure rather than a cover-page one, so it is
+# as-of quarter-end rather than as-of shortly-before-filing — slightly staler,
+# which is why it is the fallback and not the primary.
+#
+# Both are governed by `filed_at`, so mixing them cannot introduce look-ahead.
+CONCEPT_CHAIN: tuple[tuple[str, str], ...] = (
+    (SHARES_TAXONOMY, SHARES_CONCEPT),
+    ("us-gaap", "CommonStockSharesOutstanding"),
+)
+
 COMPANY_CONCEPT_BASE = "https://data.sec.gov/api/xbrl/companyconcept"
 
 SOURCE_EDGAR_XBRL = "edgar-xbrl"
@@ -178,6 +198,7 @@ def market_cap(shares: SharesRow | None, close: float | None) -> float | None:
 
 __all__ = [
     "COMPANY_CONCEPT_BASE",
+    "CONCEPT_CHAIN",
     "SHARES_CONCEPT",
     "SHARES_TAXONOMY",
     "SOURCE_EDGAR_XBRL",

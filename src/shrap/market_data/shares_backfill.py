@@ -36,7 +36,12 @@ from typing import Any
 import structlog
 
 from shrap.market_data.backfill import resolve_tickers
-from shrap.market_data.shares import SharesRow, company_concept_url, parse_company_concept
+from shrap.market_data.shares import (
+    CONCEPT_CHAIN,
+    SharesRow,
+    company_concept_url,
+    parse_company_concept,
+)
 from shrap.market_data.shares_store import PostgresSharesStore
 
 log = structlog.get_logger(service="market-data-shares")
@@ -60,15 +65,32 @@ class BackfillResult:
     rows_fetched: int
     rows_upserted: int
     unmapped: tuple[str, ...]
-    dry_run: bool
+    """Tickers SEC has no CIK for — ETFs and trusts."""
+
+    empty: tuple[str, ...] = ()
+    """Mapped to a CIK and returned no rows from any concept in the chain.
+
+    **A separate category because conflating it with `unmapped` was a real
+    defect.** The first live run reported `unmapped=8` against fifty names, which
+    a reader reasonably takes to mean forty-two worked. Twenty-six did. Sixteen
+    mapped fine and returned nothing, and the summary said nothing about them —
+    so a size-ranked factor would have silently dropped GOOGL and META while the
+    tool reported success.
+    """
+
+    dry_run: bool = False
 
     def summary(self) -> str:
+        covered = self.tickers - len(self.unmapped) - len(self.empty)
         line = (
-            f"tickers={self.tickers} rows_fetched={self.rows_fetched} "
-            f"rows_upserted={self.rows_upserted} dry_run={self.dry_run}"
+            f"tickers={self.tickers} covered={covered} "
+            f"rows_fetched={self.rows_fetched} rows_upserted={self.rows_upserted} "
+            f"dry_run={self.dry_run}"
         )
         if self.unmapped:
             line += f" unmapped={','.join(self.unmapped)}"
+        if self.empty:
+            line += f" no_data={','.join(self.empty)}"
         return line
 
 
@@ -87,22 +109,30 @@ async def fetch_shares_for_ticker(
     reported so a silent zero is visible in the log.
     """
 
-    url = company_concept_url(cik)
-    response = await http.get(
-        url,
-        params={},
-        headers={"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"},
-        timeout=timeout,
-    )
-    if response.status_code != 200:
-        log.warning(
-            "market_data_shares_backfill.fetch_failed",
-            ticker=ticker,
-            cik=cik,
-            status=response.status_code,
+    for taxonomy, concept in CONCEPT_CHAIN:
+        url = company_concept_url(cik, taxonomy=taxonomy, concept=concept)
+        response = await http.get(
+            url,
+            params={},
+            headers={"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"},
+            timeout=timeout,
         )
-        return []
-    return parse_company_concept(response.json(), ticker=ticker, cik=cik)
+        if response.status_code != 200:
+            # A 404 is ordinary here: it means this registrant does not tag this
+            # concept, which is the reason a chain exists. Debug rather than
+            # warning so a healthy fifty-name run is not fifty warnings.
+            log.debug(
+                "market_data_shares_backfill.concept_miss",
+                ticker=ticker,
+                cik=cik,
+                concept=f"{taxonomy}:{concept}",
+                status=response.status_code,
+            )
+            continue
+        rows = parse_company_concept(response.json(), ticker=ticker, cik=cik)
+        if rows:
+            return rows
+    return []
 
 
 async def load_ticker_cik_map(http: Any, *, user_agent: str, timeout: float) -> dict[str, str]:
@@ -141,6 +171,7 @@ async def run_backfill(
     fetched = 0
     upserted = 0
     unmapped: list[str] = []
+    empty: list[str] = []
 
     for index, ticker in enumerate(tickers):
         cik = cik_by_ticker.get(ticker.strip().upper())
@@ -153,6 +184,8 @@ async def run_backfill(
         rows = await fetch_shares_for_ticker(
             http, ticker=ticker, cik=cik, user_agent=user_agent, timeout=timeout
         )
+        if not rows:
+            empty.append(ticker)
         fetched += len(rows)
         if rows and not dry_run and store is not None:
             upserted += await store.upsert_rows(rows)
@@ -173,17 +206,18 @@ async def run_backfill(
         rows_fetched=fetched,
         rows_upserted=upserted,
         unmapped=tuple(unmapped),
+        empty=tuple(empty),
         dry_run=dry_run,
     )
     log.info(
         "market_data_shares_backfill.complete",
-        **{
-            "tickers": result.tickers,
-            "rows_fetched": result.rows_fetched,
-            "rows_upserted": result.rows_upserted,
-            "unmapped": list(result.unmapped),
-            "dry_run": result.dry_run,
-        },
+        tickers=result.tickers,
+        covered=result.tickers - len(result.unmapped) - len(result.empty),
+        rows_fetched=result.rows_fetched,
+        rows_upserted=result.rows_upserted,
+        unmapped=list(result.unmapped),
+        no_data=list(result.empty),
+        dry_run=result.dry_run,
     )
     return result
 
