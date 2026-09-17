@@ -1707,7 +1707,7 @@ missing. Those records are the most actionable artefact the funnel has produced:
 
 | gap | needs | assessment |
 |---|---|---|
-| `volatility-rank-forecast` | **market capitalisation** | **Trivially closable.** Price the firm already stores × shares outstanding. Verified absent: no `market_cap`, `shares`, or `outstanding` column exists in any table. |
+| `volatility-rank-forecast` | **market capitalisation** | ~~Trivially closable~~ **CLOSED (#223)** — `market_data.shares_outstanding` + `shrap-market-data-shares-backfill`, point-in-time by `filed_at`. |
 | `10k-sentiment-factor` | 10-K full text, Item 1A | Plausibly closable — #189 already fetches EDGAR document bodies. |
 | `news-event-absorption` | news text, event tags, sentiment, beta | Plausibly closable — the News Analyzer already ingests Alpaca news. |
 | `ai-misinformation-news-factor` | news articles | Same as above. |
@@ -1715,9 +1715,20 @@ missing. Those records are the most actionable artefact the funnel has produced:
 | `btq-factor` | signed order flow, trade imbalance | Hard. Same reason. |
 | `ai-beta` | AI consumption tokens, AI dollar spend | Exotic alt-data; no obvious free source. |
 
-**Market capitalisation is the cheapest unblock the firm has.** One field,
-freely available from EDGAR XBRL (`dei:EntityCommonStockSharesOutstanding`),
-against CIKs the Filing Processor already maps.
+**Market capitalisation was the cheapest unblock and is now closed (#223).**
+`market_data.shares_outstanding` stores every reported count from EDGAR XBRL
+(`dei:EntityCommonStockSharesOutstanding`) against CIKs the Filing Processor
+already maps, keyed on both the date a count *describes* (`as_of`) and the date
+it *became public* (`filed_at`).
+
+**That second date is the whole point.** A count describing 2024-03-31 is
+typically filed in May; computing an April market cap from it uses information
+nobody had, inflates a backtest, and produces a strategy that does not work — a
+failure that passes every test. Reads select on `filed_at`, never `as_of`.
+
+Remaining: the factor itself (rank by trailing vol, weight by cap) is a separate
+card, and the two news-text gaps look closable against data the firm already
+ingests.
 
 ### Why this matters more than any measurement card
 
