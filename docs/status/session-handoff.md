@@ -14,6 +14,40 @@ them, and `git log` has the history.
 
 ---
 
+## Measured 2026-09-17: the funnel's lifetime output is one strategy
+
+Run against the Dell, not inferred. **KI-035** has the full working.
+
+| source | strategies |
+|---|---|
+| `mike-seed` | 14 |
+| `hypothesis-generator` | **1** |
+
+That one proposal scored IR **−0.006**. The Hypothesis Generator is not broken —
+it logs `sweep_empty` hourly because `research.literature_items` has **nine rows
+in total** and all nine are processed. Lifetime funnel yield: ~111 papers → 9
+items → 1 strategy.
+
+Everything else the firm has ever tested is a textbook factor (momentum,
+reversal, low-vol, 52-week-high, volume premium), and the evaluations correctly
+find them dead. Best IR ever recorded: **0.415** against a 0.50 floor. The gate
+is not too tight — no strategy has ever cleared it on the honest metric, and the
+multiple-testing correction is per lineage, so unrelated experiments do not
+inflate each other's bar.
+
+**The seven `capability-gap` rows are a prioritised build list**, and the
+cheapest item on it is **market capitalisation** — one field, absent from every
+table, available free from EDGAR XBRL against CIKs the Filing Processor already
+maps. Full table in KI-035.
+
+**Read this before building another measurement card.** The Regime Router
+(#215), intraday panel (#217/#219) and Kelly posterior (#218) are all apparatus
+for measuring and allocating; none changes whether a strategy makes money. The
+intraday breadth experiment ran end to end on 2026-09-17 and was inconclusive *by
+construction* — `IR = IC x sqrt(breadth)` multiplies skill by breadth, the test
+strategy had none at any grain, and multiplying zero by 19 teaches nothing. The
+instrument works. The firm cannot yet produce the quantity it measures.
+
 ## Merged since this file was last reconciled (#209–#214)
 
 None of it changes the headline below: the constraint is still research

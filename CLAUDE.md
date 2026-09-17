@@ -22,6 +22,23 @@ failure was only visible on the next real run; none were findable by reading the
 script.** Assume a component is wrong about what it talks to until it has run
 against the real thing.
 
+**#215–#221 (2026-09-16/17)** shipped the Regime Router, the intraday panel path,
+and the Kelly posterior — and **two of those seven PRs fixed regressions the others
+introduced**, each found only by running on the Dell rather than by a passing test
+suite (#220 an import that broke the evaluator's daily path, #221 a schema read that
+left the Runner one rebuild from silently not trading). Tests pass in the gap between
+"the code is correct" and "the container has the dependency, the database has the
+column."
+
+**The binding constraint, measured 2026-09-17 (KI-035):** the autonomous research
+loop has produced **one** strategy ever (IR −0.006) against 14 Mike-seeded textbook
+factors. The Hypothesis Generator logs `sweep_empty` hourly because
+`research.literature_items` holds nine rows in total. Best IR the firm has ever
+recorded is 0.415 against a 0.50 floor — the gate is not too tight, the strategies
+lack edge. The seven `capability-gap` rows are a prioritised build list; market
+capitalisation is the cheapest and is absent from every table. **Prefer feeding the
+funnel over building another thing that measures it.**
+
 **Always-on services (34 containers, verified 2026-07-31):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger. **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker.
 
 Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike reviews and merges; never stack PRs — see KI-001).

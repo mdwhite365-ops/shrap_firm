@@ -1,6 +1,6 @@
 # Known issues
 
-**Last updated:** 2026-08-25 (**KI-034** — the firm has never had a backup, verified; **KI-033** — no position under one share could ever be closed)
+**Last updated:** 2026-09-17 (**KI-035** — the autonomous research loop has produced one strategy, ever; **KI-034** — the firm has never had a backup, verified; **KI-033** — no position under one share could ever be closed)
 
 ## KI-001 — Stacked PRs can be marked merged without reaching main
 
@@ -1648,3 +1648,87 @@ not that a path was wrong; it is that a procedure written into a runbook in
 Month 1 was never once verified to have run — and that when it finally ran, it
 found two more problems in ten minutes.
 
+
+## KI-035 — The autonomous research loop has produced one strategy, ever
+
+**Status:** Open. Measured on the Dell 2026-09-17. This is the binding
+constraint the handoff has named since August, now with numbers attached.
+
+The firm's premise is that it generates and tests its own strategies. The
+registry says otherwise:
+
+```sql
+SELECT source, count(*) FROM research.strategies GROUP BY source;
+```
+
+| source | count |
+|---|---|
+| `mike-seed` | 14 |
+| `hypothesis-generator` | **1** |
+
+The one autonomous proposal — *Network peripherality (252d, top 10)* — scored an
+information ratio of **−0.006** and was killed `no-active-edge`.
+
+**The Hypothesis Generator is not broken. It is starved.** It sweeps hourly and
+logs `hypothesis_generator.sweep_empty` every time, because
+`research.literature_items` holds **nine rows in total** and all nine are
+processed:
+
+| outcome | count |
+|---|---|
+| `capability-gap` | 7 |
+| `proposed` | 1 |
+| `refused` | 1 |
+
+Lifetime yield of the research funnel: **~111 papers → 9 literature items → 1
+strategy → IR −0.006.**
+
+### Everything else the firm has tested is a textbook factor
+
+The other 14 strategies are `mike-seed`: cross-sectional momentum, reversal,
+low-volatility, 52-week-high proximity, volume premium, time-series momentum,
+network peripherality. These are well-known and heavily arbitraged, and the
+firm's own evaluations find them dead — correctly. The best information ratio
+ever recorded is **0.415** (cross-sectional momentum) against a floor of 0.50.
+
+**Nothing is being killed unfairly.** `below-sharpe-floor` is the most common
+reason (16 of 28 evaluations) and those strategies cluster at Sharpe 0.78–0.84
+against a floor of 1.0 — but every one of them also has an IR below the 0.50
+floor, so the gate is not the constraint. The strategies genuinely lack edge.
+
+The multiple-testing correction is also not the culprit: `attempts` are counted
+**per lineage, not per firm** (`verdict.required_information_ratio`), so
+unrelated experiments do not inflate each other's bar.
+
+### The seven capability gaps are a prioritised build list
+
+When the Generator finds a testable effect it cannot compute, it records what is
+missing. Those records are the most actionable artefact the funnel has produced:
+
+| gap | needs | assessment |
+|---|---|---|
+| `volatility-rank-forecast` | **market capitalisation** | **Trivially closable.** Price the firm already stores × shares outstanding. Verified absent: no `market_cap`, `shares`, or `outstanding` column exists in any table. |
+| `10k-sentiment-factor` | 10-K full text, Item 1A | Plausibly closable — #189 already fetches EDGAR document bodies. |
+| `news-event-absorption` | news text, event tags, sentiment, beta | Plausibly closable — the News Analyzer already ingests Alpaca news. |
+| `ai-misinformation-news-factor` | news articles | Same as above. |
+| `kyle-price-impact` | signed order flow | Hard. Not in Alpaca's free IEX feed. |
+| `btq-factor` | signed order flow, trade imbalance | Hard. Same reason. |
+| `ai-beta` | AI consumption tokens, AI dollar spend | Exotic alt-data; no obvious free source. |
+
+**Market capitalisation is the cheapest unblock the firm has.** One field,
+freely available from EDGAR XBRL (`dei:EntityCommonStockSharesOutstanding`),
+against CIKs the Filing Processor already maps.
+
+### Why this matters more than any measurement card
+
+Everything built on 2026-09-16/17 — the Regime Router (#215), the intraday panel
+(#217/#219), the Kelly posterior (#218) — is apparatus for *measuring* and
+*allocating*. None of it changes whether a strategy makes money.
+
+The intraday breadth experiment makes the point concretely. Run end to end on
+2026-09-17, it was **inconclusive by construction**: `IR = IC x sqrt(breadth)`
+multiplies skill by breadth, the test strategy had none at any grain, and
+multiplying zero by 19 teaches nothing. The instrument works; the firm cannot yet
+produce the quantity it measures.
+
+**The funnel needs feeding before any of it pays.**
