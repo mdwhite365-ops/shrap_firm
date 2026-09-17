@@ -52,6 +52,7 @@ from shrap.research.strategy_evaluator.cross_sectional import (
 )
 from shrap.research.strategy_evaluator.engine import (
     PROTOCOL_VERSION,
+    ActiveMetrics,
     EvalConfig,
     InsufficientDataError,
     walk_forward,
@@ -81,6 +82,7 @@ from shrap.research.strategy_registry import (
     StrategyRecord,
     StrategyTransition,
 )
+from shrap.risk_compliance.risk_officer.posterior import posterior_from_backtest
 
 log = structlog.get_logger(__name__)
 
@@ -737,7 +739,7 @@ class EvaluationPipeline:
             aggregate_metrics=result.aggregate.as_dict(),
             fold_metrics=[f.as_dict() for f in result.folds],
             stress_metrics=result.stress.as_dict(),
-            active_metrics=result.active.as_dict(),
+            active_metrics=_with_posterior(result.active, attempts),
             consistency_metrics=result.consistency.as_dict(),
             attempts=attempts,
             coverage=coverage,
@@ -1147,6 +1149,70 @@ def _coverage_lines(outcome: EvaluationOutcome) -> list[str]:
     return lines
 
 
+def _with_posterior(active: ActiveMetrics, attempts: int) -> dict[str, Any]:
+    """The active metrics, plus the belief this backtest supports.
+
+    The Evaluator's verdict throws the information ratio at a floor and keeps
+    only the pass or the fail. KI-036 measured what that comparison is worth on
+    a six-year panel — about 0.11 standard errors — so the verdict decides
+    almost nothing while the number itself is perfectly usable evidence.
+
+    This attaches the number's Bayesian reading to every evaluation:
+    :func:`~shrap.risk_compliance.risk_officer.posterior.posterior_from_backtest`
+    blended against a skeptical prior, with the standard error widened for the
+    ``attempts`` the lineage took to find it. It changes no verdict and no
+    transition. It makes the result available to the sizing path as something
+    other than a stage label.
+    """
+
+    payload = active.as_dict()
+    if active.precision is None or active.precision.standard_error <= 0.0:
+        return payload
+    posterior = posterior_from_backtest(
+        information_ratio=active.information_ratio,
+        standard_error=active.precision.standard_error,
+        attempts=attempts,
+    )
+    payload["posterior"] = posterior.to_payload()
+    return payload
+
+
+def _posterior_lines(posterior: object) -> list[str]:
+    """What this backtest is worth as a size, not as a verdict.
+
+    The card's verdict line answers "did it clear the floor", which KI-036
+    showed is decided by ~0.11 standard errors of noise. This answers the
+    question that survives that finding: given what was measured and how hard
+    the lineage searched to find it, how much of the book should it get.
+    """
+
+    if not isinstance(posterior, Mapping):
+        return []
+    fraction = posterior.get("fraction")
+    if fraction is None:
+        return []
+    flat = 0.25
+    direction = (
+        "below" if float(fraction) < flat else "above" if float(fraction) > flat else "equal to"
+    )
+    return [
+        "### What this is worth as a position",
+        "",
+        f"- Posterior mean IR: {_num(posterior.get('mean_ir'))} "
+        f"(from a backtest IR of {_num(posterior.get('backtest_ir'))}, "
+        f"blended at a selection-discounted SD of {_num(posterior.get('backtest_sd'))} "
+        "against a prior centred on no skill)",
+        f"- **Size fraction: {float(fraction):.3f}** — {direction} the flat "
+        f"{flat:.2f} a staged strategy gets today",
+        "",
+        "> The floor comparison above is within noise on a panel this short. This "
+        "fraction is not: it is monotone in what was measured and in how many "
+        "attempts the lineage took to measure it. Live sessions update it from "
+        "here rather than restarting from a stage label.",
+        "",
+    ]
+
+
 def _precision_lines(precision: object) -> list[str]:
     """How much of the information ratio above is noise.
 
@@ -1237,6 +1303,7 @@ def render_evaluation_card(outcome: EvaluationOutcome) -> str:
             + _pct(outcome.active_metrics.get("benchmark_total_return")),
             "",
             *_precision_lines(outcome.active_metrics.get("precision")),
+            *_posterior_lines(outcome.active_metrics.get("posterior")),
             "> Absolute Sharpe cannot tell being invested apart from being skilful: "
             "naive buy-and-hold scores 1.03-1.16 on drifting data with no timing rule "
             "at all. The information ratio above is what the promote gate uses.",

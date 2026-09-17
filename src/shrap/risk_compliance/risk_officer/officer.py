@@ -38,6 +38,8 @@ from shrap.risk_compliance.risk_officer.monitor import (
     check_daily_loss,
     check_strategy_drawdown,
 )
+from shrap.risk_compliance.risk_officer.posterior import SkillPosterior
+from shrap.risk_compliance.risk_officer.posterior_reader import PosteriorUnavailable
 from shrap.risk_compliance.risk_officer.sizing import (
     MIN_TRADEABLE_NOTIONAL,
     SizingDecision,
@@ -60,6 +62,9 @@ from shrap.risk_compliance.risk_officer.switches import (
 
 log = structlog.get_logger(__name__)
 
+# The posterior could not be read. A refusal rather than a fallback — see the
+# comment at the size_intent call for why falling back sizes UP.
+REASON_POSTERIOR_UNAVAILABLE = "posterior-unavailable"
 REASON_RISK_STATE_UNAVAILABLE = "RISK_STATE_UNAVAILABLE"
 REASON_NO_ACCOUNT = "STRATEGY_HAS_NO_ACCOUNT"
 REASON_UNKNOWN_STRATEGY = "UNKNOWN_STRATEGY"
@@ -80,6 +85,19 @@ class StrategyLookup(Protocol):
     """The slice of the strategy registry this agent needs."""
 
     async def get(self, strategy_id: str) -> Any: ...
+
+
+class PosteriorLookup(Protocol):
+    """Where the firm's belief about a strategy's skill is read from.
+
+    Separate from :class:`StrategyLookup` because they answer different
+    questions and come from different tables: the registry holds the stage a
+    human set, this holds what the evidence supports. KI-036 is the argument
+    for preferring the second — on a six-year panel the stage is decided by
+    about 0.11 standard errors of noise.
+    """
+
+    async def latest_posterior(self, strategy_id: str) -> SkillPosterior | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,12 +165,20 @@ class RiskOfficer:
         limits: PortfolioLimits | None = None,
         *,
         price_history_bars: int = PRICE_HISTORY_BARS,
+        posteriors: PosteriorLookup | None = None,
     ) -> None:
         self._store = store
         self._switches = switch_store
         self._registry = registry
         self._limits = limits or PortfolioLimits()
         self._history_bars = price_history_bars
+        self._posteriors = posteriors
+        """Left ``None`` and every size is what it was before this existed.
+
+        This is a live paper account that trades each morning, so evidence-based
+        sizing is opt-in at construction rather than a default that arrives with
+        a rebuild. #221 is the precedent: a read the Runner never made left it
+        one rebuild away from silently not trading."""
 
     @property
     def limits(self) -> PortfolioLimits:
@@ -353,8 +379,12 @@ class RiskOfficer:
             )
         else:
             reducing = reduces_position(held_value, delta)
-            sizing = (
-                SizingDecision(
+            if reducing:
+                # An exit is passed through at full size and never consulted
+                # against a belief about skill. #192-#199 and KI-030 are five
+                # defects that resized or blocked exits; an exit that cannot
+                # execute is strictly worse than one sized by a stale number.
+                sizing = SizingDecision(
                     requested_quantity=quantity,
                     approved_quantity=quantity,
                     stage=stage or "unknown",
@@ -362,14 +392,42 @@ class RiskOfficer:
                     regime_multiplier=1.0,
                     reference_price=price,
                 )
-                if reducing
-                else size_intent(
+            else:
+                posterior: SkillPosterior | None = None
+                if self._posteriors is not None:
+                    try:
+                        posterior = await self._posteriors.latest_posterior(strategy_id)
+                    except PosteriorUnavailable as exc:
+                        # Refuse rather than fall back. Every strategy this firm
+                        # has measured has a posterior fraction BELOW the flat
+                        # 0.25 stage fraction — momentum 126/21 sizes at 0.147 —
+                        # so falling back would size positions UP at exactly the
+                        # moment the firm lost the ability to justify them.
+                        # Fail-open on a risk control is the failure nobody
+                        # notices, and refusing when a required read fails is
+                        # already this file's pattern: see
+                        # REASON_RISK_STATE_UNAVAILABLE.
+                        log.error(
+                            "risk_officer.posterior_unavailable",
+                            strategy_id=strategy_id,
+                            exc_info=True,
+                        )
+                        return RiskAssessment.refused(
+                            REASON_POSTERIOR_UNAVAILABLE,
+                            f"cannot read the skill posterior for {strategy_id}: {exc}",
+                            account_id,
+                        )
+                # `None` is not an error: no evaluation has produced a posterior
+                # yet, so there is no measurement to size on, and the stage
+                # fraction is the spec's documented thin-posterior fallback
+                # (docs/risk/policy.md open question 4).
+                sizing = size_intent(
                     requested_quantity=quantity,
                     stage=stage,
                     regime_multiplier=multiplier,
                     reference_price=price,
+                    posterior=posterior,
                 )
-            )
         if sizing.approved_quantity <= 0:
             return RiskAssessment(
                 approved=False,
@@ -560,8 +618,10 @@ __all__ = [
     "PRICE_HISTORY_BARS",
     "REASON_BELOW_BROKER_MINIMUM",
     "REASON_NO_ACCOUNT",
+    "REASON_POSTERIOR_UNAVAILABLE",
     "REASON_RISK_STATE_UNAVAILABLE",
     "REASON_UNKNOWN_STRATEGY",
+    "PosteriorLookup",
     "RiskAssessment",
     "RiskOfficer",
     "StrategyLookup",

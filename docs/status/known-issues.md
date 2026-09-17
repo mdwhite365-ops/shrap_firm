@@ -1904,9 +1904,82 @@ section that says in words when a verdict is within noise. No gate changed.
 The honest successor to a threshold on a noisy statistic is a posterior, and the
 firm already has one — `risk_compliance/risk_officer/posterior.py`, shipped the
 same night (#218), sizes continuously in accumulated evidence and returns
-exactly the flat 0.25 paper fraction under zero evidence. The card that connects
-the backtest to it, instead of throwing the result at a threshold, is not
-written. **That is the ruling this issue needs.**
+exactly the flat 0.25 paper fraction under zero evidence.
+
+**Mike ruled on 2026-09-17: connect them.** Done in the same PR, because the
+connection is what makes the measurement actionable rather than merely honest:
+
+- `posterior_from_backtest()` turns a walk-forward IR into a belief. The
+  likelihood is the ratio with its own standard error; the prior is centred on
+  **no skill** (`SKEPTICAL_PRIOR_IR = 0.0`) rather than on the promote floor,
+  because "it cleared 0.50 to get here" is exactly the claim this issue
+  removed.
+- `selection_discounted_sd()` widens that standard error by
+  `sqrt(1 + ln(attempts))` — **the identical factor**
+  `verdict.required_information_ratio` uses to raise the bar. A posterior has
+  no bar to raise, so the same correction applies to the uncertainty instead,
+  which is the Bayesian statement of the same idea. A test pins the two
+  together so they cannot drift.
+- `update_posterior(..., prior=...)` chains live sessions onto the backtest
+  belief by conjugacy, so a strategy arrives at its first session already
+  believing what its backtest showed instead of resetting to a stage label.
+- The evaluation card gains a **What this is worth as a position** section.
+
+What it does to every strategy the firm has actually measured:
+
+    strategy                  backtest IR   posterior    size   today
+    momentum 126/21                +0.448      +0.293   0.147    0.25
+    momentum (paper account)       +0.306      +0.200   0.100    0.25
+    volume-shock 50                +0.236      +0.155   0.077    0.25
+    low-volatility 252             -0.495      -0.324   0.000    0.25
+    hypothesis-generator #1        -0.006      -0.005   0.000    0.25
+    (hypothetical IR 1.60)         +1.600      +1.311   0.500    0.25
+
+**Everything real sizes down.** That direction is structural rather than a
+choice of constants: any discounted backtest landing under the old `PRIOR_IR`
+of 0.5 sizes below the flat fraction, and every IR the firm has ever recorded
+is in that set. A genuinely strong result still earns the cap, so this
+reallocates toward evidence rather than cutting across the board.
+
+### The consumer, wired (same PR, after the trading day closed)
+
+`PostgresPosteriorReader` reads `active_metrics->'posterior'` for a strategy's
+newest evaluation; `RiskOfficer` gained a `posteriors` lookup and passes it to
+`size_intent`. Behind `posterior_sizing`, **off by default** — this is a live
+paper account, and #221 is the precedent for a rebuild silently changing
+behaviour.
+
+Three decisions worth recording:
+
+- **An unreadable posterior refuses the order.** It does not fall back to the
+  stage fraction. Every posterior the firm has measured is *below* the flat
+  0.25, so a fallback would size positions UP at exactly the moment the firm
+  lost the ability to justify them. Fail-open on a risk control is the failure
+  nobody notices, and refusing on a failed required read is already this file's
+  pattern (`REASON_RISK_STATE_UNAVAILABLE`).
+- **An absent posterior is not an error.** `None` means no evaluation has
+  produced one, so there is nothing measured to size on, and the stage fraction
+  is the spec's documented thin-posterior fallback.
+- **Exits never consult it.** #192–#199 and KI-030 are five defects that
+  resized or blocked exits; an exit that cannot execute is strictly worse than
+  one sized by a stale belief.
+
+**One bug worth naming, because unit tests structurally cannot find it.** The
+query first read `SELECT active_metrics->'posterior'` with no alias. Postgres
+names an un-aliased operator expression `?column?`, so `row["posterior"]` would
+have returned nothing for every strategy forever — and since an absent
+posterior falls back to the stage fraction, it would have looked like it worked.
+A fake pool cannot catch it because the fake picks its own column names. Found
+by running the query against the real database, which is the #212–#214 lesson
+restated: *assume a component is wrong about what it talks to until it has run
+against the real thing.*
+
+**Operational consequence: turning the flag on today changes nothing.** All 25
+evaluation rows at protocol `0.2` carry `information_ratio` and none carry
+`posterior`, because only the new Evaluator writes it. Every strategy would read
+as unevaluated and size by stage. **The strategies must be re-evaluated before
+this does anything**, which also means the flag can be enabled and verified
+quiet before it has any effect.
 
 ### The shape, again
 

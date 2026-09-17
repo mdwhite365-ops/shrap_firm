@@ -87,6 +87,15 @@ class Settings(BaseSettings):
     portfolio_limits_enforcement: bool = False
     monitor_interval_seconds: float = 300.0
 
+    # Size positions from the Evaluator's posterior rather than from the stage a
+    # human set. Off by default, and turning it on is a governance decision, not
+    # a tuning one: KI-036 measured every strategy the firm has evaluated as
+    # supporting LESS than the flat 0.25 the `paper` stage grants, so enabling
+    # this cuts live sizes (momentum 126/21: 0.25 -> 0.147). It also makes the
+    # gate fail closed — an unreadable posterior refuses the order rather than
+    # falling back to the larger flat fraction.
+    posterior_sizing: bool = False
+
     # Limits. Defaults mirror `docs/risk/policy.md` v0.1, which is authoritative
     # — these exist so an operator can tighten one without a deploy, not so the
     # numbers can drift. `test_config_defaults_match_the_policy_doc` pins them.
@@ -174,6 +183,7 @@ class Settings(BaseSettings):
             "retry_delay_seconds": self.retry_delay_seconds,
             "log_level": self.log_level,
             "portfolio_limits_enforcement": self.portfolio_limits_enforcement,
+            "posterior_sizing": self.posterior_sizing,
             "monitor_interval_seconds": self.monitor_interval_seconds,
             "portfolio_limits": {
                 "max_ticker_weight": self.max_ticker_weight,
