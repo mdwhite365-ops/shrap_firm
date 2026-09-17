@@ -449,6 +449,61 @@ class PostgresIntradayBarReader:
         return samples
 
 
+class IntradayEvaluatorReader:
+    """A :class:`PostgresEvaluatorReader` whose bars come from an intraday panel.
+
+    The Evaluator's ``ReaderPort`` has five methods and only ``read_bars`` differs
+    by bar grain — anchor freshness, tier eligibility, the multiple-testing draw
+    count and the parent's information ratio are all questions about a strategy,
+    not about a timeframe. So this delegates four and overrides one, rather than
+    growing a mode flag inside either reader.
+
+    It exists so the question this whole line of work rests on can actually be
+    asked: **does a strategy's per-decision skill survive a shorter horizon?**
+    ``IR = IC x sqrt(breadth)`` says 78 decisions a day is worth ~8.8x the
+    information ratio of one a day *if* IC holds, and short-horizon prediction is
+    usually harder while costs scale with turnover. Running the same strategy
+    through the same walk-forward at two grains and comparing the two ratios is
+    the measurement that settles it. Nothing else here is new for that reason.
+    """
+
+    def __init__(
+        self,
+        pool: AsyncPool,
+        *,
+        timeframe: str,
+        include_extended: bool = False,
+        calendar_name: str = DEFAULT_CALENDAR,
+    ) -> None:
+        self._delegate = PostgresEvaluatorReader(pool)
+        self._bars = PostgresIntradayBarReader(
+            pool,
+            timeframe=timeframe,
+            include_extended=include_extended,
+            calendar_name=calendar_name,
+        )
+        self.timeframe = timeframe
+
+    async def world_changer_status(self, candidate_id: str) -> str | None:
+        return await self._delegate.world_changer_status(candidate_id)
+
+    async def ticker_tier(self, ticker: str) -> str | None:
+        return await self._delegate.ticker_tier(ticker)
+
+    async def latest_information_ratio(
+        self, strategy_id: str, protocol_version: str
+    ) -> float | None:
+        return await self._delegate.latest_information_ratio(strategy_id, protocol_version)
+
+    async def count_draws(self, strategy_ids: Sequence[str]) -> int:
+        return await self._delegate.count_draws(strategy_ids)
+
+    async def read_bars(
+        self, ticker: str, start: date, end: date, adjustment: str
+    ) -> list[BarSample]:
+        return await self._bars.read_bars(ticker, start, end, adjustment)
+
+
 __all__ = [
     "ADD_EVALUATIONS_ACTIVE_METRICS_SQL",
     "ADD_EVALUATIONS_ANCHOR_REQUIRED_SQL",
@@ -464,6 +519,7 @@ __all__ = [
     "SELECT_TICKER_TIER_SQL",
     "SELECT_WORLD_CHANGER_STATUS_SQL",
     "AsyncPool",
+    "IntradayEvaluatorReader",
     "PostgresEvaluationStore",
     "PostgresEvaluatorReader",
     "PostgresIntradayBarReader",

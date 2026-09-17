@@ -39,10 +39,41 @@ from shrap.research.strategy_evaluator.pipeline import (
     EvaluationPipeline,
 )
 from shrap.research.strategy_evaluator.store import (
+    IntradayEvaluatorReader,
     PostgresEvaluationStore,
     PostgresEvaluatorReader,
 )
 from shrap.research.strategy_registry import PostgresStrategyRegistry
+
+# The token meaning "read market_data.daily_bars", i.e. the behaviour this CLI
+# had before intraday panels existed. Matches Alpaca's own daily token and
+# `strategy_runner.cadence.alpaca_timeframe`, which returns the same string for a
+# daily cadence.
+TIMEFRAME_DAILY = "1Day"
+
+
+def _check_intraday_window(args: argparse.Namespace) -> None:
+    """Refuse an unbounded lookback at an intraday grain.
+
+    ``--window-years`` defaults to None, meaning "every bar in the store", which
+    is right for daily bars and ruinous below them. One ticker-year is ~252 rows
+    daily, ~6,500 at 15Min and ~98,000 at 1Min; across a fifty-name launch list
+    an unbounded 1Min request is millions of rows per year of history.
+
+    A refusal rather than a quiet default, because the caller is the only one who
+    knows how much history they actually backfilled — and a silently truncated
+    window would produce a verdict on a different panel than the one they
+    believe they asked for.
+    """
+
+    if args.timeframe == TIMEFRAME_DAILY or args.window_years is not None:
+        return
+    raise EvaluationError(
+        f"--timeframe {args.timeframe} needs an explicit --window-years. "
+        "An unbounded lookback is fine for daily bars and is not fine below them: "
+        "one ticker-year is ~252 daily rows but ~6,500 at 15Min and ~98,000 at 1Min. "
+        "Pass the window you actually backfilled."
+    )
 
 
 async def _run(args: argparse.Namespace) -> str:
@@ -51,7 +82,15 @@ async def _run(args: argparse.Namespace) -> str:
     redis = Redis.from_url(args.redis_url, decode_responses=True, socket_timeout=30)
     pool = await create_asyncpg_pool(args.dsn)
     store = PostgresEvaluationStore(pool)
-    reader = PostgresEvaluatorReader(pool)
+    reader: PostgresEvaluatorReader | IntradayEvaluatorReader
+    if args.timeframe == TIMEFRAME_DAILY:
+        reader = PostgresEvaluatorReader(pool)
+    else:
+        reader = IntradayEvaluatorReader(
+            pool,
+            timeframe=args.timeframe,
+            include_extended=args.include_extended,
+        )
     registry = PostgresStrategyRegistry(pool)
     publisher = EventPublisher(cast(RedisPublisher, redis))
     config = EvalConfig(
@@ -132,6 +171,26 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--timeframe",
+        default=TIMEFRAME_DAILY,
+        metavar="1Day|15Min|5Min|...",
+        help=(
+            f"Bar grain to backtest on (default {TIMEFRAME_DAILY}, reading "
+            "market_data.daily_bars). Any other token reads market_data.intraday_bars "
+            "and must match the token the backfill stored. Intraday requires "
+            "--window-years, and regular trading hours only unless --include-extended."
+        ),
+    )
+    parser.add_argument(
+        "--include-extended",
+        action="store_true",
+        help=(
+            "Include pre/post-market bars in an intraday panel. Off by default: the "
+            "backfill stores 04:00-20:00, where a handful of shares sets a price no "
+            "strategy could have traded at size."
+        ),
+    )
+    parser.add_argument(
         "--card-root",
         default=os.environ.get("STRATEGY_EVALUATOR_CARD_ROOT", "docs/strategies/evaluations"),
         help="Root directory for evaluation cards",
@@ -155,6 +214,7 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
     try:
+        _check_intraday_window(args)
         output = asyncio.run(_run(args))
     except EvaluationError as e:
         raise SystemExit(f"refused: {e}") from e
