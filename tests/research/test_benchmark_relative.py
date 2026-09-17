@@ -159,7 +159,14 @@ def test_genuine_timing_skill_produces_a_positive_information_ratio() -> None:
 
 
 def test_the_benchmark_is_reported_alongside_the_strategy() -> None:
-    """A verdict a human cannot audit against its own comparison is not auditable."""
+    """A verdict a human cannot audit against its own comparison is not auditable.
+
+    ``precision`` joined this blob on 2026-09-17. It is part of the same
+    auditability claim rather than an extra: the comparison a reader makes is
+    between the ratio and a floor, and that comparison cannot be audited
+    without knowing the ratio's standard error — which on this firm's panel is
+    large enough to swallow the distance being judged.
+    """
 
     panel = PricePanel.from_bars({f"T{i:02d}": _bars(_drifting(i, 900)) for i in range(5)})
     result = walk_forward(panel, AlwaysInvested(), EvalConfig())
@@ -170,8 +177,10 @@ def test_the_benchmark_is_reported_alongside_the_strategy() -> None:
         "benchmark_sharpe",
         "benchmark_total_return",
         "n_periods",
+        "precision",
     }
     assert blob["n_periods"] == result.aggregate.n_periods
+    assert blob["precision"]["sigmas_from_floor"] >= 0.0
 
 
 # --- verdict priority --------------------------------------------------------

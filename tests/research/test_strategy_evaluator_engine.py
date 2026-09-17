@@ -248,3 +248,32 @@ def test_costs_reduce_return_and_friction_is_harsher() -> None:
     assert costed_result.aggregate.total_return < free_result.aggregate.total_return
     # The realistic-friction stress (+50% costs, +1 lag) is no better than base.
     assert costed_result.stress.total_return <= costed_result.aggregate.total_return + 1e-9
+
+
+def test_every_walk_forward_reports_the_precision_of_its_information_ratio() -> None:
+    """A verdict that states a ratio must state how well it is measured.
+
+    Added 2026-09-17 after measuring that the firm's best-ever IR (0.448) sits
+    0.11 standard errors from the floor it failed. Until this field existed the
+    card reported the point estimate alone, which reads as a near miss when it
+    is in fact a coin flip.
+    """
+
+    result = walk_forward(_panel([100.0 + i * 0.5 for i in range(120)]), AlwaysLong(), EvalConfig())
+
+    precision = result.active.precision
+    assert precision is not None
+    assert precision.information_ratio == result.active.information_ratio
+    assert precision.floor == EvalConfig().information_ratio_floor
+    assert precision.standard_error > 0.0
+    assert precision.years == pytest.approx(result.active.n_periods / 252, abs=1e-9)
+    assert "precision" in result.active.as_dict()
+
+
+def test_a_short_panel_is_honest_about_being_unresolvable() -> None:
+    """120 bars is under half a year. Nothing measured there can settle a floor."""
+
+    result = walk_forward(_panel([100.0 + i * 0.5 for i in range(120)]), AlwaysLong(), EvalConfig())
+
+    assert result.active.precision is not None
+    assert not result.active.precision.is_resolvable

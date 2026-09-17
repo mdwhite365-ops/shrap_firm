@@ -36,6 +36,7 @@ from typing import Any
 
 import numpy as np
 
+from shrap.research.ir_precision import PrecisionResult
 from shrap.research.strategy_evaluator.benchmark import (
     EqualWeightBuyAndHold,
     active_returns,
@@ -235,15 +236,35 @@ class ActiveMetrics:
     benchmark_sharpe: float
     benchmark_total_return: float
     n_periods: int
+    precision: PrecisionResult | None = None
+    """The error bar on ``information_ratio``, and how many standard errors it
+    sits from the promote floor.
+
+    Optional only so that hand-built fixtures predating it still construct. On
+    a real run it is always populated, because a ratio reported without its
+    precision is the defect this field exists to close: on this firm's panel
+    the best strategy ever measured sits 0.11 SE from the floor it failed,
+    which is no distance at all. See ``shrap.research.ir_precision``."""
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "information_ratio": self.information_ratio,
             "active_total_return": self.active_total_return,
             "benchmark_sharpe": self.benchmark_sharpe,
             "benchmark_total_return": self.benchmark_total_return,
             "n_periods": self.n_periods,
         }
+        if self.precision is not None:
+            out["precision"] = {
+                "standard_error": self.precision.standard_error,
+                "sigmas_from_floor": self.precision.sigmas_from_floor,
+                "years": self.precision.years,
+                "is_resolvable": self.precision.is_resolvable,
+                "rolling_min": self.precision.rolling_min,
+                "rolling_max": self.precision.rolling_max,
+                "rolling_share_above_floor": self.precision.rolling_share_above_floor,
+            }
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -649,6 +670,12 @@ def walk_forward(
             benchmark_sharpe=sharpe(bench.daily_returns, config.periods_per_year),
             benchmark_total_return=total_return(bench.equity),
             n_periods=len(active_series),
+            precision=PrecisionResult.from_active_returns(
+                active_series,
+                information_ratio=sharpe(active_series, config.periods_per_year),
+                floor=config.information_ratio_floor,
+                periods_per_year=config.periods_per_year,
+            ),
         ),
         consistency=ConsistencyMetrics.from_folds(folds),
     )
