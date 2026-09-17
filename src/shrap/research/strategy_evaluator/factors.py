@@ -55,6 +55,7 @@ from shrap.research.strategy_evaluator.cross_sectional import (
     DEFAULT_GROSS_EXPOSURE,
     DEFAULT_TOP_N,
     _equal_weights,
+    _inverse_volatility_weights,
     _long_short_weights,
 )
 from shrap.research.strategy_evaluator.strategy import PanelWindow
@@ -122,6 +123,21 @@ def _score_low_volatility(window: PanelWindow, ticker: str, lookback: int) -> fl
     if vol is None or vol <= 0.0:
         return None
     return -vol
+
+
+def _realised_vol(window: PanelWindow, ticker: str, lookback: int) -> float | None:
+    """Realised volatility over the trailing ``lookback`` bars, un-negated.
+
+    Separate from :func:`_score_low_volatility`, which negates so that higher is
+    better for ranking. Using the scorer here would invert every weight — a name
+    would get more of the book for being *more* volatile, which is the exact
+    opposite of the intent and would not raise anything.
+    """
+
+    closes = window.closes(ticker)
+    if len(closes) < lookback + 1:
+        return None
+    return _stdev(_returns(closes[-(lookback + 1) :]))
 
 
 def _score_high_proximity(window: PanelWindow, ticker: str, lookback: int) -> float | None:
@@ -289,6 +305,17 @@ ALL_FACTORS: frozenset[str] = frozenset(FACTOR_SCORERS) | frozenset(CROSS_SECTIO
 # from cross-sectional momentum.
 ABSOLUTE_FACTORS: frozenset[str] = frozenset({FACTOR_TIME_SERIES})
 
+WEIGHTING_EQUAL = "equal"
+WEIGHTING_INVERSE_VOL = "inverse-volatility"
+WEIGHTINGS: frozenset[str] = frozenset({WEIGHTING_EQUAL, WEIGHTING_INVERSE_VOL})
+
+# The window used to estimate each holding's volatility for inverse-vol
+# weighting. 21 bars, matching the horizon at which the firm actually measured
+# volatility-rank persistence (#226: rho +0.880 month to month). A longer window
+# would be smoother and would forecast a different quantity than the one that
+# was shown to persist.
+INVERSE_VOL_WINDOW = 21
+
 
 @dataclass(frozen=True, slots=True)
 class CrossSectionalFactorStrategy:
@@ -299,6 +326,9 @@ class CrossSectionalFactorStrategy:
     top_n: int = DEFAULT_TOP_N
     gross_exposure: float = DEFAULT_GROSS_EXPOSURE
     long_short: bool = False
+    weighting: str = WEIGHTING_EQUAL
+    """How the selected names share the book. Equal by default, so every
+    existing strategy in the registry is unchanged."""
 
     def __post_init__(self) -> None:
         if self.factor not in ALL_FACTORS:
@@ -310,6 +340,15 @@ class CrossSectionalFactorStrategy:
             raise ValueError("top_n must be at least 1")
         if not 0.0 <= self.gross_exposure <= 1.0:
             raise ValueError("gross_exposure must lie in [0, 1]")
+        if self.weighting not in WEIGHTINGS:
+            known = ", ".join(sorted(WEIGHTINGS))
+            raise ValueError(f"unknown weighting {self.weighting!r}; known are {known}")
+        if self.weighting == WEIGHTING_INVERSE_VOL and self.long_short:
+            raise ValueError(
+                "inverse-volatility weighting is defined for a long book; applying it "
+                "to a long/short pair would scale the two legs independently and "
+                "silently break market neutrality"
+            )
         if self.long_short and self.factor in ABSOLUTE_FACTORS:
             raise ValueError(
                 f"{self.factor!r} is an absolute signal, so there is no bottom of a "
@@ -347,7 +386,7 @@ class CrossSectionalFactorStrategy:
             # a time-series rule that took the top ten would silently become a
             # cross-sectional one.
             selected = [t for v, t in scored if v > 0.0]
-            return _equal_weights(window.tickers, selected, self.gross_exposure)
+            return self._weigh(window, selected)
 
         scored.sort(key=lambda pair: (-pair[0], pair[1]))
         if self.long_short:
@@ -357,7 +396,15 @@ class CrossSectionalFactorStrategy:
             shorts = [t for _, t in scored[n - k :]]
             return _long_short_weights(window.tickers, longs, shorts, self.gross_exposure)
         selected = [t for _, t in scored[: self.top_n]]
-        return _equal_weights(window.tickers, selected, self.gross_exposure)
+        return self._weigh(window, selected)
+
+    def _weigh(self, window: PanelWindow, selected: list[str]) -> Mapping[str, float]:
+        """Apply the configured weighting to an already-selected set of names."""
+
+        if self.weighting == WEIGHTING_EQUAL:
+            return _equal_weights(window.tickers, selected, self.gross_exposure)
+        vols = {ticker: _realised_vol(window, ticker, INVERSE_VOL_WINDOW) for ticker in selected}
+        return _inverse_volatility_weights(window.tickers, selected, self.gross_exposure, vols)
 
     @classmethod
     def from_spec(cls, params: Mapping[str, Any]) -> CrossSectionalFactorStrategy:
@@ -368,6 +415,7 @@ class CrossSectionalFactorStrategy:
             top_n=int(params.get("top_n", DEFAULT_TOP_N)),
             gross_exposure=float(params.get("gross_exposure", DEFAULT_GROSS_EXPOSURE)),
             long_short=bool(params.get("long_short", False)),
+            weighting=str(params.get("weighting", WEIGHTING_EQUAL)),
         )
 
 
@@ -384,6 +432,10 @@ __all__ = [
     "FACTOR_SCORERS",
     "FACTOR_TIME_SERIES",
     "FACTOR_VOLUME_SHOCK",
+    "INVERSE_VOL_WINDOW",
     "MIN_UNIVERSE_FOR_NETWORK",
+    "WEIGHTINGS",
+    "WEIGHTING_EQUAL",
+    "WEIGHTING_INVERSE_VOL",
     "CrossSectionalFactorStrategy",
 ]

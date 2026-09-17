@@ -111,6 +111,81 @@ def _equal_weights(
     return {t: (per_name if t in chosen else 0.0) for t in tickers}
 
 
+# Matches the horizon at which volatility-rank persistence was actually measured
+# (#226, rho +0.880 month to month). A longer window forecasts a different
+# quantity than the one shown to persist.
+_INVERSE_VOL_WINDOW = 21
+
+
+def _trailing_vol(window: PanelWindow, ticker: str, lookback: int) -> float | None:
+    """Realised volatility of simple returns over the trailing window."""
+
+    closes = window.closes(ticker)
+    if len(closes) < lookback + 1:
+        return None
+    prices = closes[-(lookback + 1) :]
+    returns = [
+        prices[i] / prices[i - 1] - 1.0 for i in range(1, len(prices)) if prices[i - 1] > 0.0
+    ]
+    if len(returns) < 2:
+        return None
+    mean = sum(returns) / len(returns)
+    variance = sum((r - mean) ** 2 for r in returns) / (len(returns) - 1)
+    return float(variance**0.5)
+
+
+def _inverse_volatility_weights(
+    tickers: tuple[str, ...],
+    selected: list[str],
+    gross_exposure: float,
+    volatilities: Mapping[str, float | None],
+) -> dict[str, float]:
+    """Spread ``gross_exposure`` over ``selected`` in proportion to 1/volatility.
+
+    **Why this is the one weighting the firm has evidence for.** Measured on its
+    own fifty names over 74 month-ends (#226), trailing 21-day volatility rank
+    has a month-to-month Spearman rho of **+0.880**, positive in 100% of periods,
+    while return rank sits at +0.019. Next month's volatility is close to known;
+    next month's return is not. Equal weighting ignores the one thing the firm
+    can actually forecast.
+
+    Deliberately a *weighting* change and not an alpha claim: the names held are
+    whatever the factor selected, unchanged. This decides only how much of each,
+    and it can help only through the denominator of a risk-adjusted measure.
+
+    **A name with no usable volatility keeps its place at the average weight
+    rather than being dropped.** Dropping it would let a data gap silently change
+    which names the strategy holds — turning a weighting experiment into a
+    different portfolio, so the comparison against equal weighting would be
+    measuring two things at once.
+
+    Zero and negative volatilities count as missing for the same reason they do
+    elsewhere in this package: a zero divides, and a flat series is absent data
+    rather than a riskless asset.
+    """
+
+    if not selected:
+        return dict.fromkeys(tickers, 0.0)
+
+    inverse: dict[str, float | None] = {}
+    for ticker in selected:
+        vol = volatilities.get(ticker)
+        inverse[ticker] = (1.0 / vol) if vol is not None and vol > 0.0 else None
+
+    usable = [value for value in inverse.values() if value is not None]
+    if not usable:
+        # Nothing has a volatility. The factor's selection is still valid, so
+        # fall back to equal weights rather than refusing to hold anything.
+        return _equal_weights(tickers, selected, gross_exposure)
+
+    # A missing name takes the average inverse-vol: neutral, so a data gap
+    # neither favours nor penalises the name it affects.
+    neutral = sum(usable) / len(usable)
+    filled = {t: (neutral if v is None else v) for t, v in inverse.items()}
+    total = sum(filled.values())
+    return {t: (gross_exposure * filled[t] / total if t in filled else 0.0) for t in tickers}
+
+
 @dataclass(frozen=True, slots=True)
 class CrossSectionalTrendStrategy:
     """The reference crossover, applied to every ticker in the panel."""
@@ -202,6 +277,18 @@ class CrossSectionalMomentumStrategy:
     skip: int = DEFAULT_SKIP
     top_n: int = DEFAULT_TOP_N
     gross_exposure: float = DEFAULT_GROSS_EXPOSURE
+    weighting: str = "equal"
+    """How the selected winners share the book.
+
+    ``"inverse-volatility"`` sizes each holding by 1/vol instead of equally. The
+    selection is untouched — same names, different amounts — so this cannot
+    manufacture alpha, only reallocate risk across names the momentum rule
+    already chose. It is here because #226 measured volatility rank persisting at
+    Spearman rho +0.880 on this universe while return rank sat at +0.019: the
+    firm can forecast how volatile a name will be, and cannot forecast its
+    return. Equal weighting uses neither fact.
+    """
+
     long_short: bool = False
     """Short the bottom of the ranking as well as buying the top.
 
@@ -332,11 +419,15 @@ class CrossSectionalMomentumStrategy:
         # Long-only by construction: a negative formation return is a loser, and
         # holding it would make this a different strategy wearing this name.
         selected = [t for r, t in scored[: self.top_n] if r > 0.0]
+        if self.weighting == "inverse-volatility":
+            vols = {t: _trailing_vol(window, t, _INVERSE_VOL_WINDOW) for t in selected}
+            return _inverse_volatility_weights(window.tickers, selected, self.gross_exposure, vols)
         return _equal_weights(window.tickers, selected, self.gross_exposure)
 
     @classmethod
     def from_spec(cls, params: Mapping[str, Any]) -> CrossSectionalMomentumStrategy:
         return cls(
+            weighting=str(params.get("weighting", "equal")),
             lookback=int(params.get("lookback", DEFAULT_LOOKBACK)),
             skip=int(params.get("skip", DEFAULT_SKIP)),
             top_n=int(params.get("top_n", DEFAULT_TOP_N)),

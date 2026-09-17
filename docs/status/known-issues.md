@@ -1745,6 +1745,43 @@ forecastable information on this universe, which independently corroborates the
 Evaluator killing cross-sectional momentum at IR 0.415 and 0.392. Two unrelated
 measurements, one conclusion, and the second explains the first.
 
+### Inverse-volatility weighting was tested and does not produce viability (#227)
+
+The one weighting the firm had evidence for — volatility is forecastable at
+rho +0.880, returns are not — applied to three existing signals over 1,544 bars:
+
+| strategy | weighting | Sharpe | IR | maxdd | trades |
+|---|---|---|---|---|---|
+| momentum 126/21 | equal | 0.837 | **0.456** | 0.539 | 2,547 |
+| momentum 126/21 | inverse-vol | 0.749 | 0.108 | 0.423 | 14,974 |
+| low-volatility 252 | equal | 0.900 | −0.495 | 0.158 | 198 |
+| low-volatility 252 | inverse-vol (252d) | **1.016** | −0.503 | 0.111 | 12,976 |
+| volume-shock 50 | equal | 0.881 | 0.236 | 0.616 | 16,228 |
+| volume-shock 50 | inverse-vol | 0.733 | −0.805 | 0.418 | 22,999 |
+
+**Three things were learned and all three are worth keeping.**
+
+**Sharpe 1.016 is the first time anything in this firm has cleared the 1.0
+Sharpe floor.** Risk reduction is real and it works: max drawdown fell in every
+single configuration, 0.539→0.401 for momentum and 0.158→0.111 for low-vol.
+
+**Turnover is structural, not a tuning problem.** The trade count barely moved
+across volatility windows of 21, 63, 126 and 252 bars — 14,974 at every one.
+Volatility changes every bar however long the estimate, so continuously
+recomputed weights rebalance every bar. Fixing this needs a rebalance *schedule*
+(the paper ranks monthly), not a slower estimator.
+
+**IR got worse in every configuration, and that is the finding.** The gate that
+binds is the information ratio, which measures active return against
+equal-weight buy-and-hold. Lowering a book's volatility lowers its participation
+in a rising benchmark, so better risk metrics buy worse active return almost by
+construction.
+
+**Risk engineering cannot substitute for alpha.** The firm can now make a
+portfolio safer; it still cannot make one that beats the benchmark. That points
+straight back at the top of this issue: the constraint is a missing signal, and
+no amount of weighting fixes a signal that is not there.
+
 Remaining on this thread: the paper's method is three matrices (return
 correlation distance, plus Markov transition matrices over both ranks) feeding a
 market-neutral long-short and an opportunistic long-only sleeve. That is a
