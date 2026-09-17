@@ -151,15 +151,27 @@ not targets.
 The spec calls for Kelly-fractional sizing: `Kelly fraction × posterior edge × regime fit`,
 with the fraction at 25% by default and capped at 50%.
 
-**The posterior input does not exist.** There is no Bayesian Updater in the firm — no
-spec implementation, no service, no table. Kelly sizing cannot be computed from a
-posterior that is never produced, and inventing one from backtest Sharpe is the exact
-substitution the spec forbids ("Kelly inputs come from the Bayesian Updater's posterior,
-not from raw backtest Sharpe").
+**The posterior input exists as of 2026-09-17** (`risk_officer/posterior.py`). It is a
+normal-normal conjugate update over the annualized information ratio, built from the
+**live per-session excess series** that `research.live_benchmark` already produces —
+not from backtest Sharpe, which the spec forbids and which is still not what happens.
 
-So this card implements the spec's own documented fallback — open question 4, "Kelly
-inputs when posterior is thin: fall back to flat fraction, currently yes, at the lowest
-tier":
+Why a posterior rather than a larger flat number: `t = IR x sqrt(years)`, so at the
+promote floor a significant forward verdict is ~16 years away. Waiting for one means
+never acting on evidence. The posterior removes the need for a verdict — size becomes
+continuous in accumulated evidence.
+
+**The posterior replaces the stage fraction rather than multiplying it**, so accumulated
+evidence can raise size past the stage without a manual promotion (Mike, 2026-09-17).
+This is a deliberate governance change: **code may now increase risk.** The brakes are
+the prior, the cap below, and the untouched `max_daily_loss` / `max_strategy_drawdown`.
+
+The prior is centred on the **promote floor** (IR 0.5) — what a strategy had to clear to
+be staged at all. That gives the rule a property worth stating: **with no live evidence
+it returns exactly 0.25**, the flat paper fraction. The table below is therefore the
+zero-evidence limit of the new rule rather than a separate branch, and it remains the
+spec's documented fallback for a thin posterior (open question 4, "fall back to flat
+fraction, currently yes, at the lowest tier"):
 
 | Stage | Fraction of the strategy's requested size |
 |---|---|
@@ -168,8 +180,19 @@ tier":
 | `live-paper` | **50%** — requires Mike's approval per the spec |
 | anything else | **25%** |
 
-The Kelly slot is present in the code and explicitly unpopulated. When a Bayesian Updater
-exists, it fills that slot; nothing else needs to change.
+The Kelly cap is **50%** and no amount of evidence sizes past it here; the exposure and
+drawdown limits still bind on top.
+
+**What this does not have, stated so nobody assumes otherwise.** The update is linear and
+unbiased — equal and opposite evidence moves size equally and oppositely. All of the
+conservatism is in the prior's position and the two clamps. Reaching zero needs a
+sustained observed IR of about −0.5; reaching the cap needs about +1.5. The effect is
+one-sided, the mechanism is not.
+
+**Unruled calibrations, Mike's to set** (first cuts, same status as the limits above):
+the prior's width (`PRIOR_IR_SD = 1.0`) and the IR at which a strategy earns the full cap
+(`FULL_SIZE_IR = 1.0`). Widening the prior makes live evidence count for more and the
+promote gate for less.
 
 ## Manual override
 
