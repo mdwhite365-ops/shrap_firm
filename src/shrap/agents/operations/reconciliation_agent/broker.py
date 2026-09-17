@@ -90,9 +90,30 @@ class AlpacaPaperSnapshotReader:
                     quantity=float(raw.get("qty", 0.0)),
                     market_value=float(market_value),
                     side=_optional_str(raw.get("side")),
+                    # Taken from the venue, never recomputed. Absent rather
+                    # than zero when the venue omits it: a missing P&L must not
+                    # read to an exit rule as "flat, nothing to do".
+                    unrealized_plpc=_optional_float(raw.get("unrealized_plpc")),
+                    unrealized_intraday_plpc=_optional_float(raw.get("unrealized_intraday_plpc")),
                 )
             )
         return positions
+
+
+def _optional_float(value: object) -> float | None:
+    """Parse a venue-supplied number, or ``None`` if it is absent or unusable.
+
+    Alpaca sends these as strings. A value that will not parse is returned as
+    ``None`` rather than 0.0, because an exit rule reading 0.0 would conclude
+    the position is flat and in no need of action.
+    """
+
+    if value is None:
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _optional_str(value: object) -> str | None:

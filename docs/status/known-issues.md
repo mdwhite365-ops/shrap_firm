@@ -1986,3 +1986,173 @@ quiet before it has any effect.
 KI-035 said the constraint is a missing signal. This says the firm cannot
 reliably *tell* whether a signal is there. Both point the same way: stop
 measuring harder, and feed the funnel.
+
+---
+
+## KI-037 — The firm could not take a profit or cut a loss
+
+**Status:** mechanism shipped and **unarmed**; the thresholds are Mike's ruling.
+**Found:** 2026-09-17, from Mike's own description of what the accounts were
+doing, then confirmed against the live database.
+**Severity:** high. It is the largest identified cause of the paper accounts
+being flat.
+
+### What Mike said, and what the data says
+
+> "it only trades at 630am and thats it, doesnt take profits during the day if
+> theres a big spike or anything like each acount has been flat, like its only
+> made $70 in the multiude of weeks its been running and it buys like 1-10 stock
+> of something at a time not very aggressive"
+
+All four observations are correct, and they have **three different causes.**
+
+**1. It only trades at the open.** Every filled order in the firm's history is
+stamped between **09:30:03 and 09:30:07 ET**. One burst at the open, nothing for
+the remaining 390 minutes. That is the daily cadence working as designed: the
+Runner's tick loop does fire every 60s, but every strategy resolves to
+`CADENCE_DAILY`, so `slot_for` returns `session`, the `last_slot` guard sees it
+already stamped, and each later tick does one state read and emits nothing.
+
+**2. There was no exit rule of any kind.** `grep` for `stop_loss`,
+`take_profit`, `profit_target` and `trailing_stop` across the whole codebase
+returned **zero matches**. The only way out of a position was the next morning's
+re-ranking — and because every strategy is momentum, a name that spikes +20%
+moves *up* the ranking, so the re-rank tends to hold it or buy more. **The one
+mechanism that would take the profit did not exist.**
+
+**3. The accounts are 84% cash.** This is the dominant cause of the flat return:
+
+    account         equity      cash    deployed
+    PA3HEG2CLXLU  10,073.99  8,496.02     15.7%
+    PA3KQN57WVXY  10,054.58  8,366.94     16.8%
+    PA3YPMG9AD4Z  10,066.19 10,066.19      0.0%
+
+Stage fraction `0.25` x regime band `0.75` = **0.1875**, working exactly as
+configured. The $74 is what ~$1,600 earned in a melt-up; the $8,400 earned
+nothing. "Buys 1-10 shares" is the same fact: 0.1875 x $10,000 / ~$190 ≈ 10.
+
+### The exposure arithmetic, measured
+
+Holding selection perfectly constant — the strategy *is* the equal-weight
+benchmark, only smaller — gives:
+
+    exposure        IR    Sharpe
+      1.0000    +0.000    +1.152
+      0.5000    -1.152    +1.152
+      0.2500    -1.152    +1.152
+      0.1875    -1.152    +1.152   <- the live book
+      0.1470    -1.152    +1.152   <- what posterior sizing would set
+
+**IR is `-Sharpe(benchmark)` at every exposure below 1.0, independent of the
+level.** Under-investment against a fully-invested benchmark costs 1.15 of IR
+before stock selection says anything, which is the same mechanism that made
+low-volatility score IR -0.495 at Sharpe 0.900.
+
+`live_benchmark.py` *is* exposure-matched, so live scoring is not corrupted by
+this — but its own docstring warns it measures "did the account beat a passive
+book of the same size" and says **do not report it as alpha.** The firm can
+therefore report a win while making $70.
+
+### What shipped
+
+`risk_officer/exits.py` — pure rule. Four thresholds, all `None`:
+`take_profit_pct`, `stop_loss_pct`, and an `intraday_` pair measuring **today's
+move only**, which is the case Mike named. `strategy_runner/exit_planner.py`
+builds sells with the *same* `build_payload` an entry uses, onto the *same*
+`trading.strategy.signal` stream, so nothing downstream can tell an exit from an
+entry — an exit with its own path would be an exit with its own gates to be
+missing. `run_exit_pass` runs on every tick **independent of any strategy's
+cadence**, because a strategy's cadence should govern when it may enter, not how
+long a loss must be held.
+
+Decisions worth recording:
+
+- **Unarmed does not read the database.** Not one query until a threshold is set.
+- **An account with no reconciliation pass is skipped.** "No rows" is not
+  "flat"; exiting against an unobserved book is the KI-030 shape.
+- **One unreadable account does not stop the others.**
+- **A sold ticker is suppressed for 900s**, comfortably longer than the ~300s
+  snapshot refresh, or the rule re-fires every tick while the fill is in flight
+  and oversells into a short. In-process, so a restart is bounded by the
+  Pre-Trade Checker's own symbol cooldown rather than fixed.
+- **Shorts are skipped**, because the broker's `plpc` sign convention for a
+  short is unverified here and every strategy is long-only. Failing to act is
+  recoverable; inverting a stop is not.
+- **Dust is skipped** at the Pre-Trade Checker's own `MIN_TRADEABLE_NOTIONAL`
+  rather than a second number. The live book holds four positions at `1e-09`
+  shares and `U` at $0.53 — the KI-033 residue. Emitting those would add ~1,500
+  refused orders a day and bury the one exit that mattered.
+- **At most one exit per position per pass**, or two sells would oversell into a
+  short.
+
+### Prerequisite: the P&L had to be captured first
+
+Alpaca reports `avg_entry_price` and `unrealized_plpc` on every position and the
+firm **discarded both** — `grep` returned zero matches. `BrokerPosition` now
+carries `unrealized_plpc` and `unrealized_intraday_plpc`, parsed from the venue
+and **never reconstructed** from a cost basis and a price: recomputing a fact
+the broker already recorded is the shape of #192–#199.
+
+`ops.position_snapshots` gained both columns (migration applied to the Dell and
+verified). A missing value stays `None` rather than becoming 0.0, because 0.0
+would read to the rule as "flat, nothing to do" — a silent no-op that looks like
+a clean pass.
+
+**Arming it today would do nothing.** Every position in the live table has
+`NULL` P&L because only the rebuilt Reconciliation Agent writes it, and the rule
+skips `None`. So the safe order is: deploy, confirm the columns populate, *then*
+set a threshold.
+
+### Still open — and it is the bigger number
+
+The exit rule addresses observation 2. **Observation 3 is worth more and is
+untouched:** 84% of each account is idle. Raising the stage fraction is a
+one-line change and a governance decision, not a tuning one — the fraction is
+low precisely because nothing has cleared the promote floor, and KI-036 showed
+that floor cannot be cleared on evidence a six-year backtest can supply. That is
+a deadlock: **exposure is low because edge is unproven, and a $70 return cannot
+prove edge.** Breaking it is Mike's call, not code's.
+
+Note also that **posterior sizing (KI-036, merged and off) would take exposure
+from 0.1875 to ~0.11**, halving positions further. It is the correct belief given
+measured edge and it moves directly against the flat-account problem. Both facts
+are true; the tension is the deadlock above.
+
+### Uncalibrated, deliberately
+
+There is no defensible default stop. A guessed threshold is a guess about when
+to realise a loss. One property an operator must know before arming: **there is
+no cap on how many positions may exit in one pass**, so a market-wide drop that
+breaches the stop everywhere liquidates the book at once. That is arguably what
+a stop is for, and it is also how a stop turns a drawdown into a realised loss
+at the bottom. The firm has not ruled on a cap, so none was invented.
+
+---
+
+## KI-038 — The research funnel's filter model is retired on 2026-09-25
+
+**Status:** open, with a hard deadline eight days out.
+**Found:** 2026-09-17, from Ollama's own console notice.
+**Severity:** high, and entirely predictable — it is a dated announcement, not a
+failure.
+
+`qwen3.5:397b` is the model the Tech Watcher filters on, promoted 2026-07-31 by
+the first shadow eval and carrying **1,361 requests in the last week** — it is
+production, not an experiment. Ollama's console says it retires **September 25,
+2026**.
+
+When it goes, the funnel's filter leg stops. KI-009 is the precedent for how
+that looks: the funnel admitted nothing for two months and the cause was one leg
+storing the wrong thing, which nobody noticed because "no admissions" and "no
+candidates worth admitting" are the same empty table.
+
+The firm already has the mechanism to fix this: `research/model_eval.py` runs a
+shadow eval and the §(e) ledger records the promotion. The candidates on the
+account are larger than the incumbent — `kimi-k3` (1.56T), `glm-5.1` (1.5T),
+`deepseek-v4-pro:0813` (893B), `glm-5.3` (755B), `mistral-large-3:675b`,
+`kimi-k2.7-code` (595B).
+
+**This is a re-promotion card, not a research one.** Run the shadow eval against
+two or three candidates, promote on the same criteria that promoted the
+incumbent, write the ledger entry. The one thing not to do is let the date pass
+and diagnose it as a mysteriously quiet funnel.
