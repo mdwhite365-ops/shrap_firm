@@ -33,7 +33,20 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import pandas_market_calendars as mcal
+# pandas-market-calendars is imported lazily, inside the two functions that read
+# a calendar, and deliberately NOT at module scope.
+#
+# It used to be a module-level import, which was fine while the only consumer was
+# the Market Phase Scheduler — whose container installs the `market-phase` extra.
+# #217 then had the Evaluator's store import this module for `is_regular_hours`,
+# and the strategy-evaluator extra does not ship pandas-market-calendars. The
+# result was a ModuleNotFoundError at import of `shrap-strategy-evaluate`, which
+# took down the DAILY evaluation path too — a module-level import in a file the
+# daily path merely passes through.
+#
+# Importing inside the functions keeps the dependency where it is genuinely
+# needed: this module's phase model, dataclasses and constants are pure Python
+# and every consumer can read them without an exchange-calendar library.
 
 DEFAULT_CALENDAR = "XNYS"
 DEFAULT_TIMEZONE = "America/New_York"
@@ -133,6 +146,8 @@ def build_schedule(
 ) -> PhaseSchedule:
     """Compute every phase transition on calendar days ``start`` through ``end``."""
 
+    import pandas_market_calendars as mcal
+
     tz = ZoneInfo(timezone_name)
     calendar = mcal.get_calendar(calendar_name)
     frame = calendar.schedule(
@@ -210,6 +225,8 @@ def regular_session_bounds(
     than present with an empty range, so ``bar_ts.date() not in bounds`` is a
     complete test for "this bar is not from a trading session".
     """
+
+    import pandas_market_calendars as mcal
 
     calendar = mcal.get_calendar(calendar_name)
     frame = calendar.schedule(start_date=start.isoformat(), end_date=end.isoformat())
