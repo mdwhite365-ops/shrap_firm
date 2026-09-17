@@ -13,9 +13,24 @@ own documented fallback for exactly this case — open question 4, "Kelly inputs
 when posterior is thin: fall back to flat fraction, currently yes, at the lowest
 tier" — and leaves the multiplier visible and unset.
 
-:class:`SizingDecision.kelly_posterior` is that empty slot. It is always ``None``
-today. When a Bayesian Updater exists it populates that field and
-:func:`size_intent` starts multiplying by it; nothing else changes.
+:class:`SizingDecision.kelly_posterior` was that empty slot. As of 2026-09-17 it
+is filled by :mod:`shrap.risk_compliance.risk_officer.posterior`, which supplies
+the missing factor from the live per-session excess series rather than from
+backtest Sharpe — the substitution the spec forbids is still forbidden, and is
+still not what happens here.
+
+**The fallback above remains the no-evidence path**, and it is now the *limit* of
+the new rule rather than a separate branch: a posterior built from no live
+sessions returns exactly the flat 0.25 the table does. A caller that supplies no
+posterior at all gets the old behaviour unchanged.
+
+One deliberate difference from the sentence this docstring used to end with. The
+spec's ``Kelly fraction x posterior edge`` reads as a product, and the posterior
+**replaces** the stage fraction here instead of multiplying it. Multiplying would
+compound two answers to one question and could only size down; replacing lets
+evidence raise size past the stage, which is the decision Mike took on
+2026-09-17. Recorded here because it is a departure from a literal reading of the
+spec, not an implementation detail.
 """
 
 from __future__ import annotations
@@ -23,6 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from shrap.risk_compliance.risk_officer.limits import stage_fraction
+from shrap.risk_compliance.risk_officer.posterior import SkillPosterior
 
 # Below this the order is noise, not a position. A scaled slot worth less than a
 # dollar is not worth a broker round trip, and it keeps a rounding artefact from
@@ -73,6 +89,7 @@ def size_intent(
     stage: str | None,
     regime_multiplier: float = 1.0,
     reference_price: float | None = None,
+    posterior: SkillPosterior | None = None,
 ) -> SizingDecision:
     """Scale a requested quantity down to what the stage and regime permit.
 
@@ -99,7 +116,15 @@ def size_intent(
     """
 
     fraction = stage_fraction(stage)
-    scale = fraction * max(0.0, min(regime_multiplier, 1.0))
+    # The posterior REPLACES the stage fraction rather than multiplying it
+    # (Mike, 2026-09-17). Multiplying would compound two answers to the same
+    # question and could only ever size down; replacing lets accumulated evidence
+    # raise size past the stage, which is the decision that was taken. With no
+    # posterior supplied this is byte-identical to the previous behaviour, and
+    # with a posterior built from no evidence it returns the same 0.25 the flat
+    # table does — see `posterior.py` for why that is not a coincidence.
+    effective_fraction = fraction if posterior is None else posterior.fraction
+    scale = effective_fraction * max(0.0, min(regime_multiplier, 1.0))
     approved = requested_quantity * scale if requested_quantity > 0 else 0.0
     approved = max(0.0, min(approved, requested_quantity))
 
@@ -116,7 +141,7 @@ def size_intent(
         stage_fraction=fraction,
         regime_multiplier=regime_multiplier,
         reference_price=reference_price,
-        kelly_posterior=None,
+        kelly_posterior=None if posterior is None else posterior.fraction,
     )
 
 
