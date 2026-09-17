@@ -1150,3 +1150,47 @@ async def test_an_unmeasured_parent_leaves_the_revision_alone(tmp_path: Path) ->
 
     assert reader.ir_queries == [("01PARENT", PROTOCOL_VERSION)]
     assert outcome.reason != "worse-than-parent"
+
+
+def test_the_card_says_when_a_verdict_is_within_noise() -> None:
+    """The reader of a card must not mistake a coin flip for a near miss.
+
+    Measured 2026-09-17: on the firm's own six-year panel the standard error of
+    an annualised IR is ~0.47, so its best-ever strategy (0.448) sits 0.11 SE
+    below the 0.50 floor. The card previously printed "0.448" next to a floor of
+    "0.50" and let the reader conclude the strategy was almost good enough.
+    """
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+
+    card = render_evaluation_card(
+        _outcome_with(
+            {
+                "information_ratio": 0.448,
+                "precision": {
+                    "standard_error": 0.463,
+                    "sigmas_from_floor": 0.11,
+                    "years": 5.1,
+                    "is_resolvable": False,
+                    "rolling_min": -0.021,
+                    "rolling_max": 0.743,
+                    "rolling_share_above_floor": 0.16,
+                },
+            }
+        )
+    )
+
+    assert "### How precise is that number" in card
+    assert "cannot tell these apart" in card
+    assert "0.463" in card
+    assert "16% of windows" in card
+
+
+def test_the_card_omits_the_precision_section_when_nothing_measured_it() -> None:
+    """A refusal card has no active series, so an error bar would be invented."""
+
+    from shrap.research.strategy_evaluator.pipeline import render_evaluation_card
+
+    assert "### How precise is that number" not in render_evaluation_card(
+        _outcome_with({"information_ratio": 0.42})
+    )

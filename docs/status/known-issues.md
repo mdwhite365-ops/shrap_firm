@@ -1802,3 +1802,114 @@ multiplying zero by 19 teaches nothing. The instrument works; the firm cannot ye
 produce the quantity it measures.
 
 **The funnel needs feeding before any of it pays.**
+
+---
+
+## KI-036 — The promote gate has never been failed on evidence
+
+**Status:** open — the measurement is shipped and reported; what to do about the
+gate is Mike's ruling.
+**Found:** 2026-09-17, while trying to find *any* change that pushes a strategy
+above the IR floor.
+**Severity:** high. It does not break anything, and it means several months of
+"close but not good enough" verdicts said less than the firm believed.
+
+### The finding
+
+The promote gate compares a point estimate of the information ratio against a
+floor of 0.50. Nobody had ever asked how precisely that estimate is known.
+
+On the firm's own panel — 50 names, 1,543 daily bars, 2020-07-27 to 2026-09-16 —
+the standard error of an annualised IR over 5.1 years is **±0.47**. The best IR
+the firm has ever recorded is **0.448**. The distance between them:
+
+    |0.50 - 0.448| / 0.47 = 0.11 standard errors
+
+That is no distance at all. The strategy was not rejected for being worse than
+the floor. It was rejected by noise.
+
+Re-measuring the same backtest on rolling three-year windows — identical
+decisions, only the measurement period moves — shows the same thing directly:
+
+    strategy            full IR    mean      sd      min      max   >=0.50
+    momentum 126/21      +0.448   +0.334   0.168   -0.021   +0.743     16%
+    volume-shock 50      +0.248   -0.258   0.286   -0.715   +0.512      3%
+    low-volatility 252   -0.501   -0.835   0.402   -1.550   -0.141      0%
+    time-series 252      -0.092   -0.150   0.279   -0.939   +0.416      0%
+
+The firm's best strategy scores between -0.02 and +0.74 depending on which three
+years you look at, and clears the floor in one window out of six. Volume-shock
+changes *sign* — +0.248 measured from 2020, -0.256 measured from 2021.
+
+The rolling spread is a **lower bound**: at a one-month step the windows overlap
+by 97%, so those estimates are near-duplicates. The true uncertainty is the
+standard error, and it is nearly three times larger than the rolling sd.
+
+### Why no amount of data fixes it
+
+    5.1 years  -> SE 0.470   resolves a gap of 0.94 IR at 2 sigma
+     10 years  -> SE 0.335   resolves a gap of 0.67
+     20 years  -> SE 0.237   resolves a gap of 0.47
+     50 years  -> SE 0.150   resolves a gap of 0.30
+
+Separating 0.45 from 0.50 at two sigma takes **~1,800 years** of daily history.
+
+The panel's six years is a backfill depth limit rather than a data limit — 43 of
+50 names start in 2020, one goes back to 2018-11-01 — so the history *could* be
+deepened. It is worth doing for other reasons and it does not touch this. There
+is no achievable sample size at which a backtest validates the 0.50 floor.
+
+**This is the 16-year forward-test problem, applied to the backtest**, and it is
+worse there: `t = IR x sqrt(years)` says a paper-traded strategy needs 16 years
+to separate from *zero*, and the backtest gate asks it to separate from *0.50*.
+The arithmetic had never been run in this direction.
+
+### What this does and does not license
+
+It does **not** say the gates are too strict and should be loosened. A strategy
+scoring 0.55 is exactly as indistinguishable from 0.50 as one scoring 0.45, so a
+*pass* at this sample size carries as little information as a fail. Lowering the
+floor would promote noise; raising it would reject noise. Both act on nothing.
+
+It does say that **"nearly cleared the floor" was never a meaningful sentence**,
+and that searching for a strategy variant that clears it is searching for a
+favourable measurement error. With 14 strategies tested, that search finds one
+eventually — which is what the per-lineage multiple-testing correction already
+guards against, for exactly this reason.
+
+### What was ruled out on the way
+
+Two mechanisms were measured and eliminated before this became the finding:
+
+- **Rebalance scheduling / turnover reduction.** Momentum 126/21 with the cost
+  model set to *zero* scores IR 0.487 — still under the floor. The most any
+  turnover change could ever recover is +0.038, so the monthly-rebalance card
+  was dead before it was written. Cost drag is real elsewhere (volume-shock
+  pays 6.90%/yr over 16,218 trades, worth +0.264 IR) but not here.
+- **Combining signals for breadth.** The active-return correlations are
+  genuinely near zero — momentum vs volume-shock **-0.05**, momentum vs low-vol
+  +0.05 — so `IR = sqrt(sum(IR_i^2))` is available in principle. It fails in
+  practice because only one of the four signals has a positive IR on a common
+  window, and breadth multiplies skill rather than supplying it. (Low-volatility
+  and high-proximity correlate at **+0.85** — they are one bet, not two, which
+  matters for the "~11 uncorrelated strategies" plan.)
+
+### The fix
+
+`src/shrap/research/ir_precision.py` computes the standard error and the
+rolling re-measurement; `ActiveMetrics.precision` carries it through every
+walk-forward result; the evaluation card prints a **How precise is that number**
+section that says in words when a verdict is within noise. No gate changed.
+
+The honest successor to a threshold on a noisy statistic is a posterior, and the
+firm already has one — `risk_compliance/risk_officer/posterior.py`, shipped the
+same night (#218), sizes continuously in accumulated evidence and returns
+exactly the flat 0.25 paper fraction under zero evidence. The card that connects
+the backtest to it, instead of throwing the result at a threshold, is not
+written. **That is the ruling this issue needs.**
+
+### The shape, again
+
+KI-035 said the constraint is a missing signal. This says the firm cannot
+reliably *tell* whether a signal is there. Both point the same way: stop
+measuring harder, and feed the funnel.

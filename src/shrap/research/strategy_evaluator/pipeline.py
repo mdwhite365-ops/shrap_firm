@@ -1147,6 +1147,48 @@ def _coverage_lines(outcome: EvaluationOutcome) -> list[str]:
     return lines
 
 
+def _precision_lines(precision: object) -> list[str]:
+    """How much of the information ratio above is noise.
+
+    Written into the card because the verdict is a comparison against a floor,
+    and a comparison is meaningless without knowing how well the quantity is
+    measured. On a six-year panel it is measured badly: the standard error on
+    an annualised IR is ~0.47, so a strategy scoring 0.45 and the 0.50 floor
+    are 0.11 SE apart. Separating them at two sigma would take ~1,800 years of
+    daily history, which is the argument for sizing on a posterior rather than
+    waiting for a verdict. See ``shrap.research.ir_precision``.
+    """
+
+    if not isinstance(precision, Mapping):
+        return []
+    se = precision.get("standard_error")
+    sigmas = precision.get("sigmas_from_floor")
+    if se is None or sigmas is None:
+        return []
+    resolvable = bool(precision.get("is_resolvable"))
+    note = (
+        "the sample can tell these apart"
+        if resolvable
+        else "**the sample cannot tell these apart** — this verdict is within noise"
+    )
+    lines = [
+        "### How precise is that number",
+        "",
+        f"- Standard error: ±{_num(se)} over {_num(precision.get('years'))} years",
+        f"- Distance from the floor: {_num(sigmas)} standard errors — {note}",
+    ]
+    lo, hi = precision.get("rolling_min"), precision.get("rolling_max")
+    if lo is not None and hi is not None:
+        share = precision.get("rolling_share_above_floor")
+        lines.append(
+            f"- Re-measured on rolling three-year windows (same decisions, "
+            f"different measurement period): {_num(lo)} to {_num(hi)}"
+            + (f", above the floor in {float(share):.0%} of windows" if share is not None else "")
+        )
+    lines.append("")
+    return lines
+
+
 def render_evaluation_card(outcome: EvaluationOutcome) -> str:
     """Render the Markdown evaluation card, including the required disclaimer."""
 
@@ -1194,6 +1236,7 @@ def render_evaluation_card(outcome: EvaluationOutcome) -> str:
             "- Benchmark total return: "
             + _pct(outcome.active_metrics.get("benchmark_total_return")),
             "",
+            *_precision_lines(outcome.active_metrics.get("precision")),
             "> Absolute Sharpe cannot tell being invested apart from being skilful: "
             "naive buy-and-hold scores 1.03-1.16 on drifting data with no timing rule "
             "at all. The information ratio above is what the promote gate uses.",
