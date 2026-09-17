@@ -225,3 +225,42 @@ def test_the_excess_series_sums_to_the_reported_excess() -> None:
 
     assert len(result.excess_series) == 3
     assert sum(result.excess_series) == pytest.approx(result.excess)
+
+
+def test_information_ratio_is_invariant_to_position_scaling() -> None:
+    """The stage fraction cannot buy statistical significance.
+
+    The session handoff asserted for weeks that "the scaling that protects an
+    unproven strategy also prevents it from ever proving itself", and a risk
+    ruling was pending on it. It is false: IR is ``mean/std`` of the excess
+    series, scaling every position by ``k`` scales that series by ``k``, and the
+    ``k`` cancels.
+
+    This matters because the two readings point opposite ways. If sizing were a
+    lever on significance there would be a real trade-off between evidence and
+    drawdown; since it is not, raising the stage fraction multiplies the loss
+    and buys nothing. Pinned here so the claim cannot quietly return.
+    """
+
+    name_returns = [0.004, -0.007, 0.011, -0.002, 0.006, -0.009, 0.003, 0.008]
+    benchmark = [0.002, -0.005, 0.009, -0.001, 0.004, -0.006, 0.001, 0.005]
+
+    def ratio_at(scale: float) -> float:
+        equity = 10_000.0
+        points = [SessionPoint(date(2026, 8, 3), equity, equity * scale)]
+        for index, move in enumerate(name_returns):
+            equity *= 1.0 + scale * move
+            points.append(
+                SessionPoint(date(2026, 8, 3) + timedelta(days=index + 1), equity, equity * scale)
+            )
+        result = compare_to_benchmark(points, benchmark)
+        assert result.information_ratio is not None
+        return float(result.information_ratio)
+
+    quarter_size = ratio_at(0.1875)  # stage_fraction 0.25 x regime 0.75
+    full_size = ratio_at(1.0)
+
+    assert quarter_size == pytest.approx(full_size, rel=1e-9)
+
+    # The excess itself does scale — it is only the ratio that does not.
+    assert ratio_at(0.5) == pytest.approx(full_size, rel=1e-9)

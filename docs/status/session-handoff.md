@@ -142,20 +142,70 @@ fully invested benchmark said both strategies lost. Exposure-matched, one beat
 and one lost. Same data, opposite signs — and the tool prints both and says
 `DISAGREE` out loud rather than picking one.
 
-### The tension this exposes, which is Mike's to rule on
+### The stage fraction: the tension this file claimed was not real
 
 At the paper stage the Risk Officer scales every order by
-`stage_fraction x regime_multiplier` = **0.1875**. So a strategy runs at roughly
-a fifth of its intended size, and:
+`stage_fraction x regime_multiplier` = **0.1875**, so a strategy runs at roughly
+a fifth of its intended size. This file previously said:
 
-> **The scaling that protects an unproven strategy also prevents it from ever
-> proving itself.**
+> ~~The scaling that protects an unproven strategy also prevents it from ever
+> proving itself.~~ **False. Checked 2026-09-16.**
 
-If +0.84 were the true IR, significance would need `252 x (2/0.84)^2` ≈ **1,430
-sessions — about five and a half years.** Raising the stage fraction shortens
-that and raises the loss if the strategy is bad; leaving it means the forward
-test is a systems check, not evidence. Both are defensible. Nothing in the repo
-currently states which it is, and the promote gate quietly assumes the first.
+**Position scaling cannot affect the information ratio, because IR is a ratio of
+the return series to its own dispersion.** Scale every position by `k` and the
+excess-return series scales by `k`; `sharpe()` computes `mean/std`, and the `k`
+cancels. Verified by running the same synthetic strategy through
+`compare_to_benchmark` at three scales:
+
+| `stage x regime` | excess | avg exposure | **IR** |
+|---|---|---|---|
+| 0.1875 (today) | +0.1266% | 18.8% | **+0.142060** |
+| 0.75 | +0.5063% | 75.0% | **+0.142060** |
+| 1.00 | +0.6751% | 100.0% | **+0.142060** |
+
+Identical to six decimal places across a 5.3x size change. The t-statistic is a
+function of IR and session count alone, so **raising the stage fraction shortens
+the road to significance by exactly nothing.** The 1,430-session figure is
+correct; what was wrong was the claim that sizing is a lever on it.
+
+**The asymmetry this leaves is one-sided.** Raising the fraction multiplies the
+realised loss by the same factor it multiplies the gain, while leaving the
+evidence unchanged — and `max_strategy_drawdown` is 0.25, so a strategy that
+hits its kill threshold costs the account ~4.7% at 0.1875 and ~25% at 1.0, for
+the same knowledge either way.
+
+**Recommendation: leave `STAGE_FRACTIONS["paper"]` at 0.25.** Not as a
+compromise — there is no longer a trade-off to split. Revisit it as a *capital
+efficiency* question (a book at 18.75% exposure cannot reach 35%/year even with
+a good strategy) once a strategy has evidence from somewhere else. That is a
+different ruling with different reasoning, and it belongs after the evidence,
+not before it.
+
+**What does shorten the clock**, since sizing does not — `N = 252 x (2/IR)^2` to
+reach `t = 2`:
+
+| IR | sessions | wall-clock, daily bars |
+|---|---|---|
+| 0.50 (promote floor) | 4,032 | ~16 years |
+| 0.84 (the live reading) | 1,430 | ~5.7 years |
+| 1.00 | 1,008 | ~4 years |
+| 2.00 | 252 | ~1 year |
+
+Three real levers, all already on the roadmap and none of them sizing:
+
+1. **More observations per unit time.** The intraday cards (timeline 2.8–2.10).
+   Six bars a day instead of one is ~6x the evidence per calendar week *if* the
+   edge survives at that horizon. This is the only lever that shortens
+   wall-clock without improving the strategy.
+2. **More uncorrelated strategies.** `n` independent strategies at IR `r` give a
+   portfolio IR of `r x sqrt(n)` — the same arithmetic as the 11-strategy figure
+   above. The empty third account is one of these.
+3. **Higher IR per strategy.** Breadth and signal quality — the research-funnel
+   cards. `IR ≈ IC x sqrt(breadth)`, and 50 names is a narrow book.
+
+**A daily-bar strategy at the promote floor cannot be validated on a human
+timescale.** That is the finding worth carrying forward, and it is an argument
+about what the firm should build, not about how large it should size.
 
 ## Measured 2026-08-19/20 (verify before reuse)
 
