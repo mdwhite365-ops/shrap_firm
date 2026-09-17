@@ -43,7 +43,18 @@ filing-processor = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 market-phase = ["pydantic-settings>=2.4", "pandas-market-calendars>=4.4"]
 universe-curator = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
 market-data = ["pydantic-settings>=2.4", "asyncpg>=0.29"]
-strategy-evaluator = ["pydantic-settings>=2.4", "asyncpg>=0.29", "numpy>=1.26", "pandas>=2.2"]
+strategy-evaluator = [
+    "pydantic-settings>=2.4",
+    "asyncpg>=0.29",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    # Needed only for `--timeframe <intraday>`, which filters bars to regular
+    # trading hours against the exchange calendar. The daily path does not import
+    # it (market_phase defers the import into its calendar-reading functions), so
+    # this makes intraday evaluation work rather than making daily evaluation
+    # possible.
+    "pandas-market-calendars>=4.4",
+]
 strategy-runner = [
     "pydantic-settings>=2.4",
     "asyncpg>=0.29",

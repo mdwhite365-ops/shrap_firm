@@ -44,6 +44,7 @@ RUN pip install --no-cache-dir /wheels/*.whl \
         "asyncpg>=0.29" \
         "numpy>=1.26" \
         "pandas>=2.2" \
+        "pandas-market-calendars>=4.4" \
     && rm -rf /wheels
 
 # Card output root. Compose bind-mounts the repo's evaluations directory over
