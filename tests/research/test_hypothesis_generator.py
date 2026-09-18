@@ -504,7 +504,7 @@ async def test_provenance_records_which_prompt_and_model_produced_this() -> None
 
     provenance = registry.registered[0].spec["provenance"]
     assert provenance["model"] == "qwen3:32b"
-    assert provenance["prompt_version"] == 2
+    assert provenance["prompt_version"] == 3
     assert provenance["literature_item_id"] == "arxiv:2401.00001"
     assert provenance["prior"]["year"] == 2006
 
@@ -697,8 +697,11 @@ def test_the_prompt_forbids_refusing_an_effect_for_being_unimplementable() -> No
     assert "QUESTION ONE" in PROPOSER_SYSTEM_PROMPT
     assert "QUESTION TWO" in PROPOSER_SYSTEM_PROMPT
     # The engine's two series must not be stated before the effect judgment.
+    # (Wording changed in v3 from "two daily series" to "two series ... at a
+    # DAILY grain by default" when the intraday grain opened; the ORDERING is
+    # what this guards, and it is why v1 refused six real effects.)
     assert PROPOSER_SYSTEM_PROMPT.index("QUESTION ONE") < PROPOSER_SYSTEM_PROMPT.index(
-        "exactly two daily series"
+        "exactly two series per stock"
     )
 
 

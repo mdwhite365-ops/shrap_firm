@@ -49,6 +49,12 @@ from shrap.research.strategy_evaluator.pipeline import (
     RULE_CROSS_SECTIONAL_REVERSAL,
 )
 from shrap.research.strategy_registry import STATUS_HYPOTHESIS, StrategyRecord
+from shrap.research.strategy_runner.cadence import (
+    CADENCE_INTRADAY,
+    DAILY,
+    Cadence,
+    bars_per_session,
+)
 from shrap.research.strategy_seed.factor_strategies import COMMON_KILL_CRITERIA
 from shrap.research.strategy_seed.technical_strategies import (
     _MOMENTUM_TICKERS,
@@ -80,14 +86,35 @@ STRUCTURAL_DEVIATION = (
 _UNIVERSE: tuple[str, ...] = _MOMENTUM_TICKERS
 
 
+# Horizons, counted in bars and therefore scaling with the grain. `top_n` is a
+# count of names, `gross_exposure` a fraction of the book and `long_short` a
+# flag; scaling any of those would be a unit error no bounds check would catch.
+_SESSION_SCALED_PARAMS: frozenset[str] = frozenset({"lookback", "skip"})
+
+
 def _params_for(raw: RawProposal) -> tuple[dict[str, Any], dict[str, list[float]]]:
     """Parameters and their declared bounds, per rule.
 
     Bounds come from the engine's own tables rather than being restated, so a
     rule whose bounds move cannot leave a proposal declaring the old ones.
+
+    **The proposer states horizons in SESSIONS; the engine counts warmup in
+    BARS.** Those were the same number for as long as every strategy was daily,
+    which is why this function could pass ``lookback`` straight through. At a
+    15-minute grain they differ by 26x, and passing it through would form a
+    ranking over ``lookback`` bars — a paper's six-month effect implemented as a
+    five-session one, still citing the paper. Nothing would raise. The bounds
+    scale with the params they bound, or a correctly converted horizon would be
+    rejected against a ceiling written in the other unit.
     """
 
-    lookback = int(raw.lookback or 0)
+    cadence = (
+        DAILY
+        if raw.cadence_minutes is None
+        else Cadence(kind=CADENCE_INTRADAY, interval_minutes=raw.cadence_minutes)
+    )
+    per_session = bars_per_session(cadence)
+    lookback = int(raw.lookback or 0) * per_session
     common: dict[str, Any] = {
         "lookback": lookback,
         "top_n": FIXED_TOP_N,
@@ -95,16 +122,25 @@ def _params_for(raw: RawProposal) -> tuple[dict[str, Any], dict[str, list[float]
         "long_short": FIXED_LONG_SHORT,
     }
     if raw.rule == RULE_CROSS_SECTIONAL_MOMENTUM:
-        return {**common, "skip": DEFAULT_SKIP}, _bounds(MOMENTUM_PARAM_BOUNDS)
+        return (
+            {**common, "skip": DEFAULT_SKIP * per_session},
+            _bounds(MOMENTUM_PARAM_BOUNDS, per_session),
+        )
     if raw.rule == RULE_CROSS_SECTIONAL_REVERSAL:
-        return {**common, "skip": DEFAULT_REVERSAL_SKIP}, _bounds(REVERSAL_PARAM_BOUNDS)
+        return (
+            {**common, "skip": DEFAULT_REVERSAL_SKIP * per_session},
+            _bounds(REVERSAL_PARAM_BOUNDS, per_session),
+        )
     if raw.rule == RULE_CROSS_SECTIONAL_FACTOR:
-        return {**common, "factor": raw.factor}, _bounds(FACTOR_PARAM_BOUNDS)
+        return {**common, "factor": raw.factor}, _bounds(FACTOR_PARAM_BOUNDS, per_session)
     raise ValueError(f"no parameter template for rule {raw.rule!r}")
 
 
-def _bounds(table: dict[str, tuple[float, float]]) -> dict[str, list[float]]:
-    return {name: [lo, hi] for name, (lo, hi) in table.items()}
+def _bounds(table: dict[str, tuple[float, float]], per_session: int = 1) -> dict[str, list[float]]:
+    return {
+        name: [lo * per_session, hi * per_session] if name in _SESSION_SCALED_PARAMS else [lo, hi]
+        for name, (lo, hi) in table.items()
+    }
 
 
 def proposal_name(raw: RawProposal) -> str:
@@ -144,7 +180,7 @@ def thesis_text(raw: RawProposal, item: LiteratureItem) -> str:
 
 def build_spec(raw: RawProposal, item: LiteratureItem) -> dict[str, Any]:
     params, bounds = _params_for(raw)
-    return {
+    spec: dict[str, Any] = {
         "rule": raw.rule,
         "params": params,
         "param_bounds": bounds,
@@ -174,6 +210,11 @@ def build_spec(raw: RawProposal, item: LiteratureItem) -> dict[str, Any]:
             "model": raw.model,
         },
     }
+    # Written only when declared, so every daily proposal hashes exactly as it
+    # did before this card and nothing already in the registry is restated.
+    if raw.cadence_minutes is not None:
+        spec["cadence"] = {"kind": CADENCE_INTRADAY, "interval_minutes": raw.cadence_minutes}
+    return spec
 
 
 def compute_spec_hash(name: str, spec: dict[str, Any]) -> str:

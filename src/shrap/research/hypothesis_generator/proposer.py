@@ -40,11 +40,15 @@ from shrap.research.hypothesis_generator.expressible import (
     FACTOR_DESCRIPTIONS,
 )
 from shrap.research.hypothesis_generator.literature import LiteratureItem
+from shrap.research.strategy_runner.cadence import (
+    MAX_INTERVAL_MINUTES,
+    MIN_INTERVAL_MINUTES,
+)
 
 # Bump on any behaviour-relevant prompt change. Stamped onto every proposal's
 # spec so a later review knows which prompt produced it — the same discipline
 # the Tech Watcher filter learned the hard way (KI-007).
-PROPOSER_PROMPT_VERSION = 2
+PROPOSER_PROMPT_VERSION = 3
 
 # How much of an abstract the model sees. arXiv abstracts run ~1500 characters;
 # the cap is a guard against a pathological item, not a summarisation step.
@@ -115,7 +119,9 @@ PROPOSER_SYSTEM_PROMPT = (
     "QUESTION TWO, and only if question one is true: can this effect be expressed "
     "as one of the rules below?\n"
     "\n"
-    "The engine reads exactly two daily series per stock: close and volume.\n"
+    "The engine reads exactly two series per stock: close and volume. It reads "
+    "them at a DAILY grain by default, and at an intraday grain (1 minute or "
+    "coarser) when you say so — see `cadence_minutes` below.\n"
     f"{_rules_block()}\n"
     "\n"
     "Name an implemented factor ONLY if the paper's effect is that exact effect. "
@@ -130,14 +136,24 @@ PROPOSER_SYSTEM_PROMPT = (
     "the claim in one sentence. The claim is yours to read from the abstract.\n"
     "- `required_inputs`: every data series the effect needs, using the words "
     "`close` and `volume` where those suffice and plain English otherwise (for "
-    "example `shares outstanding`, `intraday prices`, `signed order flow`, "
-    "`filing text`). Be complete and be literal. This list is the ONLY thing "
+    "example `shares outstanding`, `signed order flow`, `filing text`). Name an "
+    "intraday series as `intraday returns`, `intraday volume`, `5-minute closes` "
+    "and so on when the effect is measured within the session — those ARE "
+    "available now, but only alongside `cadence_minutes`. Be complete and be "
+    "literal. This list is the ONLY thing "
     "deciding whether the firm can test the effect, so an omission here creates a "
     "strategy that silently implements something else.\n"
     "- `lookback`: the formation window the PAPER uses, in trading sessions (a "
-    "month is 21, a year is 252). Never a number you chose because it seemed "
+    "month is 21, a year is 252). ALWAYS in sessions, even when `cadence_minutes` "
+    "is set — the engine converts. Never a number you chose because it seemed "
     "reasonable. If the paper states none, use the convention for that effect and "
     "say so in `deviation`.\n"
+    "- `cadence_minutes`: how often the paper's strategy DECIDES, in minutes, "
+    "or null for once a session. Set it ONLY when the paper measures the effect "
+    "within the trading day; a daily effect studied on intraday data is still "
+    "null. Must be 1-390 (one session). REQUIRED if `required_inputs` names an "
+    "intraday series: without it the firm would build a within-day effect over "
+    "months and cite your paper for it.\n"
     "- `deviation`: how an implementation on close and volume alone would differ "
     "from the paper's construction, or the literal string `none`. Be specific: a "
     "dropped short leg, a close used where the paper used an intraday high, 50 "
@@ -152,7 +168,8 @@ PROPOSER_SYSTEM_PROMPT = (
     '"effect_name": "<kebab-case>", '
     '"prior": {"authors": "<names>", "year": <int>, "claim": "<one sentence>"}, '
     '"rule": "<one of the rules above>", "factor": "<implemented factor or null>", '
-    '"lookback": <int sessions>, "required_inputs": ["<series>", ...], '
+    '"lookback": <int sessions>, "cadence_minutes": <int minutes or null>, '
+    '"required_inputs": ["<series>", ...], '
     '"scorer_sketch": "<1-2 sentences>", '
     '"deviation": "<text or none>", "kill_criteria": ["<...>"], '
     '"thesis": "<one paragraph: the claim, the mechanism, and why it should '
@@ -184,6 +201,14 @@ class RawProposal:
     rule: str
     factor: str | None
     lookback: int | None
+    cadence_minutes: int | None
+    """Decide every N minutes instead of once a session. None means daily.
+
+    Required when `required_inputs` names an intraday series — see
+    `expressible.classify`. Without it an effect the paper measured over
+    fifteen minutes would be built over six months, citing that paper.
+    """
+
     required_inputs: tuple[str, ...]
     scorer_sketch: str
     deviation: str
@@ -261,6 +286,20 @@ def parse_proposal(item: LiteratureItem, content: str, model: str) -> RawProposa
     except (TypeError, ValueError):
         lookback = None
 
+    # Out of range is None, not clamped. A clamped cadence would be a decision
+    # frequency nobody proposed, attached to a paper that proposed a different
+    # one — and `classify` reads None as "no grain declared", which sends an
+    # intraday proposal to the gap queue rather than building it daily.
+    cadence_raw = data.get("cadence_minutes")
+    try:
+        cadence_minutes: int | None = int(str(cadence_raw))
+    except (TypeError, ValueError):
+        cadence_minutes = None
+    if cadence_minutes is not None and not (
+        MIN_INTERVAL_MINUTES <= cadence_minutes <= MAX_INTERVAL_MINUTES
+    ):
+        cadence_minutes = None
+
     return RawProposal(
         item_id=item.item_id,
         is_market_effect=data.get("is_market_effect") is True,
@@ -270,6 +309,7 @@ def parse_proposal(item: LiteratureItem, content: str, model: str) -> RawProposa
         rule=rule,
         factor=factor,
         lookback=lookback,
+        cadence_minutes=cadence_minutes,
         required_inputs=_parse_strings(data.get("required_inputs"), 80, 12),
         scorer_sketch=_clean(data.get("scorer_sketch"), 600),
         deviation=_clean(data.get("deviation"), 1000) or "none",
