@@ -24,6 +24,7 @@ from typing import Any, Protocol
 import structlog
 
 from shrap.events import Envelope, EventPublisher, PublishedEvent, normalize_redis_fields
+from shrap.research.strategy_runner.cadence import SESSION_SLOT
 
 log = structlog.get_logger(__name__)
 
@@ -141,6 +142,13 @@ async def fire_once(
             "quantity": config.quantity,
             "confidence": config.confidence,
             "urgency": "normal",
+            # The fixture is a once-a-day producer (`_claim_daily_slot`), so
+            # its decision slot is the session — the same value `slot_for`
+            # returns for any strategy that has not declared a cadence. Carried
+            # because the Pre-Trade Checker deduplicates scheduled decisions on
+            # this field, and because the Runner's payload is asserted to be
+            # key-identical to this one.
+            "slot": SESSION_SLOT,
             "regime_label": label,
             "justification_text": (
                 "Deterministic pipeline-exercise fixture, not an alpha signal. "

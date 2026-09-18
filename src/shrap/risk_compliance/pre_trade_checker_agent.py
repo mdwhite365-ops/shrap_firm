@@ -226,6 +226,17 @@ async def process_intent_event(
     already-approved intents: an intent the policy would veto never consults
     Tier 3 state or consumes a rate slot. Tier 3 membership is checked before
     the rate guardrail so a non-tradeable ticker never claims a rate slot.
+
+    **The rate guardrail runs last, after the portfolio gate, and that ordering
+    is the fix for a live defect.** It used to run before, which meant an intent
+    the Risk Officer was about to veto had already claimed its symbol's cooldown
+    key. On 2026-09-18 a ``U`` sell of 0.0126 shares claimed ``risk:cooldown:U``
+    at 09:30:01 and was vetoed ``BELOW_BROKER_MINIMUM`` one line later; no order
+    was ever sent. Four minutes on, the firm's first stop-loss fired on ``U`` at
+    -10.05% and was vetoed by that abandoned key, executing 15 minutes late at
+    -10.47%. A slot is consumed by an order, so it must be claimed only once
+    every gate that could still refuse the order has passed. The principle was
+    already stated here for Tier 3; it simply was not applied to the last gate.
     """
 
     decision_payload = build_risk_decision_payload(event, policy)
@@ -240,18 +251,27 @@ async def process_intent_event(
                 ticker=ticker,
                 reason=tier3_veto,
             )
+    if decision_payload["approved"] and officer is not None:
+        await _apply_portfolio_gate(redis, decision_payload, event, officer)
     if decision_payload["approved"] and rate_limiter is not None:
-        rate_veto = await rate_limiter.acquire(str(decision_payload.get("ticker", "")))
+        intent = decision_payload.get("intent_payload") or {}
+        account_id = str(intent.get("account_id", "") or "")
+        slot = intent.get("slot")
+        rate_veto = await rate_limiter.acquire(
+            str(decision_payload.get("ticker", "")),
+            account_id=account_id,
+            slot=str(slot) if slot else None,
+        )
         if rate_veto is not None:
             _downgrade_to_veto(decision_payload, rate_veto, f"rate guardrail: {rate_veto}")
             log.warning(
                 "pre_trade_checker.rate_vetoed",
                 intent_event_id=event.envelope.event_id,
                 ticker=decision_payload.get("ticker"),
+                account_id=account_id or None,
+                slot=slot,
                 reason=rate_veto,
             )
-    if decision_payload["approved"] and officer is not None:
-        await _apply_portfolio_gate(redis, decision_payload, event, officer)
     stream = STREAM_RISK_APPROVED if decision_payload["approved"] else STREAM_RISK_VETOED
     published = await EventPublisher(redis).publish(
         stream=stream,

@@ -266,6 +266,7 @@ def build_payload(
     config: RunnerSignalConfig,
     regime_label: str | None,
     justification: str,
+    slot: str | None = None,
 ) -> dict[str, Any]:
     """Build the signal payload: the Strategy Fixture schema plus the account.
 
@@ -274,9 +275,16 @@ def build_payload(
     their own account, so a signal that does not name one cannot be routed —
     every agent would skip it, or, if they defaulted to acting, all three would
     submit the same order.
+
+    ``slot`` is the decision slot this signal was produced in, carried so the
+    Pre-Trade Checker can deduplicate on the strategy's own cadence instead of a
+    fixed timeout that nobody can keep in sync with it. Omitted — by exits,
+    which answer the book rather than a schedule — the checker falls back to its
+    time-boxed window. Not the routing key and not part of any decision here;
+    it is a fact about *this* signal, travelling with it.
     """
 
-    return {
+    payload: dict[str, Any] = {
         "strategy_id": strategy_id,
         "account_id": account_id,
         "ticker": ticker.upper(),
@@ -288,6 +296,9 @@ def build_payload(
         "regime_label": regime_label or UNKNOWN_REGIME,
         "justification_text": justification,
     }
+    if slot:
+        payload["slot"] = slot
+    return payload
 
 
 def allocate_equity(equity: float, n_strategies: int, max_gross_exposure: float) -> float:
@@ -551,6 +562,7 @@ def _plan_strategy(
                     account_id=account_id,
                     config=config,
                     regime_label=regime_label,
+                    slot=slot,
                     justification=_justification(
                         strategy_name=item.record.name,
                         strategy_id=strategy_id,
