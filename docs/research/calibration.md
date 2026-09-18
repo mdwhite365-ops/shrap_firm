@@ -278,6 +278,63 @@ Record which tier the run was for.
 
 ### Runs
 
+**Run 2 (2026-09-17) — forced by a retirement, not by curiosity.** Ollama's
+console announced that `qwen3.5:397b`, the incumbent filter, retires
+**2026-09-25**. It carried 1,361 requests in the preceding week, so this is a
+production dependency with eight days on it (KI-038). The candidates are the
+largest models on the account.
+
+**Two findings the table does not say out loud.**
+
+*The incumbent no longer reproduces its own verdicts.* Half the sample is items
+`qwen3.5:397b` previously scored relevant, and on this run it called **0%** of
+the sample relevant — so its 50% "agreement with incumbent" is agreement on the
+ten negatives and disagreement on all ten positives. Whatever the corpus's 189
+positives were scored under, prompt version 4 does not reproduce them. That
+makes "agreement with incumbent" close to uninformative here and is the same
+shape as KI-009: the taxonomy, not the model.
+
+*`glm-5.3` is rejected on schema, and it is partly our fault.* 0% adherence, 37
+of 40 answers in prose. But 17 of those 40 carried extractable JSON that the
+harness could have recovered. The model is out for this promotion; the parser
+gap is a separate card and the harness says so itself.
+
+### 2026-09-17 — `local-classification`, task `filter`
+
+**Sample:** 20 items, seed 7, 2 repeat(s), 160 completions. Prompt version 4.
+**Strata:** incumbent-relevant 10, incumbent-not-relevant 10, never-scored 0
+
+| model | schema | judged | self-consist | agrees w/ incumbent | says relevant | p50 ms | p95 ms | errors |
+|---|---|---|---|---|---|---|---|---|
+| `qwen3.5:397b` | 100% | 20/40 | 100% | 50% | 0% | 1913 | 2322 | 0 |
+| `glm-5.3` | 0% | 0/40 | — | — | — | 3147 | 24849 | 0 |
+| `deepseek-v4-pro:0813` | 100% | 20/40 | 95% | 55% | 5% | 766 | 970 | 0 |
+| `kimi-k3` | 100% | 20/40 | 100% | 50% | 0% | 1557 | 1938 | 0 |
+
+**Unparsed answers, by cause:**
+
+- `glm-5.3`: 40 unparsed — malformed-json 3, prose 37. 17 recoverable (a parser fix on our side would take them).
+
+**Pairwise agreement on relevance:**
+
+- `deepseek-v4-pro:0813` vs `kimi-k3`: 95%
+- `qwen3.5:397b` vs `deepseek-v4-pro:0813`: 95%
+- `qwen3.5:397b` vs `kimi-k3`: 100%
+
+**Agreement is not correctness.** Nothing above knows which model was right; the rows below are the ones a human has to read.
+
+**Disagreements (1 shown):**
+
+- **[sec-edgar] 8-K - Summit Therapeutics Inc. (0001599298) (Filer)** *(incumbent: true; stratum: incumbent-relevant)*
+  - `qwen3.5:397b` → relevant=false archetype=null — The attested filing header confirms a routine administrative event occurred but provides no specific data on clinical trials, manufacturing scale, or payer coverage required to evidence a biological-mechanism unlock.
+  - `deepseek-v4-pro:0813` → relevant=true archetype=bio-mechanism — An 8-K from Summit Therapeutics is an attested SEC filing that may report a clinical or regulatory milestone for its mechanism-based therapy, so I tested it against the bio-mechanism archetype's bar for attested events.
+  - `kimi-k3` → relevant=false archetype=null — Tested bio-mechanism: the 8-K summary contains only generic Item 8.01/9.01 boilerplate with no attested clinical, regulatory, manufacturing, or revenue event, so there is nothing to match against any archetype's bar.
+
+> ⚠ `glm-5.3` parsed only 0% of its answers — every judgement column for it rests on 0 answer(s), not 40. Failure modes: malformed-json=3, prose=37. 17 of 40 carried extractable JSON, so a parser fix on our side would rescue them — that is our defect, not the model's.
+
+**Verdict:** _(Mike — adjudicate the disagreements above, then record the call here. A rejected candidate stays in this ledger with its reason.)_
+
+
 Three runs took place before the first decision was recorded. All three are
 here. The first two produced numbers that were wrong, and deleting them would
 be the curated-ledger failure this file's editing rules forbid — the

@@ -908,24 +908,40 @@ services:
       SHRAP_LLM_OLLAMA_URL: "${SHRAP_TW_OLLAMA_URL:-https://ollama.com}"
       OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
       SHRAP_LLM_LOCAL_CLASSIFICATION_PROVIDER: "ollama"
-      # Was gpt-oss:20b-cloud. Promoted 2026-07-31 on the first real shadow eval
-      # (calibration.md §(e) Run 3): five models were indistinguishable on
-      # judgement — 100% schema, 100% self-consistency, zero disagreements — so
-      # the call reduced to latency and usage tier, where this is the lowest
-      # tier among the fast models at p95 2539ms vs the incumbent's 12769ms.
-      # Filter task only; the Intelligence agents' binding below is unchanged.
-      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_FILTER_MODEL:-qwen3.5:397b}"
-      SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
-      # Was kimi-k3:cloud. That model requires a paid Ollama subscription this
-      # account does not have and returns HTTP 403 (verified 2026-07-30 while
-      # pointing the Hypothesis Generator at the same tier). Synthesis runs
-      # inside `except Exception: log.exception("synthesis_failed")`, so a 403
-      # every night looked like a healthy service with a quiet funnel: items
-      # marked relevant, nothing ever clustered into a candidate.
+      # Was qwen3.5:397b, promoted 2026-07-31 on the first real shadow eval.
+      # Moved 2026-09-17 because Ollama RETIRES that tag on 2026-09-25 — a
+      # vendor date, not an improvement. It carried 1,361 requests the week
+      # before, so this is a live dependency (KI-038).
       #
-      # Default is now the model already working on the bulk filter. Synthesis
-      # IS where judgment is load-bearing, so laddering up is the right move
-      # the day the subscription exists - set SHRAP_SYNTHESIS_MODEL and
+      # calibration.md §(e) Run 2: four models, 20 items, 2 repeats, prompt v4.
+      # kimi-k3 and deepseek-v4-pro:0813 both scored 100% schema with 0 errors;
+      # glm-5.3 scored 0% (37 of 40 answers in prose) and is rejected. kimi-k3
+      # is the drop-in — 100% self-consistency and 100% pairwise agreement with
+      # the outgoing model. deepseek-v4-pro:0813 is 2.5x faster (p50 766ms vs
+      # 1557ms) but self-disagreed once; the registry's own rule is that a model
+      # which disagrees with itself cannot hold a gate, and at ~8 filter calls
+      # an hour latency is not the binding constraint it was in July.
+      #
+      # Filter task only; the Intelligence agents' binding below is unchanged.
+      SHRAP_LLM_LOCAL_CLASSIFICATION_MODEL: "${SHRAP_FILTER_MODEL:-kimi-k3}"
+      SHRAP_LLM_CLOUD_DEFAULT_PROVIDER: "ollama"
+      # Was kimi-k3:cloud, dropped 2026-07-30 because it returned HTTP 403 on
+      # an account without the paid subscription. Synthesis runs inside
+      # `except Exception: log.exception("synthesis_failed")`, so a 403 every
+      # night looked like a healthy service with a quiet funnel: items marked
+      # relevant, nothing ever clustered into a candidate.
+      #
+      # THAT CONSTRAINT IS GONE, measured 2026-09-17: kimi-k3 completed 40 of 40
+      # eval calls on this account with zero errors (calibration.md §(e) Run 2).
+      # The comment above used to say the subscription "does not [exist]"; it
+      # does. Synthesis IS where judgment is load-bearing, and this comment
+      # already said laddering up is the right move the day the subscription
+      # exists — that day has arrived.
+      #
+      # Deliberately NOT changed in this PR. kimi-k3 was evaluated on the FILTER
+      # task, and the 2026-07-31 entry set the precedent that a shared tier alias
+      # does not carry a verdict across tasks. Promoting synthesis wants its own
+      # eval, or Mike's explicit call. Until then: set SHRAP_SYNTHESIS_MODEL and
       # restart, which is what this indirection is for.
       SHRAP_LLM_CLOUD_DEFAULT_MODEL: "${SHRAP_SYNTHESIS_MODEL:-gpt-oss:20b-cloud}"
     depends_on:
