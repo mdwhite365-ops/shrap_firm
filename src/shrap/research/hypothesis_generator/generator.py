@@ -256,7 +256,7 @@ class HypothesisGenerator:
         if refusal is not None:
             return self._refused(item, refusal)
 
-        verdict = classify(raw.rule, raw.factor, raw.required_inputs)
+        verdict = classify(raw.rule, raw.factor, raw.required_inputs, raw.cadence_minutes)
         if verdict != OUTCOME_EXPRESSIBLE:
             return await self._record_gap(item, raw, verdict)
 

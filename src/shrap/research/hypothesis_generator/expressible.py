@@ -85,6 +85,39 @@ FACTOR_DESCRIPTIONS: Mapping[str, str] = {
     ),
 }
 
+# Wordings that unambiguously mean one of the available series AT A FINER GRAIN.
+# Separate from `_SERIES_SYNONYMS` because they carry a second fact: the panel
+# they need is intraday, and a strategy built from them at a daily grain is not
+# the effect the paper described. `classify` enforces that — an intraday input
+# without an intraday cadence stays out of reach rather than being built daily.
+#
+# THE ADMISSION RULE IS UNCHANGED, only its inputs. Every entry here is still a
+# wording difference and never a construction difference. `intraday close` is a
+# close; `realised variance from 5-minute returns` is a construction over closes
+# and is NOT here, because the firm has no scorer that reads an intraday series
+# and emits a daily one. Deliberately absent for the same reason: `intraday
+# bars` and `intraday high` (the panel exposes closes and volumes, not highs or
+# lows), `tick data`, `quote data`, `order flow` (a different feed entirely).
+_INTRADAY_SERIES_SYNONYMS: Mapping[str, str] = {
+    "intraday price": "close",
+    "intraday prices": "close",
+    "intraday close": "close",
+    "intraday closes": "close",
+    "intraday closing price": "close",
+    "intraday closing prices": "close",
+    "intraday return": "close",
+    "intraday returns": "close",
+    "intraday volume": "volume",
+    "intraday volumes": "volume",
+    "minute close": "close",
+    "minute closes": "close",
+    "minute price": "close",
+    "minute prices": "close",
+    "minute return": "close",
+    "minute returns": "close",
+    "minute volume": "volume",
+}
+
 # Near-misses that unambiguously mean one of the available series. Every entry is
 # a wording difference, never a construction difference: `adjusted close` is a
 # close, `realised variance from 5-minute returns` is not, and the second must
@@ -121,6 +154,22 @@ OUTCOME_MISSING_SCORER = "missing-scorer"
 OUTCOME_MISSING_DATA = "missing-data"
 
 
+def _key(name: str) -> str:
+    """One spelling for a named input. ``5-minute`` and ``5 minute`` are one key.
+
+    A leading interval is dropped, so ``5 minute returns`` and ``15 minute
+    returns`` both reach ``minute returns``. Which interval a paper used is a
+    parameter of the strategy, not a question about whether the firm holds the
+    data — the backfill stores whatever grain it is asked for.
+    """
+
+    text = " ".join(str(name).lower().replace("_", " ").replace("-", " ").split())
+    parts = text.split()
+    if parts and parts[0].isdigit():
+        parts = parts[1:]
+    return " ".join(parts)
+
+
 def normalise_input(name: str) -> str | None:
     """Map an input the model named onto an available series, or ``None``.
 
@@ -128,10 +177,27 @@ def normalise_input(name: str) -> str | None:
     answer for both genuinely exotic inputs and for wordings this table does not
     know. Both are correctly out of reach: the second is a gap in the table, and
     a gap in the table should stop a proposal rather than pass one.
+
+    An intraday wording resolves to the same series as its daily sibling. The
+    *grain* it also implies is a separate question, asked by
+    :func:`needs_intraday`, because the answer changes what must be true of the
+    proposal rather than whether the series exists.
     """
 
-    key = " ".join(str(name).lower().replace("_", " ").replace("-", " ").split())
-    return _SERIES_SYNONYMS.get(key)
+    key = _key(name)
+    return _SERIES_SYNONYMS.get(key) or _INTRADAY_SERIES_SYNONYMS.get(key)
+
+
+def needs_intraday(required: Iterable[str]) -> bool:
+    """True when any named input only makes sense on an intraday panel.
+
+    Kept apart from :func:`normalise_input` so that "can the firm supply this
+    series" and "at what grain" stay two questions. Before #234 and #236 the
+    answer to the second was always "daily" and this function could not have
+    existed; the gate it guards is the reason it now must.
+    """
+
+    return any(_key(name) in _INTRADAY_SERIES_SYNONYMS for name in required)
 
 
 def missing_inputs(required: Iterable[str]) -> tuple[str, ...]:
@@ -152,15 +218,35 @@ def missing_inputs(required: Iterable[str]) -> tuple[str, ...]:
     return tuple(out)
 
 
-def classify(rule: str, factor: str | None, required: Iterable[str]) -> str:
+def classify(
+    rule: str,
+    factor: str | None,
+    required: Iterable[str],
+    cadence_minutes: int | None = None,
+) -> str:
     """Can the engine run this today, and if not, what is in the way?
 
-    Data first. An effect needing intraday bars is out of reach whether or not
-    its scorer exists, and reporting it as a missing scorer would put an
-    unbuildable item at the top of a build queue.
+    Data first. An effect needing a series the firm does not hold is out of
+    reach whether or not its scorer exists, and reporting it as a missing
+    scorer would put an unbuildable item at the top of a build queue.
+
+    **Intraday inputs became reachable and brought a new way to be wrong.**
+    Until #234 the Runner held one bar reader and an intraday effect could not
+    be run at all, so ``intraday returns`` was correctly ``missing-data``. It is
+    now buildable — but only as an intraday *strategy*. A proposal naming
+    intraday inputs while declaring no cadence would be built on daily bars: a
+    six-month ranking where the paper described a fifteen-minute one, citing
+    that paper, with every number well-formed. That is the exact failure the
+    module docstring's standing bias exists to prevent, arriving through a door
+    that did not exist when the bias was written. So the grain is required to be
+    declared, and a proposal that does not declare it stays out of reach and is
+    recorded as a gap rather than being quietly built at the wrong horizon.
     """
 
+    required = list(required)
     if missing_inputs(required):
+        return OUTCOME_MISSING_DATA
+    if needs_intraday(required) and cadence_minutes is None:
         return OUTCOME_MISSING_DATA
     if rule not in EXPRESSIBLE_RULES:
         return OUTCOME_MISSING_SCORER
@@ -279,6 +365,7 @@ __all__ = [
     "classify",
     "hypothesis_key",
     "missing_inputs",
+    "needs_intraday",
     "normalise_input",
     "rank_gaps",
 ]
