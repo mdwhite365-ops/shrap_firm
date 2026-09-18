@@ -1203,6 +1203,46 @@ services:
     networks:
       - shrap_net
 
+  # Intraday trigger - keeps market_data.intraday_bars advancing. The daily
+  # trigger above exists because daily_bars went two sessions stale with nothing
+  # to notice (KI-024); this exists because intraday_bars did exactly the same,
+  # newest bar 2026-09-16 16:45 ET as of 2026-09-18, while the trigger beside it
+  # swept 1Day on schedule.
+  #
+  # SWEEP_INTERVAL_SECONDS is a CEILING, not a target. The service lowers it to
+  # half the finest grain any live strategy declares, so it cannot be configured
+  # into the failure it prevents: a 15-minute strategy against a table refreshed
+  # every 30 re-decides on an unchanged panel every other slot, and nothing
+  # raises. Which grains are swept is read from research.strategies for the same
+  # reason the ticker list is read from the Curator - a configured grain is a
+  # second source of truth that silently diverges from what a strategy reads.
+  #
+  # Shares market-data.Dockerfile with the backfill and the daily trigger, so a
+  # change under src/shrap/market_data/ has THREE build targets.
+  market-data-intraday-trigger:
+    build:
+      context: ../
+      dockerfile: infra/market-data.Dockerfile
+    container_name: shrap_market_data_intraday_trigger
+    command: ["shrap-market-data-intraday-trigger"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MARKET_DATA_INTRADAY_TRIGGER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      MARKET_DATA_INTRADAY_TRIGGER_FEED: "iex"
+      MARKET_DATA_INTRADAY_TRIGGER_ADJUSTMENT: "all"
+      MARKET_DATA_INTRADAY_TRIGGER_SWEEP_INTERVAL_SECONDS: "300"
+      MARKET_DATA_INTRADAY_TRIGGER_MIN_SWEEP_INTERVAL_SECONDS: "60"
+      MARKET_DATA_INTRADAY_TRIGGER_BASELINE_TIMEFRAME: "15Min"
+      MARKET_DATA_INTRADAY_TRIGGER_RESTATE_DAYS: "2"
+      MARKET_DATA_INTRADAY_TRIGGER_LOG_LEVEL: "INFO"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
   market-data:
     build:
       context: ../

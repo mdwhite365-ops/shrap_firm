@@ -100,7 +100,7 @@ class FreshnessTarget:
         return f"{self.schema}.{self.table}"
 
 
-# The five tables that must grow for the firm to be doing anything, with the
+# The six tables that must grow for the firm to be doing anything, with the
 # cadence each threshold was derived from. Every number here is an unruled first
 # cut: set to clear the producer's longest legitimate quiet period, so a firing
 # check means broken rather than weekend.
@@ -177,6 +177,26 @@ DEFAULT_TARGETS: tuple[FreshnessTarget, ...] = (
             "sweeps. The threshold exists because this table went two sessions stale on "
             "2026-07-31 with nothing to notice (KI-024), while the Evaluator kept returning "
             "hold-for-data against the frozen panel."
+        ),
+    ),
+    FreshnessTarget(
+        name="market_data.intraday_bars",
+        schema="market_data",
+        table="intraday_bars",
+        timestamp_column="fetched_at",
+        producer="market-data-intraday-trigger",
+        max_age=timedelta(hours=2),
+        rationale=(
+            "The intraday trigger sweeps at half the finest grain any live strategy "
+            "declares, capped at five minutes, and its upsert sets fetched_at=now() on "
+            "conflict — so this measures sweep liveness and is unaffected by weekends, the "
+            "same reasoning as market_data.daily_bars above. Two hours is 24 missed sweeps "
+            "at the default ceiling. The threshold is much tighter than the daily table's "
+            "18h because the consequence is worse: a stale daily panel yields one wrong "
+            "decision a day, while a stale intraday panel yields a strategy that wakes "
+            "every interval, reads an unchanged panel, and re-decides at full speed with "
+            "nothing in any log to show for it. This table sat two sessions stale from "
+            "2026-09-16 to 2026-09-18 with no alarm, which is KI-024 at a finer grain."
         ),
     ),
     FreshnessTarget(
