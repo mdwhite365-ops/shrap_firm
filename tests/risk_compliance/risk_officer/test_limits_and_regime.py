@@ -121,9 +121,40 @@ def test_a_full_size_regime_returns_the_limits_unchanged() -> None:
 
 
 def test_stage_fractions_follow_the_spec() -> None:
-    assert stage_fraction("paper") == 0.25
+    """`paper` raised 0.25 -> 0.80 on 2026-09-18 (Mike's ruling).
+
+    The accounts were 84% cash and had earned $74 and $55 over weeks against a
+    benchmark running Sharpe +1.15. The Evaluator backtests at
+    `gross_exposure = 1.0`, so a live book at 0.1875 was not running the
+    strategy that was measured.
+
+    The ladder is now non-monotonic — `paper` exceeds `live-paper` — and that is
+    intentional: these stages map what kind of money this is onto how much
+    Kelly, not how confident the firm is. Paper money risks only the
+    measurement.
+    """
+
+    assert stage_fraction("paper") == 0.80
     assert stage_fraction("small-size-paper") == 0.25
     assert stage_fraction("live-paper") == 0.50
+
+
+def test_the_paper_target_leaves_headroom_under_the_gross_cap() -> None:
+    """Why 0.80 and not 1.00, pinned so it cannot be "tidied" upward.
+
+    `max_gross_exposure` is 1.00 and scales with the regime multiplier, so in
+    the current 0.75 band the cap is 0.75. A stage fraction of 1.00 targets
+    exactly 0.75 — the target would sit on the cap and any drift between sizing
+    and the gross check would refuse the order.
+    """
+
+    from shrap.risk_compliance.risk_officer.limits import PortfolioLimits
+
+    for regime in (0.75, 1.0):
+        cap = PortfolioLimits().scaled_for_regime(regime).max_gross_exposure
+        target = stage_fraction("paper") * regime
+        assert target < cap, regime
+        assert (cap - target) / cap >= 0.15, regime
 
 
 def test_an_unknown_stage_sizes_at_the_lowest_tier() -> None:

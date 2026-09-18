@@ -175,10 +175,31 @@ fraction, currently yes, at the lowest tier"):
 
 | Stage | Fraction of the strategy's requested size |
 |---|---|
-| `paper` | **25%** |
+| `paper` | **80%** — raised from 25% on 2026-09-18 |
 | `small-size-paper` | **25%** |
 | `live-paper` | **50%** — requires Mike's approval per the spec |
 | anything else | **25%** |
+
+> **`paper` raised 0.25 → 0.80 on 2026-09-18 (Mike's ruling).** The accounts were
+> 84% cash — $8,496 and $8,367 idle of ~$10,000 each — and had made $74 and $55
+> over weeks against a benchmark running Sharpe +1.15. The Evaluator backtests at
+> `gross_exposure = 1.0`, so a live book at 0.1875 was not running the strategy
+> that was measured.
+>
+> **Not 1.00**, because `max_gross_exposure` (1.00) scales with the regime, so in
+> the current 0.75 band the cap is 0.75 and a stage fraction of 1.00 would target
+> exactly the cap — tripping refusals on any drift. 0.80 targets 0.60 with 20%
+> headroom. Leverage is not an option; this document forbids it on paper.
+>
+> **The ladder is now non-monotonic** (`paper` 80% > `live-paper` 50%) and that is
+> intentional. The stages map *what kind of money this is* onto how much Kelly,
+> not how confident the firm is. Paper money risks only the measurement, and
+> under-sizing destroys the measurement; real money risks capital.
+>
+> **Note the collision with posterior sizing**, which *replaces* this fraction:
+> every strategy measured so far supports less than 0.25 (momentum 126/21 →
+> 0.147), so enabling `posterior_sizing` now cuts exposure 5.4x rather than 1.7x.
+> Reconciling the two is unruled.
 
 The Kelly cap is **50%** and no amount of evidence sizes past it here; the exposure and
 drawdown limits still bind on top.

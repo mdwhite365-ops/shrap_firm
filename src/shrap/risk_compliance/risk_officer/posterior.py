@@ -27,19 +27,33 @@ standard error of an annualized ratio over ``n`` sessions is ``sqrt(252/n)``.
 Nine sessions therefore carry an SE of 5.3 — which is why the live reading of
 +0.84 moved nothing, and why this module will not pretend otherwise.
 
-**The prior is the promote floor, and that is what makes this safe.** A strategy
-at ``paper`` cleared an IR floor of 0.5 to get there, so "weakly believe it sits
-at its floor" is the honest starting belief. It also gives the mechanism a
-property worth stating plainly:
+**The prior is the promote floor.** A strategy at ``paper`` cleared an IR floor
+of 0.5 to get there, so "weakly believe it sits at its floor" was the honest
+starting belief when this was written. With no live evidence this returns
+exactly **0.25**, which falls out of three independently calibrated numbers: the
+promote floor (0.5), the spec's Kelly cap (0.50), and the evaluator's note that
+an IR of 1.0 is "exceptional and rare".
 
-    with no live evidence at all, this returns exactly 0.25 —
-    the flat paper fraction the firm uses today.
+**Two things have since falsified the tidy version of that story, and both are
+recorded here rather than quietly dropped.**
 
-That is not a tuned coincidence. It falls out of three numbers the firm already
-calibrated independently: the promote floor (0.5), the spec's Kelly cap (0.50),
-and the evaluator's note that an IR of 1.0 is "exceptional and rare". The flat
-fraction is the zero-evidence limit of this rule, so there is no cliff at the
-first session and no special case for a strategy that has never traded.
+*The floor is not evidence (KI-036, 2026-09-17).* The standard error of an
+annualised IR on this firm's panel is ~0.47, so clearing a 0.50 floor and
+missing it are the same event as far as the data can tell. "It cleared the floor
+to get here" justifies less than it appears to — which is why
+:func:`posterior_from_backtest` centres on :data:`SKEPTICAL_PRIOR_IR` instead.
+
+*0.25 is no longer the flat paper fraction (2026-09-18).* This module used to
+claim "there is no cliff at the first session" because the zero-evidence
+posterior and the stage table agreed at 0.25. Mike raised
+``STAGE_FRACTIONS["paper"]`` to **0.80** when the accounts turned out to be 84%
+cash, and this constant did not move. **So there is now a cliff: enabling
+``posterior_sizing`` drops a paper strategy from 0.80 to at most 0.25**, and to
+0.147 for the best strategy the firm has actually measured.
+
+That is a real disagreement between two defensible rules, not a bug. The stage
+fraction answers "is the strategy being run at all"; the posterior answers "does
+the evidence justify the risk". Reconciling them is unruled and is Mike's.
 
 **This can raise size above the stage fraction (Mike, 2026-09-17).** That is a
 deliberate governance change: code may now increase risk without a human
