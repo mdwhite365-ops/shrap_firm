@@ -310,6 +310,45 @@ services:
       - shrap_net
 
   # -------------------------------------------------------------------------
+  # docker-state-exporter - container health status and restart counts.
+  #
+  # cAdvisor next door cannot supply either, and the gap is not academic. On
+  # 2026-09-18 `shraptasmaner` had restarted 88,034 times with nothing to
+  # notice, and cAdvisor had NEVER seen it: it scraped 40 containers and that
+  # one was not among them, because a container failing instantly spends no
+  # measurable time running between restarts. Prometheus-based crashloop
+  # detection was therefore impossible, not merely missing.
+  #
+  # The same day, `shrap_qdrant` and `shrap_langfuse` had read `unhealthy` for
+  # seven weeks against services that were serving correctly (their probes
+  # referenced a curl and a loopback address that did not exist inside those
+  # images). Nothing read Docker health, so two permanently-red flags simply
+  # taught everyone to ignore container health.
+  #
+  # WHY AN EXPORTER RATHER THAN GIVING THE HEALTH MONITOR THE SOCKET. Every one
+  # of the Health Monitor's checks goes through Prometheus; this keeps that
+  # invariant, so the new checks are the same shape as the six that exist. And
+  # docker.sock is root-equivalent on the host, so it stays confined to a
+  # purpose-built read-only exporter rather than an agent that also holds the
+  # Postgres DSN and the Redis URL. Mike's ruling, 2026-09-18.
+  #
+  # The socket is mounted :ro. That restricts nothing at the API level — a unix
+  # socket does not honour it the way a file does — and is kept as a statement
+  # of intent, not as a control. The control is that this container runs one
+  # Go binary with no network egress beyond the metrics port.
+  # -------------------------------------------------------------------------
+  docker-state-exporter:
+    image: karugaru/docker_state_exporter:latest
+    container_name: shrap_docker_state_exporter
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "127.0.0.1:9101:8080"
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
   # redis-exporter - Redis throughput, memory, stream length, consumer lag.
   # -------------------------------------------------------------------------
   redis-exporter:
