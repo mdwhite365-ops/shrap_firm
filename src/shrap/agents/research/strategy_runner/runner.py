@@ -79,7 +79,6 @@ from shrap.events import EventPublisher, RedisPublisher
 from shrap.events.groups import GroupEventSubscriber, RedisGroupClient
 from shrap.operations.market_phase import Phase
 from shrap.research.strategy_evaluator.pipeline import _default_strategy_factory, _extract_tickers
-from shrap.research.strategy_evaluator.store import PostgresEvaluatorReader
 from shrap.research.strategy_evaluator.strategy import BarSample
 from shrap.research.strategy_fixture import FixtureRedis, latest_regime_label
 from shrap.research.strategy_registry import (
@@ -112,6 +111,7 @@ from shrap.research.strategy_runner.exit_planner import (
     strategy_by_account,
     suppressed_tickers,
 )
+from shrap.research.strategy_runner.readers import BarReaderResolver, CadenceBarReaders
 from shrap.research.strategy_runner.sizing import SizingRefused, assert_equity_usable
 from shrap.research.strategy_runner.store import PostgresStrategyRunnerStateStore
 from shrap.risk_compliance.risk_officer.exits import ExitRule, PositionPnL
@@ -166,12 +166,6 @@ class RedisStreamClient(Protocol):
 
 class Registry(Protocol):
     async def list_by_status(self, status: str) -> list[StrategyRecord]: ...
-
-
-class BarReader(Protocol):
-    async def read_bars(
-        self, ticker: str, start: date, end: date, adjustment: str
-    ) -> list[BarSample]: ...
 
 
 class StateStore(Protocol):
@@ -276,7 +270,7 @@ async def _active_paper_strategies(registry: Registry) -> list[StrategyRecord]:
 
 async def _build_input(
     record: StrategyRecord,
-    reader: BarReader,
+    readers: BarReaderResolver,
     session_date: date,
     *,
     adjustment: str,
@@ -294,10 +288,13 @@ async def _build_input(
         # A broken spec: the planner re-derives and skips it fail-safe. Read a
         # short window; the bars will be unused.
         warmup = 1
-    # The same spec the planner reads for its slot, read here for the window.
-    # A malformed cadence resolves to DAILY, so a typo reads a daily-sized
-    # window for a daily-behaving strategy rather than disagreeing with itself.
+    # The same spec the planner reads for its slot, read here for the window AND
+    # for the grain. One read, three uses: a typo resolves to DAILY everywhere at
+    # once, so a malformed cadence reads a daily-sized window of daily bars for a
+    # daily-behaving strategy rather than three components disagreeing about what
+    # this strategy is.
     cadence = read_cadence(record.spec)
+    reader = readers.for_cadence(cadence)
     start = _lookback_start(session_date, warmup, buffer_days, max_days, cadence)
     bars_by_ticker: dict[str, list[BarSample]] = {}
     for ticker in tickers:
@@ -344,7 +341,7 @@ async def run_pass(
     session_date: date,
     redis: RedisStreamClient,
     registry: Registry,
-    reader: BarReader,
+    readers: BarReaderResolver,
     state_store: StateStore,
     config: RunnerSignalConfig,
     adjustment: str,
@@ -457,7 +454,7 @@ async def run_pass(
         inputs = [
             await _build_input(
                 record,
-                reader,
+                readers,
                 session_date,
                 adjustment=adjustment,
                 buffer_days=lookback_buffer_days,
@@ -535,7 +532,7 @@ async def poll_once(
     subscriber: GroupEventSubscriber,
     *,
     registry: Registry,
-    reader: BarReader,
+    readers: BarReaderResolver,
     state_store: StateStore,
     config: RunnerSignalConfig,
     adjustment: str,
@@ -590,7 +587,7 @@ async def poll_once(
                 session_date=session_date,
                 redis=redis,
                 registry=registry,
-                reader=reader,
+                readers=readers,
                 state_store=state_store,
                 config=config,
                 adjustment=adjustment,
@@ -747,7 +744,7 @@ async def run_loop(
     redis: RedisStreamClient,
     *,
     registry: Registry,
-    reader: BarReader,
+    readers: BarReaderResolver,
     state_store: StateStore,
     config: RunnerSignalConfig,
     stop: asyncio.Event,
@@ -795,7 +792,7 @@ async def run_loop(
                 redis,
                 subscriber,
                 registry=registry,
-                reader=reader,
+                readers=readers,
                 state_store=state_store,
                 config=config,
                 adjustment=adjustment,
@@ -822,7 +819,7 @@ async def run_loop(
                     session_date=session,
                     redis=redis,
                     registry=registry,
-                    reader=reader,
+                    readers=readers,
                     state_store=state_store,
                     config=config,
                     adjustment=adjustment,
@@ -871,6 +868,7 @@ async def run(
     count: int = 100,
     block_ms: int = 5000,
     intraday_tick_seconds: float = 60.0,
+    intraday_include_extended: bool = False,
     retry_delay_seconds: float = 1.0,
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
@@ -900,7 +898,7 @@ async def run(
     )
     pool = await create_asyncpg_pool(postgres_dsn)
     registry = PostgresStrategyRegistry(pool)
-    reader = PostgresEvaluatorReader(pool)
+    readers = CadenceBarReaders(pool, include_extended=intraday_include_extended)
     state_store = PostgresStrategyRunnerStateStore(pool)
     await state_store.ensure_schema()
     # The Runner owns its state table and migrates it (above). It owns nothing in
@@ -912,7 +910,7 @@ async def run(
         await run_loop(
             cast(RedisStreamClient, redis),
             registry=cast(Registry, registry),
-            reader=cast(BarReader, reader),
+            readers=readers,
             state_store=cast(StateStore, state_store),
             config=config,
             stop=stop,
