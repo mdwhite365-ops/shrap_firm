@@ -17,6 +17,7 @@ import pytest
 from shrap.agents.operations.health_monitor import agent as agent_mod
 from shrap.agents.operations.health_monitor import alerts as alerts_mod
 from shrap.agents.operations.health_monitor.agent import tick_once
+from shrap.agents.operations.health_monitor.checks import ALL_CHECKS
 from shrap.agents.operations.health_monitor.config import Settings
 from shrap.agents.operations.health_monitor.freshness import (
     STREAM_HEALTH_ANOMALY,
@@ -50,7 +51,15 @@ class _AllUpProm:
     container-count / free-memory ratios, so no infra check degrades."""
 
     async def query_instant(self, q: str) -> float | None:
+        # 0 for the "how many are broken" counters — an all-healthy substrate
+        # has no unhealthy containers and nothing in a restart loop. 100 for
+        # everything else, which satisfies the up-gauges and the ratios.
+        if "unhealthy" in q or "container_restartcount" in q:
+            return 0.0
         return 100.0
+
+    async def query_series_labels(self, q: str, label: str) -> list[str]:
+        return []
 
     async def query_targets_up(self) -> dict[str, bool]:
         return {}
@@ -148,9 +157,9 @@ async def test_freshness_checks_join_the_tick_rollup() -> None:
             NOW,
         )
 
-    assert len(results) == 6 + len(DEFAULT_TARGETS)
+    assert len(results) == len(ALL_CHECKS) + len(DEFAULT_TARGETS)
     tick = (await _payloads(fake, agent_mod.STREAM_TICK))[0]
-    assert tick["summary"]["ok"] == 6 + len(DEFAULT_TARGETS)
+    assert tick["summary"]["ok"] == len(ALL_CHECKS) + len(DEFAULT_TARGETS)
     await fake.aclose()
 
 
@@ -311,8 +320,8 @@ async def test_absent_freshness_checks_hold_their_state() -> None:
             NOW + timedelta(seconds=30),
         )
 
-    assert len(first) == 6 + len(DEFAULT_TARGETS)
-    assert len(second) == 6  # not due; freshness simply absent
+    assert len(first) == len(ALL_CHECKS) + len(DEFAULT_TARGETS)
+    assert len(second) == len(ALL_CHECKS)  # not due; freshness simply absent
     assert state.is_degraded(check_name(DEFAULT_TARGETS[0]))
     await fake.aclose()
 

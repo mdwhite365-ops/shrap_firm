@@ -34,6 +34,30 @@ class PrometheusClient:
         except (TypeError, ValueError):
             return None
 
+    async def query_series_labels(self, q: str, label: str) -> list[str]:
+        """Every distinct value of ``label`` across an instant query's result set.
+
+        ``query_instant`` returns one number, which answers "how many" and never
+        "which". An alert saying *1 container unhealthy* costs the reader a
+        console session; *shrap_qdrant unhealthy* does not. Sorted so the same
+        set always renders identically and an alert body does not churn.
+
+        Returns ``[]`` for an empty or failed query — the caller distinguishes
+        "none matched" from "could not ask" using the count it already has.
+        """
+
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            resp = await client.get(f"{self._base_url}/api/v1/query", params={"query": q})
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+        if data.get("status") != "success":
+            return []
+        names = {
+            str(entry.get("metric", {}).get(label, ""))
+            for entry in data.get("data", {}).get("result", [])
+        }
+        return sorted(name for name in names if name)
+
     async def query_targets_up(self) -> dict[str, bool]:
         """Return {target_name: up?} from /api/v1/targets active list."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:

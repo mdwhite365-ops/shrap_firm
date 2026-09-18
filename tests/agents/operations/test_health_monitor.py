@@ -11,7 +11,11 @@ import pytest
 
 from shrap.agents.operations.health_monitor import alerts as alerts_mod
 from shrap.agents.operations.health_monitor.agent import STREAM_TICK, tick_once
-from shrap.agents.operations.health_monitor.checks import CheckResult, check_redis
+from shrap.agents.operations.health_monitor.checks import (
+    ALL_CHECKS,
+    CheckResult,
+    check_redis,
+)
 from shrap.agents.operations.health_monitor.config import Settings
 from shrap.agents.operations.health_monitor.state import HealthState
 from shrap.common.envelope import Envelope
@@ -66,6 +70,9 @@ async def test_check_redis_parses_prom_response() -> None:
     assert r_down.status == "down"
     r_deg = await check_redis(FakeProm(None))  # type: ignore[arg-type]
     assert r_deg.status == "degraded"
+
+    async def query_series_labels(self, q: str, label: str) -> list[str]:
+        return []
 
 
 @pytest.mark.asyncio
@@ -131,7 +138,7 @@ async def test_envelope_published_for_tick() -> None:
             settings,
         )
 
-    assert len(results) == 6  # six checks
+    assert len(results) == len(ALL_CHECKS)
 
     entries = await fake.xread({STREAM_TICK: "0"}, count=10)
     assert entries, "expected ops.health-tick stream entry"

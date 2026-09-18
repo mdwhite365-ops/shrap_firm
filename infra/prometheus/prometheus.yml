@@ -55,3 +55,28 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["qdrant:6333"]
+
+  - job_name: docker-state-exporter
+    # Container health and restart counts, read from the Docker API.
+    #
+    # cAdvisor cannot supply either. Verified 2026-09-18: `shraptasmaner` had
+    # restarted 88,034 times and cAdvisor had NEVER seen it — it scraped 40
+    # containers and that one was not among them, because a container that
+    # fails instantly spends no measurable time running between restarts.
+    # Prometheus-based crashloop detection was therefore not merely absent, it
+    # was impossible. The Docker API is the only source that sees a container
+    # which is almost never up.
+    static_configs:
+      - targets: ["docker-state-exporter:8080"]
+    metric_relabel_configs:
+      # The exporter copies every compose label onto every series. For 40
+      # containers that is ~20 extra labels per sample, none of which any query
+      # here uses; `name` is the identity we alert on.
+      - regex: "container_label_.*"
+        action: labeldrop
+      - source_labels: [__name__]
+        regex: "go_.*"
+        action: drop
+      - source_labels: [__name__]
+        regex: "process_.*"
+        action: drop
