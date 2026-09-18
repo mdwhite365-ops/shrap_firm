@@ -103,7 +103,26 @@ def build_stub_intent(
     # id here would route it to a book nobody chose.
     strategy_id = str(signal.get("strategy_id", "")).strip()
 
-    return {
+    # And so does the decision slot. This is the THIRD field in this rebuild to
+    # have been dropped by it: `strategy_ids` was a hardcoded `[]` until the
+    # Risk Officer made it load-bearing (20 signals, 20 vetoes, zero orders on
+    # 2026-08-03), and `size_hint` was narrowed to `int` until that truncated
+    # every fractional quantity the Runner produced.
+    #
+    # The shape is the same each time: this function reconstructs the intent
+    # from an allowlist rather than passing the signal through, so any fact a
+    # producer adds is dropped by default and nothing raises. Here the loss
+    # would be silent and specifically intraday — the Pre-Trade Checker would
+    # fall back to its time-boxed cooldown, and a five-minute strategy would
+    # have had decisions vetoed SYMBOL_COOLDOWN_ACTIVE at a rate nobody could
+    # explain from the Runner's logs, because the Runner would have emitted
+    # them correctly.
+    #
+    # Absent (an exit, or the fixture before #235) it stays absent: the checker
+    # reads its absence as "not a scheduled decision" and that is true.
+    slot = str(signal.get("slot", "")).strip()
+
+    intent = {
         "ticker": ticker,
         "account_id": account_id,
         "side": side,
@@ -125,6 +144,9 @@ def build_stub_intent(
         "source": "decision-maker-card-2-stub",
         "stub_threshold": threshold,
     }
+    if slot:
+        intent["slot"] = slot
+    return intent
 
 
 class DecisionMakerStub:
