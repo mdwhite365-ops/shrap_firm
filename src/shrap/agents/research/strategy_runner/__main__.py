@@ -33,6 +33,8 @@ def main() -> None:
             count=settings.count,
             block_ms=settings.block_ms,
             intraday_tick_seconds=settings.intraday_tick_seconds,
+            exit_rule=settings.exit_rule(),
+            exit_suppress_seconds=settings.exit_suppress_seconds,
             retry_delay_seconds=settings.retry_delay_seconds,
         )
     )

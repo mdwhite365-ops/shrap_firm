@@ -24,6 +24,7 @@ from typing import Any, Protocol, cast
 
 from shrap.research.strategy_runner.cadence import SESSION_SLOT
 from shrap.research.strategy_runner.engine import PlannedStateWrite, TargetState
+from shrap.risk_compliance.risk_officer.exits import PositionPnL
 
 CREATE_RESEARCH_SCHEMA_SQL = "CREATE SCHEMA IF NOT EXISTS research"
 
@@ -130,6 +131,26 @@ LIMIT 1
 # absence of rows, and those must produce opposite behaviour here: trade, or
 # refuse to.
 FLAT_MARKER_TICKER = "__FLAT__"
+
+# The same newest-pass window as the sizing query below, plus the P&L the broker
+# reported. A separate statement rather than widening that one, because sizing
+# must keep reading exactly the columns it reads today: #215/#221 are the
+# precedent for a SELECT that grew a column and left a reader one rebuild from
+# failing.
+SELECT_LATEST_POSITIONS_PNL_SQL = """
+WITH newest AS (
+    SELECT event_id, at
+    FROM ops.position_snapshots
+    WHERE account_id = $1
+    ORDER BY at DESC
+    LIMIT 1
+)
+SELECT p.ticker, p.quantity, p.market_value,
+       p.unrealized_plpc, p.unrealized_intraday_plpc, n.at
+FROM ops.position_snapshots p
+JOIN newest n ON n.event_id = p.event_id
+WHERE p.account_id = $1
+""".strip()
 
 # Positions are read as the newest PASS, not the newest row per ticker. A
 # per-ticker latest can mix two passes and report a position the newer pass
@@ -239,6 +260,46 @@ class PostgresStrategyRunnerStateStore:
                 held[ticker.upper()] = quantity
         return held, observed_at
 
+    async def latest_positions_pnl(
+        self, account_id: str
+    ) -> tuple[list[PositionPnL], datetime | None]:
+        """Holdings with the broker's unrealized P&L, for the exit rules.
+
+        Mirrors :meth:`latest_positions` exactly in its freshness semantics:
+        ``([], None)`` means no pass has ever run and the caller must not read
+        it as flat; ``([], at)`` means a pass ran and found nothing.
+
+        A position whose P&L the broker did not report is still returned, with
+        ``None`` in those fields. Dropping it here would hide it from the
+        caller entirely; carrying it lets
+        :func:`~shrap.risk_compliance.risk_officer.exits.evaluate_exits` skip it
+        for a stated reason rather than never see it.
+        """
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_LATEST_POSITIONS_PNL_SQL, account_id)
+        if not rows:
+            return [], None
+        observed_at = cast(datetime, rows[0]["at"])
+        positions: list[PositionPnL] = []
+        for row in rows:
+            ticker = str(row["ticker"])
+            if ticker == FLAT_MARKER_TICKER:
+                continue
+            quantity = float(row["quantity"])
+            if quantity == 0.0:
+                continue
+            positions.append(
+                PositionPnL(
+                    ticker=ticker.upper(),
+                    quantity=quantity,
+                    market_value=float(row["market_value"]),
+                    unrealized_plpc=_optional_float(row["unrealized_plpc"]),
+                    unrealized_intraday_plpc=_optional_float(row["unrealized_intraday_plpc"]),
+                )
+            )
+        return positions, observed_at
+
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]:
         """Most recent equity for ``account_id``, and when it was observed.
 
@@ -301,3 +362,11 @@ __all__ = [
     "AsyncPool",
     "PostgresStrategyRunnerStateStore",
 ]
+
+
+def _optional_float(value: object) -> float | None:
+    """``None`` stays ``None``. Never 0.0 — see :class:`PositionPnL`."""
+
+    if value is None:
+        return None
+    return float(value)  # type: ignore[arg-type]

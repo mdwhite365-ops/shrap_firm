@@ -107,8 +107,14 @@ from shrap.research.strategy_runner.engine import (
     already_ran,
     plan_session,
 )
+from shrap.research.strategy_runner.exit_planner import (
+    plan_exits,
+    strategy_by_account,
+    suppressed_tickers,
+)
 from shrap.research.strategy_runner.sizing import SizingRefused, assert_equity_usable
 from shrap.research.strategy_runner.store import PostgresStrategyRunnerStateStore
+from shrap.risk_compliance.risk_officer.exits import ExitRule, PositionPnL
 
 log = structlog.get_logger(__name__)
 
@@ -123,6 +129,12 @@ ACTIVE_PAPER_STAGES: tuple[str, ...] = (
     STATUS_SMALL_SIZE_PAPER,
     STATUS_LIVE_PAPER,
 )
+
+
+# How long a ticker stays suppressed after an exit is published. Comfortably
+# longer than the ~300s position-snapshot refresh, so the sold position has
+# stopped reading as open before the rule may fire on it again.
+DEFAULT_EXIT_SUPPRESS_SECONDS = 900.0
 
 
 class RedisStreamClient(Protocol):
@@ -168,6 +180,10 @@ class StateStore(Protocol):
     async def latest_positions(
         self, account_id: str
     ) -> tuple[dict[str, float], datetime | None]: ...
+
+    async def latest_positions_pnl(
+        self, account_id: str
+    ) -> tuple[list[PositionPnL], datetime | None]: ...
 
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]: ...
 
@@ -643,6 +659,90 @@ async def poll_once(
     return emitted
 
 
+async def run_exit_pass(
+    *,
+    redis: RedisStreamClient,
+    registry: Registry,
+    state_store: StateStore,
+    config: RunnerSignalConfig,
+    rule: ExitRule,
+    emitted_at: dict[str, float],
+    now: float,
+    suppress_seconds: float,
+    produced_by: str = PRODUCED_BY,
+) -> int:
+    """Close positions the exit rule says to close. Returns how many sells went out.
+
+    Runs on the same tick as :func:`run_pass` but is independent of it: a
+    strategy's cadence decides when it may *enter*, and an exit must not have to
+    wait for that. Every position in the firm's history was entered at 09:30 and
+    held to the next 09:30 because the two were the same decision.
+
+    **Unarmed is a no-op before any read happens.** No positions are fetched and
+    no account is touched, so merging this cannot change behaviour or add load
+    until thresholds are set.
+
+    Exceptions from one account are logged and do not stop the others: a book
+    that cannot be read is a reason not to exit *that* account, not a reason to
+    abandon an exit that is already justified somewhere else.
+    """
+
+    if not rule.is_armed:
+        return 0
+
+    records = await _active_paper_strategies(registry)
+    by_account = strategy_by_account(records)
+    if not by_account:
+        return 0
+
+    suppressed = suppressed_tickers(emitted_at, now=now, window_seconds=suppress_seconds)
+    publisher = EventPublisher(cast(RedisPublisher, redis))
+    emitted = 0
+
+    for account_id, strategy_id in sorted(by_account.items()):
+        try:
+            positions, observed_at = await state_store.latest_positions_pnl(account_id)
+        except Exception:
+            log.error(
+                "strategy_runner.exit_positions_unavailable", account_id=account_id, exc_info=True
+            )
+            continue
+        if observed_at is None:
+            # No reconciliation pass has ever run for this account. "No rows"
+            # is not "flat", and an exit against an unknown book is the KI-030
+            # shape — selling what the account may not hold.
+            continue
+        plan = plan_exits(
+            account_id=account_id,
+            strategy_id=strategy_id,
+            positions=positions,
+            rule=rule,
+            config=config,
+            suppressed=suppressed,
+        )
+        for planned, decision in zip(plan.signals, plan.decisions, strict=True):
+            await publisher.publish(
+                stream=STREAM_STRATEGY_SIGNAL,
+                produced_by=produced_by,
+                schema_version=SCHEMA_VERSION,
+                payload=planned.payload,
+            )
+            emitted_at[decision.ticker] = now
+            emitted += 1
+            log.warning(
+                "strategy_runner.exit_published",
+                strategy_id=strategy_id,
+                account_id=account_id,
+                ticker=decision.ticker,
+                reason=decision.reason,
+                measured_pct=decision.measured_pct,
+                threshold_pct=decision.threshold_pct,
+                quantity=decision.quantity,
+                observed_at=observed_at.isoformat(),
+            )
+    return emitted
+
+
 async def run_loop(
     redis: RedisStreamClient,
     *,
@@ -658,6 +758,8 @@ async def run_loop(
     count: int = 100,
     block_ms: int = 5000,
     intraday_tick_seconds: float = 60.0,
+    exit_rule: ExitRule | None = None,
+    exit_suppress_seconds: float = DEFAULT_EXIT_SUPPRESS_SECONDS,
     retry_delay_seconds: float = 1.0,
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
@@ -683,6 +785,10 @@ async def run_loop(
     )
     tracker = SessionTracker()
     last_tick = 0.0
+    # Tickers this process has already sent an exit for, and when. In-process by
+    # design: see `suppressed_tickers` for why a restart is bounded rather than
+    # fixed.
+    exit_emitted_at: dict[str, float] = {}
     while not stop.is_set():
         try:
             emitted = await poll_once(
@@ -724,6 +830,17 @@ async def run_loop(
                     lookback_max_days=lookback_max_days,
                 )
                 emitted += result.emitted
+                # Exits run on every tick regardless of any strategy's cadence.
+                emitted += await run_exit_pass(
+                    redis=redis,
+                    registry=registry,
+                    state_store=state_store,
+                    config=config,
+                    rule=exit_rule or ExitRule(),
+                    emitted_at=exit_emitted_at,
+                    now=now,
+                    suppress_seconds=exit_suppress_seconds,
+                )
                 if result.emitted or result.deferred:
                     log.info(
                         "strategy_runner.intraday_tick",
@@ -757,6 +874,8 @@ async def run(
     retry_delay_seconds: float = 1.0,
     group: str = CONSUMER_GROUP,
     consumer: str | None = None,
+    exit_rule: ExitRule | None = None,
+    exit_suppress_seconds: float = DEFAULT_EXIT_SUPPRESS_SECONDS,
 ) -> None:
     """Run the Strategy Runner service until SIGINT/SIGTERM."""
 
@@ -804,6 +923,8 @@ async def run(
             count=count,
             block_ms=block_ms,
             intraday_tick_seconds=intraday_tick_seconds,
+            exit_rule=exit_rule,
+            exit_suppress_seconds=exit_suppress_seconds,
             retry_delay_seconds=retry_delay_seconds,
             group=group,
             consumer=consumer,

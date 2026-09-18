@@ -52,6 +52,20 @@ class BrokerPosition:
     market_value: float
     side: str | None = None
 
+    unrealized_plpc: float | None = None
+    """Unrealized P&L since entry, as a fraction, exactly as the venue reports it.
+
+    Optional because a venue may omit it and because every existing caller
+    predates it. **Never reconstructed** from a cost basis and a price: that is
+    the shape of five trading-path defects (#192-#199), where a component
+    recomputed a fact the broker already recorded and the two disagreed."""
+
+    unrealized_intraday_plpc: float | None = None
+    """Today's move only, as a fraction.
+
+    Distinct from the field above: a position can be flat since entry and up
+    12% on the day, which is exactly the case the firm could not act on."""
+
 
 @dataclass(frozen=True, slots=True)
 class Discrepancy:

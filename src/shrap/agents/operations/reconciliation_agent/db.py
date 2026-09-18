@@ -198,6 +198,15 @@ CREATE TABLE IF NOT EXISTS ops.position_snapshots (
 )
 """.strip()
 
+# `CREATE TABLE IF NOT EXISTS` above does nothing to a table that already
+# exists, so the P&L columns need their own migration. Every deployed database
+# predates them.
+ALTER_POSITION_SNAPSHOTS_ADD_PNL_SQL = """
+ALTER TABLE ops.position_snapshots
+ADD COLUMN IF NOT EXISTS unrealized_plpc DOUBLE PRECISION,
+ADD COLUMN IF NOT EXISTS unrealized_intraday_plpc DOUBLE PRECISION
+""".strip()
+
 CREATE_POSITION_SNAPSHOTS_ACCOUNT_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS position_snapshots_account_at_idx
 ON ops.position_snapshots (account_id, at DESC)
@@ -205,9 +214,10 @@ ON ops.position_snapshots (account_id, at DESC)
 
 INSERT_POSITION_SNAPSHOT_SQL = """
 INSERT INTO ops.position_snapshots (
-    event_id, broker, account_id, ticker, quantity, market_value, side
+    event_id, broker, account_id, ticker, quantity, market_value, side,
+    unrealized_plpc, unrealized_intraday_plpc
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (event_id, ticker) DO NOTHING
 """.strip()
 
@@ -298,6 +308,7 @@ class PostgresPositionSnapshotStore:
         async with self._pool.acquire() as conn:
             await conn.execute(CREATE_OPS_SCHEMA_SQL)
             await conn.execute(CREATE_POSITION_SNAPSHOTS_TABLE_SQL)
+            await conn.execute(ALTER_POSITION_SNAPSHOTS_ADD_PNL_SQL)
             await conn.execute(CREATE_POSITION_SNAPSHOTS_ACCOUNT_INDEX_SQL)
 
     async def record(
@@ -332,6 +343,8 @@ class PostgresPositionSnapshotStore:
                     0.0,
                     0.0,
                     None,
+                    None,
+                    None,
                 )
                 for position in positions:
                     await conn.execute(
@@ -343,4 +356,6 @@ class PostgresPositionSnapshotStore:
                         position.quantity,
                         position.market_value,
                         position.side,
+                        position.unrealized_plpc,
+                        position.unrealized_intraday_plpc,
                     )

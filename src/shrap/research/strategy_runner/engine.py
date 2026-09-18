@@ -256,7 +256,7 @@ def _justification(
     )
 
 
-def _build_payload(
+def build_payload(
     *,
     strategy_id: str,
     ticker: str,
@@ -543,7 +543,7 @@ def _plan_strategy(
                 sizing_basis = f"closing the {emit_quantity:g} share(s) the account holds"
 
             if side is not None:
-                payload = _build_payload(
+                payload = build_payload(
                     strategy_id=strategy_id,
                     ticker=ticker,
                     side=side,
@@ -662,5 +662,6 @@ __all__ = [
     "TargetState",
     "allocate_equity",
     "already_ran",
+    "build_payload",
     "plan_session",
 ]

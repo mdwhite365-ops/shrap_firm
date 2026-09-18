@@ -13,6 +13,7 @@ from shrap.research.strategy_runner.engine import (
     DEFAULT_MAX_QUANTITY,
     RunnerSignalConfig,
 )
+from shrap.risk_compliance.risk_officer.exits import ExitRule
 
 _DEFAULT_REDIS_URL = "redis" + "://" + "redis" + ":6379/0"
 
@@ -67,6 +68,37 @@ class Settings(BaseSettings):
     # than this. 0 disables interval firing and restores pure event-driven
     # behaviour.
     intraday_tick_seconds: float = 60.0
+
+    # Exit thresholds, as POSITIVE fractions: 0.08 means "exit at -8%". All
+    # None, so the exit pass is a complete no-op until an operator sets one —
+    # it does not even read the book. The firm has NOT calibrated these and
+    # picking them is Mike's ruling; there is no defensible default, and a
+    # guessed stop is a guess about when to realise a loss.
+    #
+    # The `intraday_` pair measures TODAY's move only, which is the case the
+    # firm could not act on: every fill in its history landed at 09:30 and was
+    # held to the next 09:30, so a name that spiked and gave it back was never
+    # sold.
+    exit_take_profit_pct: float | None = None
+    exit_stop_loss_pct: float | None = None
+    exit_intraday_take_profit_pct: float | None = None
+    exit_intraday_stop_loss_pct: float | None = None
+
+    # How long a ticker stays suppressed after its exit is published. Longer
+    # than the ~300s position-snapshot refresh so a sold position has stopped
+    # reading as open before the rule may fire on it again.
+    exit_suppress_seconds: float = 900.0
+
+    def exit_rule(self) -> ExitRule:
+        """The configured rule. Unarmed unless a threshold was set."""
+
+        return ExitRule(
+            take_profit_pct=self.exit_take_profit_pct,
+            stop_loss_pct=self.exit_stop_loss_pct,
+            intraday_take_profit_pct=self.exit_intraday_take_profit_pct,
+            intraday_stop_loss_pct=self.exit_intraday_stop_loss_pct,
+        )
+
     log_level: str = "INFO"
 
     def signal_config(self) -> RunnerSignalConfig:
@@ -94,6 +126,11 @@ class Settings(BaseSettings):
             "count": self.count,
             "block_ms": self.block_ms,
             "intraday_tick_seconds": self.intraday_tick_seconds,
+            "exit_take_profit_pct": self.exit_take_profit_pct,
+            "exit_stop_loss_pct": self.exit_stop_loss_pct,
+            "exit_intraday_take_profit_pct": self.exit_intraday_take_profit_pct,
+            "exit_intraday_stop_loss_pct": self.exit_intraday_stop_loss_pct,
+            "exit_suppress_seconds": self.exit_suppress_seconds,
             "retry_delay_seconds": self.retry_delay_seconds,
             "log_level": self.log_level,
         }
