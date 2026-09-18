@@ -112,4 +112,52 @@ class TriggerSettings(Settings):
     bootstrap_days: int = 5 * 365
 
 
-__all__ = ["Settings", "TriggerSettings"]
+class IntradayTriggerSettings(Settings):
+    """Configuration for the intraday sweep (``MARKET_DATA_INTRADAY_TRIGGER_*``).
+
+    A sibling of :class:`TriggerSettings` rather than a flag on it, for the same
+    reason :mod:`shrap.market_data.intraday_backfill` is a sibling of
+    :mod:`shrap.market_data.backfill`: the two differ by four orders of
+    magnitude in row count, and one shared knob that silently changes that is
+    worse than two modules that state their own costs.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="MARKET_DATA_INTRADAY_TRIGGER_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    service_name: str = "market-data-intraday-trigger"
+
+    # THE NUMBER THAT MATTERS. A strategy that re-decides every 15 minutes on a
+    # table refreshed every 30 reads an unchanged panel on every other decision
+    # — it recomputes the same ranking, emits the same targets, and nothing
+    # raises. So this is a CEILING, not a target: `resolve_interval` lowers it
+    # to half the finest grain any live strategy declared. 300s is the default
+    # ceiling because it is finer than any cadence the firm has ever run.
+    sweep_interval_seconds: float = 300.0
+
+    # Never sweep faster than this however fine a strategy's cadence is. One
+    # minute is Alpaca's finest bar, so anything below re-requests bars that
+    # cannot have changed.
+    min_sweep_interval_seconds: float = 60.0
+
+    # The grain kept warm even when no live strategy declares one, so the
+    # Evaluator can always backtest at this timeframe against recent data.
+    # 15Min is what the 2026-03..09 backfill stored.
+    baseline_timeframe: str = "15Min"
+
+    # Intraday bars are not restated by splits the way daily closes are, but the
+    # most recent bar of an in-progress session is provisional. Two days covers
+    # a weekend gap and any late correction.
+    restate_days: int = 2
+
+    # A grain the store has never held. Thirty days of 15Min bars across fifty
+    # names is ~39k rows; at 1Min it would be ~410k. Stated in days rather than
+    # rows because the caller picks the grain.
+    bootstrap_days: int = 30
+
+
+__all__ = ["IntradayTriggerSettings", "Settings", "TriggerSettings"]
