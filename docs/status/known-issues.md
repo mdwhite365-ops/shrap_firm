@@ -2156,3 +2156,65 @@ account are larger than the incumbent — `kimi-k3` (1.56T), `glm-5.1` (1.5T),
 two or three candidates, promote on the same criteria that promoted the
 incumbent, write the ledger entry. The one thing not to do is let the date pass
 and diagnose it as a mysteriously quiet funnel.
+
+---
+
+## KI-039 — `docker compose up -d --build` can leave the old container running
+
+**Status:** open as a *procedure*, not a code defect. There is nothing to fix in
+the repo; there is something to stop doing.
+**Found:** 2026-09-18, deploying #229–#231 to the Dell.
+**Severity:** high, because the failure mode is a deploy that reports success
+and changes nothing.
+
+### What happened
+
+`docker compose up -d --build reconciliation-agent ...` printed a normal-looking
+result and the build said `Built`. The new P&L columns stayed `NULL`.
+
+    built image:   sha256:56e7529f7b1a12b90c857a006beebb683e5e60cb847e74326690a78ec1972c3a
+    container img: sha256:3b4e6aa034a4e309d587e69f15f48a61a1f3b80e9299e96105b9a0128007865d
+
+The **build was correct** — running `python -c` against the built image showed
+`unrealized_plpc present: True`. The **container was not recreated**: it was
+still the one started at `2026-09-17T06:11:38`, on an image that predated the
+change. `docker compose up -d --force-recreate` fixed it in one command.
+
+### Why this is worth an entry
+
+Every check that looked like verification passed:
+
+- `git log -1` on the Dell showed the right commit.
+- `grep` of the working tree showed the new code present.
+- `docker compose build` printed `Built`.
+- `docker compose up -d` printed no error.
+
+The only check that caught it was **comparing the container's image SHA to the
+built image's SHA**, and then asking the *database* whether the behaviour had
+changed. Had the deploy not been verified in the database, the exit rules would
+have been armed against a Reconciliation Agent that never writes the P&L they
+read — and `evaluate_exits` skips `None`, so it would have sat silently doing
+nothing, forever, looking exactly like a quiet market.
+
+### The rule
+
+**Verify a deploy by image ID and by observed behaviour, never by the build
+log.** Concretely, after any deploy that matters:
+
+```bash
+docker inspect <container> --format '{{.Image}}'
+docker images --no-trunc --format '{{.ID}}' <image> | head -1
+# then ask the database whether the new behaviour actually happened
+```
+
+Prefer `--force-recreate` for anything whose behaviour you intend to change.
+The cost is one container restart; the cost of the alternative is a silent
+no-op.
+
+### The shape, for the fourth time
+
+This is #212–#214 (three PRs for one backup, each failure visible only on the
+next real run), #220/#221 (an import and a schema read that tests could not
+catch), and now the container itself. **Assume a component is wrong about what
+it talks to until it has run against the real thing** — and note that "the real
+thing" includes the image the container is actually running.

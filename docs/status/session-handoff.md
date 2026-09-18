@@ -1,4 +1,4 @@
-# Session handoff — 2026-09-16
+# Session handoff — 2026-09-18
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -11,6 +11,78 @@ The **2026-07-28 rulings** are preserved below the second divider and remain in
 force. Prior measured state is **replaced, not kept**, whenever its headline
 claims go false; leaving them adjacent to current numbers is worse than losing
 them, and `git log` has the history.
+
+---
+
+## Pick up here (reconciled at #231, deployed 2026-09-18)
+
+**The firm is ready for the 2026-09-18 open and nothing is pending.** What is
+live, and what is deliberately not:
+
+| capability | state |
+|---|---|
+| Tech Watcher filter → `kimi-k3` | **live** — beat the 2026-09-25 retirement |
+| Position unrealized P&L capture | **live** — 24 positions carry it |
+| Exit rules | **ARMED**: stop −10%, intraday take-profit +7% |
+| Exit rules (other two thresholds) | deliberately unarmed — see below |
+| Posterior sizing (`posterior_sizing`) | **off** — arming it cuts exposure to ~0.11 |
+| Intraday *trading* (Runner reads intraday bars) | **not built** — measurement only |
+
+**Verified before the open: zero exits fire on the current book.** Worst
+position is `U` at −9.14%, which sits 0.86% from the stop. If it trips
+tomorrow that is the mechanism working, not a surprise.
+
+### The three rulings Mike still owns
+
+1. **Exposure.** The accounts are **84% cash** (stage 0.25 x regime 0.75 =
+   0.1875). Holding selection constant, **IR is `-Sharpe(benchmark)` at every
+   exposure below 1.0** — −1.152 here, independent of the level. The deadlock:
+   exposure is low because edge is unproven, and a $70 return cannot prove
+   edge. Raising it is one line and is not a tuning decision.
+2. **Whether to cap simultaneous exits.** Nothing limits how many positions may
+   exit in one pass. A market-wide drop that breaches the stop everywhere
+   liquidates the book at once. That is arguably what a stop is for, and it is
+   also how a stop realises a loss at the bottom. No cap was invented.
+3. **The §(e) verdict line** for the filter promotion is blank by protocol, with
+   one disagreement to adjudicate (a Summit Therapeutics 8-K).
+
+### Why only two of four exit thresholds are armed
+
+The **since-entry take-profit is unarmed on purpose.** It would sell a position
+the 126-day momentum signal is actively long, and because the name likely stays
+top-N the next re-rank buys it back — two-way costs to end up where you started.
+
+The **intraday take-profit is armed** because it does not conflict: momentum
+runs `skip=21` and deliberately ignores the last 21 days, since short-horizon
+reversal runs *opposite* to momentum. A one-day spike lives in exactly the
+window the strategy excludes.
+
+The **intraday stop is unarmed** to keep night one to two moving parts; the
+since-entry stop already covers the loss case, and a 7% intraday stop would
+whipsaw the volatile names (RIOT, COIN, AMC).
+
+### The binding constraint has not moved
+
+KI-035 said the funnel has produced **one** strategy ever (IR −0.006) against 14
+Mike-seeded factors. KI-036 added that the firm cannot reliably *tell* whether a
+signal is there: the promote gate is decided by 0.11 standard errors of noise
+and **~1,800 years** of history would be needed to settle it. Both point the
+same way — **stop measuring harder and feed the funnel.**
+
+Everything shipped on 2026-09-16/18 is apparatus for measuring and allocating.
+None of it changes whether a strategy makes money. The remaining
+`capability-gap` rows are the build list, and two of them (news text, 10-K full
+text) are closable against data the firm already ingests.
+
+### Known traps re-confirmed this session
+
+- **`docker compose up -d --build` can leave the old container running.** The
+  build produced a correct image; `docker inspect` showed the container on a
+  different SHA and the new code absent. Only `--force-recreate` fixed it. See
+  KI-039 — **always check the image ID, never the build log.**
+- **arXiv returned HTTP 406** on one ingest pass. Reproduced and it returns 200,
+  so transient rate-limiting; handled and logged, pass continues. Watch it — it
+  is the literature leg.
 
 ---
 
