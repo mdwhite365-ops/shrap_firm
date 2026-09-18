@@ -334,6 +334,52 @@ From `00-vision.md`. Assessed honestly against the code, not against intent:
 
 ---
 
+## Landed 2026-09-16/18 — #215–#231, and what it changed about the plan
+
+**The Regime Router (3.3), the intraday panel path, the Kelly posterior, exit
+rules and a forced model re-promotion all shipped.** Two of those PRs fixed
+regressions the others introduced, each found by running on the Dell rather than
+by a passing test suite — #220 an import that broke the evaluator's daily path,
+#221 a schema read that left the Runner one rebuild from silently not trading.
+
+**Three items on this plan are now answered, and two of them are answered
+"no".**
+
+| item | answer |
+|---|---|
+| Track B, the fast layer | **Apparatus built, verdict withheld.** The intraday panel path exists for *measurement*. The Runner still reads `market_data.daily_bars` unconditionally, so **nothing trades intraday**, and the breadth experiment was inconclusive by construction: the test strategy had IR −0.416 daily and −0.396 at 15Min. `IR = IC x sqrt(breadth)` multiplies skill by breadth and there was no skill at either grain. |
+| Tune turnover / rebalance schedule | **Dead, measured.** Momentum 126/21 with costs set to *zero* scores IR 0.487 against a 0.50 floor. The most any turnover change could recover is +0.038. Do not write this card. |
+| Combine signals for breadth | **Available in principle, unusable in practice.** Active-return correlations are genuinely near zero (momentum vs volume-shock −0.05) but only one of four signals has positive IR on a common window. Low-volatility and high-proximity correlate at **+0.85** — one bet, not two, which matters for "~11 uncorrelated strategies". |
+
+### What replaced them
+
+**The gate itself was the problem (KI-036).** The standard error of an
+annualised IR over 5.1 years is ±0.47 and the best IR ever recorded is 0.448 —
+**0.11 standard errors** from the floor it failed. Separating 0.45 from 0.50 at
+two sigma needs **~1,800 years** of daily history. A backtest cannot validate
+the promote floor, ever. So the backtest now feeds the Kelly posterior instead
+of a threshold, and allocation is continuous in evidence.
+
+**The firm could take neither a profit nor a loss (KI-037).** No exit rule
+existed anywhere. Now armed at stop −10% / intraday take-profit +7%, with the
+since-entry take-profit deliberately unarmed because it fights momentum.
+
+### The next cards, in order
+
+1. **Feed the funnel.** The remaining `capability-gap` rows are the build list;
+   **news text and 10-K full text are closable against data the firm already
+   ingests**. This is the binding constraint and everything else is apparatus.
+2. **Exposure ruling.** The accounts are 84% cash and that costs 1.15 of IR
+   against a fully-invested benchmark. Not a tuning decision — see the handoff.
+3. **Whether to cap simultaneous exits.** Nothing limits how many positions exit
+   in one pass.
+4. **Recover `glm-5.3`'s parseable answers.** 17 of 40 rejected responses
+   carried extractable JSON; the harness says so itself. A candidate can be
+   rejected for our parser gap.
+5. **Intraday trading**, gated on something measuring edge at an intraday grain.
+   Wiring the Runner's reader is a one-card change; do it when there is a signal
+   worth 78x the decisions, not before.
+
 ## Maintenance
 
 Update this file when an item lands or an order changes — not `paper-spine-tree.md`,

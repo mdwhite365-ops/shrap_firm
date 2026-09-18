@@ -994,6 +994,123 @@ as systems tests, so a weak fortnight is what the evaluation predicted.
 t-statistics of +0.16 and −0.09. The tool printed a number above the promote
 floor and refused to let it be used, which is the whole point of it.
 
+## 2026-09-17/18 — #222–#231: the firm can size on evidence and take a profit
+
+**Nine PRs. Three of them are findings, not features, and one of the findings
+invalidates how the firm read its own gate for months.**
+
+### The promote gate has never been failed on evidence (#228/#229, KI-036)
+
+The gate compares a point estimate of the information ratio against 0.50 and
+nobody had asked how precisely that estimate is known. On the firm's own panel
+the standard error of an annualised IR over 5.1 years is **±0.47**; the best IR
+ever recorded is **0.448**. The distance between them is **0.11 standard
+errors**.
+
+Re-measuring the same backtest on rolling three-year windows — identical
+decisions, only the measurement period moves — momentum scores anywhere from
+**−0.021 to +0.743** and clears the floor in 16% of windows. Volume-shock
+changes *sign* depending on the start year.
+
+Separating 0.45 from 0.50 at two sigma needs **~1,800 years** of daily history.
+This is the 16-year forward-test arithmetic pointed at the *backtest*, where it
+is worse: the gate asks a strategy to separate from 0.50 rather than from zero.
+
+**Two mechanisms were measured and eliminated before this became the finding.**
+Momentum with costs set to *zero* still scores 0.487, so turnover reduction
+could never have cleared the floor — the monthly-rebalance card was dead before
+it was written. And the active-return streams are genuinely uncorrelated
+(momentum vs volume-shock **−0.05**), so breadth is available in principle, but
+only one of four signals has a positive IR on a common window and breadth
+multiplies skill rather than supplying it. Low-volatility and high-proximity
+correlate at **+0.85** — one bet, not two, which matters for the "~11
+uncorrelated strategies" plan.
+
+**The consequence, ruled by Mike:** connect the backtest to the Kelly
+posterior. `posterior_from_backtest` reads the IR as a likelihood carrying its
+own standard error against a prior centred on **no skill**, and
+`selection_discounted_sd` widens that error by `sqrt(1 + ln attempts)` — the
+identical factor the verdict uses to raise the bar, applied to the uncertainty
+instead. Every strategy the firm has measured sizes **down**: momentum 126/21
+from the flat 0.25 to 0.147. `posterior_sizing` is **off**.
+
+### The firm could not take a profit or cut a loss (#230, KI-037)
+
+`grep` for `stop_loss`, `take_profit`, `profit_target`, `trailing_stop` across
+the whole codebase returned **zero matches**. Every filled order in the firm's
+history is stamped **09:30:03–09:30:07 ET** — one burst at the open and nothing
+for the remaining 390 minutes. The only exit was the next morning's re-rank,
+and because every strategy is momentum, a name that spikes moves *up* the
+ranking and gets held or bought more.
+
+Alpaca reports `avg_entry_price` and `unrealized_plpc` on every position and the
+firm **discarded both**. Now captured from the venue and never reconstructed.
+
+**Armed 2026-09-18** via `infra/.env`: stop-loss at **10%**, intraday
+take-profit at **7%**. The since-entry take-profit is deliberately unarmed — it
+would sell a position the 126-day momentum signal is actively long, and the
+re-rank would buy it back. The intraday one does not conflict: momentum runs
+`skip=21` and deliberately ignores the last 21 days because short-horizon
+reversal runs opposite to it, so a one-day spike lives in the window the
+strategy excludes. Verified against the live book: **zero exits at the open.**
+
+### The accounts are 84% cash, and that costs 1.15 of IR (KI-037)
+
+    account         equity      cash    deployed
+    PA3HEG2CLXLU  10,073.99  8,496.02     15.7%
+    PA3KQN57WVXY  10,054.58  8,366.94     16.8%
+    PA3YPMG9AD4Z  10,066.19 10,066.19      0.0%
+
+Stage `0.25` x regime band `0.75` = **0.1875**, working as configured. Holding
+selection perfectly constant, **IR is `-Sharpe(benchmark)` at every exposure
+below 1.0** — −1.152 on this panel, independent of the level. The $74 is what
+~$1,600 earned in a melt-up.
+
+**The deadlock:** exposure is low because edge is unproven, and a $70 return
+cannot prove edge. Posterior sizing would take it to ~0.11, which is the correct
+belief and moves against the flat accounts. Both are true. Mike's call.
+
+**The third account is idle because nothing has reached `paper` in 46 days** —
+15 strategies created, 13 killed, 2 promoted, last on 2026-08-02. Promotion also
+does not assign an account: `assign_account` lives only in the stage CLI, so a
+newly promoted strategy sits idle until a human runs it. The Runner logs that at
+error level and names the command, so it is visible rather than silent.
+
+### The filter model was eight days from retirement (#231, KI-038)
+
+Ollama retires `qwen3.5:397b` on **2026-09-25**; it carried 1,361 requests the
+week before. Shadow eval (calibration.md §(e) Run 2): `kimi-k3` and
+`deepseek-v4-pro:0813` both 100% schema with 0 errors, `glm-5.3` **0%** (37 of
+40 in prose). Promoted **`kimi-k3`** — 100% self-consistency and 100% pairwise
+agreement with the outgoing model.
+
+**The incumbent no longer reproduces its own verdicts.** Half the sample is
+items it previously scored relevant and it called **0%** of the sample relevant,
+so its 50% "agreement" is agreement on the negatives and disagreement on every
+positive. Prompt v4 does not reproduce whatever scored the corpus's 189
+positives — the same shape as KI-009: taxonomy, not model.
+
+`kimi-k3` was unreachable at the last eval (402) and now runs clean, which
+falsified a compose comment claiming the paid subscription "does not [exist]".
+Synthesis has been on `gpt-oss:20b` because of a constraint that is gone;
+corrected in place and deliberately not changed, since the verdict was for the
+filter task.
+
+### Also shipped
+
+- **#222–#224** shares outstanding and market cap, 1,594 rows back to 2009;
+  the first summary reported `unmapped=8` when 26 of 50 names had no count.
+- **#225** recovered a lost finding: the stage-fraction tension was not real,
+  IR is scale-invariant (identical +0.142060 at 0.1875/0.75/1.00).
+- **#226** rank persistence replicated the paper's claim on 50 names —
+  volatility rank rho **+0.880** (positive in 100% of 73 months), return rank
+  **+0.019**. The return result independently corroborates the Evaluator
+  killing momentum.
+- **#227** inverse-volatility weighting: **Sharpe 1.016**, the first time
+  anything cleared the 1.0 floor — and **IR got worse in every configuration**,
+  because lowering a book's volatility lowers its participation in a rising
+  benchmark. Risk engineering cannot substitute for alpha.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.

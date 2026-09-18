@@ -22,13 +22,53 @@ failure was only visible on the next real run; none were findable by reading the
 script.** Assume a component is wrong about what it talks to until it has run
 against the real thing.
 
-**#215–#221 (2026-09-16/17)** shipped the Regime Router, the intraday panel path,
-and the Kelly posterior — and **two of those seven PRs fixed regressions the others
-introduced**, each found only by running on the Dell rather than by a passing test
-suite (#220 an import that broke the evaluator's daily path, #221 a schema read that
-left the Runner one rebuild from silently not trading). Tests pass in the gap between
-"the code is correct" and "the container has the dependency, the database has the
-column."
+**#215–#231 (2026-09-16/18)** shipped the Regime Router, the intraday panel path,
+the Kelly posterior, exit rules and a forced filter re-promotion — and **two of
+those PRs fixed regressions the others introduced**, each found only by running on
+the Dell rather than by a passing test suite (#220 an import that broke the
+evaluator's daily path, #221 a schema read that left the Runner one rebuild from
+silently not trading). Tests pass in the gap between "the code is correct" and
+"the container has the dependency, the database has the column."
+
+**And a third shape of that same gap, found on deploy 2026-09-18 (KI-039):
+`docker compose up -d --build` built a correct image and left the container
+running the old one.** `docker inspect` showed the container on a different SHA
+with the new code absent, while the build log said `Built`. Only
+`--force-recreate` fixed it. **Verify a deploy by image ID, never by the build
+log** — and confirm the behaviour in the database, not in the container.
+
+**The promote gate has never been failed on evidence (KI-036, 2026-09-17).** The
+standard error of an annualised IR over 5.1 years on this firm's panel is
+**±0.47**; the best IR ever recorded is **0.448**. That is **0.11 standard
+errors** from the floor it failed, and separating 0.45 from 0.50 at two sigma
+would take **~1,800 years** of daily history. A backtest cannot validate the
+0.50 floor, ever — so the backtest now feeds the Kelly posterior rather than a
+threshold. Do not go looking for a strategy variant that clears the gate; that
+is a search for a favourable measurement error. Two mechanisms were already
+measured and eliminated: **zero-cost momentum still scores 0.487** (so turnover
+reduction cannot work) and the active-return streams are genuinely uncorrelated
+but only one has positive IR on a common window (so breadth has nothing to
+multiply).
+
+**The firm could take neither a profit nor a loss until #230 (KI-037).** `grep`
+for `stop_loss`/`take_profit`/`profit_target`/`trailing_stop` returned **zero
+matches**. Every fill in the firm's history is stamped **09:30:03–09:30:07 ET**.
+Exit rules are now **armed**: stop −10%, intraday take-profit +7%. The
+since-entry take-profit is deliberately unarmed — it would sell a position the
+126-day momentum signal is actively long.
+
+**The accounts are 84% cash, and that alone costs 1.15 of IR.** Stage 0.25 x
+regime 0.75 = 0.1875. Holding selection perfectly constant, **IR is
+`-Sharpe(benchmark)` at every exposure below 1.0**, independent of the level.
+The deadlock: exposure is low because edge is unproven, and a $70 return cannot
+prove edge. Raising it is Mike's ruling. **The third account is idle because
+nothing has reached `paper` in 46 days** — 15 strategies, 13 killed, 2 promoted.
+
+**The Tech Watcher's filter is `kimi-k3` as of #231**, promoted on a shadow eval
+because Ollama retires `qwen3.5:397b` on 2026-09-25. The eval also found that
+**the incumbent no longer reproduces its own verdicts** — it called 0% of a
+sample relevant, half of which it had previously scored relevant. Same shape as
+KI-009: taxonomy, not model.
 
 **The binding constraint, measured 2026-09-17 (KI-035):** the autonomous research
 loop has produced **one** strategy ever (IR −0.006) against 14 Mike-seeded textbook
