@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol
 
@@ -93,7 +93,7 @@ class PanelWindow:
         return self._panel.dates[: self._index + 1]
 
     def closes(self, ticker: str) -> tuple[float, ...]:
-        return self._panel.history(ticker, self._panel.closes, self._index)
+        return self._panel.history_cached(ticker, "closes", self._index)
 
     def aligned_closes(self, ticker: str) -> tuple[float, ...]:
         """The grid-aligned prefix: one entry per panel date, ``nan`` where absent.
@@ -114,7 +114,7 @@ class PanelWindow:
         return () if series is None else series[: self._index + 1]
 
     def volumes(self, ticker: str) -> tuple[float, ...]:
-        return self._panel.history(ticker, self._panel.volumes, self._index)
+        return self._panel.history_cached(ticker, "volumes", self._index)
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +253,16 @@ class PricePanel:
     volumes: dict[str, tuple[float, ...]]
     live: dict[str, tuple[bool, ...]]
 
+    # Derived in __post_init__, never by a caller. `compare=False` keeps two
+    # panels with identical inputs equal, and `repr=False` keeps a panel's repr
+    # readable — these hold one compressed copy of every series.
+    _compressed: dict[str, dict[str, tuple[float, ...]]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    _live_counts: dict[str, tuple[int, ...]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+
     @property
     def n_bars(self) -> int:
         return len(self.dates)
@@ -274,6 +284,11 @@ class PricePanel:
         back is how many times the name has actually traded. Every "do I have
         enough history" check in every strategy is a length check, so they all
         get the right answer for a newly-listed name without knowing it is one.
+
+        **The reference implementation.** :meth:`history_cached` returns the
+        identical tuple for every input and is what the hot path uses; this
+        stays as the definition that one is tested against, and as the fallback
+        for a series with no precomputed form.
         """
 
         values = series.get(ticker)
@@ -282,6 +297,74 @@ class PricePanel:
             return ()
         stop = min(index + 1, len(values))
         return tuple(values[i] for i in range(stop) if flags[i])
+
+    def history_cached(self, ticker: str, series_name: str, index: int) -> tuple[float, ...]:
+        """:meth:`history`, answered from precomputed state. Bit-identical.
+
+        **The arithmetic that makes this worth doing.** ``history`` rebuilds the
+        whole prefix on every call, and a strategy calls it once per ticker per
+        bar, so a backtest costs ``tickers x bars^2 / 2`` element visits. On the
+        firm's 15-minute panel — 50 names, 37,116 bars — that is **34.6 billion**
+        generator iterations. Measured on the Dell at 9.3M/s in situ, one
+        evaluation takes about an hour per pass and the walk-forward runs two
+        expensive passes. A single intraday backtest cost ~2.5 hours, and the
+        toll grows QUADRATICALLY: doubling the history quadruples the runtime.
+
+        **Why it is provably the same answer.** ``history`` yields ``values[i]``
+        for ascending ``i`` where ``flags[i]``, stopping after ``index``. That is
+        by definition the first ``K`` entries of the fully compressed series,
+        where ``K`` is how many live bars fall at or before ``index``. Both are
+        precomputed here, so this is the same elements in the same order —
+        not an approximation, and not a faster algorithm that might round
+        differently. It is a tuple slice of a tuple the generator would have
+        rebuilt element by element.
+
+        Still O(K), because the caller wants the prefix. The win is the
+        constant: a slice is one C-level copy rather than K Python iterations
+        with a conditional. The deeper fix — letting a strategy ask for two
+        elements instead of a whole prefix — changes the strategy seam and is
+        deliberately not in this card.
+        """
+
+        compressed = self._compressed.get(series_name)
+        counts = self._live_counts.get(ticker)
+        if compressed is None or counts is None:
+            return ()
+        values = compressed.get(ticker)
+        if values is None or index < 0 or not counts:
+            return ()
+        return values[: counts[min(index, len(counts) - 1)]]
+
+    def __post_init__(self) -> None:
+        """Precompute the compressed series and the live-bar prefix counts.
+
+        Built here rather than in :meth:`from_bars` because panels are also
+        constructed directly (tests do), and a cache that only exists on one
+        construction path is a cache that is silently absent on the other.
+
+        Mutating these dicts does not violate ``frozen``: the fields are bound
+        once by the dataclass and only their contents are filled, so the panel
+        remains immutable to anything outside this method.
+        """
+
+        for name, series in (("closes", self.closes), ("volumes", self.volumes)):
+            self._compressed[name] = {
+                ticker: tuple(
+                    value
+                    for position, value in enumerate(series.get(ticker, ()))
+                    if position < len(self.live.get(ticker, ()))
+                    and self.live.get(ticker, ())[position]
+                )
+                for ticker in self.tickers
+            }
+        for ticker in self.tickers:
+            running = 0
+            counts: list[int] = []
+            for flag in self.live.get(ticker, ()):
+                if flag:
+                    running += 1
+                counts.append(running)
+            self._live_counts[ticker] = tuple(counts)
 
     def window(self, index: int) -> PanelWindow:
         if not 0 <= index < self.n_bars:
