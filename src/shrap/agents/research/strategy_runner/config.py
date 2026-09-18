@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # behaviour.
     intraday_tick_seconds: float = 60.0
 
+    # Whether an intraday panel may include pre/post-market bars. Off, and it
+    # should stay off: the backfill stores 04:00-20:00 as Alpaca returns it, and
+    # a 04:00 IEX print of a handful of shares sets a price no strategy could
+    # have traded at size. Exposed because the data is legitimately there for
+    # whoever deliberately wants it, never because it is a tuning knob.
+    intraday_include_extended: bool = False
+
     # Exit thresholds, as POSITIVE fractions: 0.08 means "exit at -8%". All
     # None, so the exit pass is a complete no-op until an operator sets one —
     # it does not even read the book. The firm has NOT calibrated these and
@@ -126,6 +133,7 @@ class Settings(BaseSettings):
             "count": self.count,
             "block_ms": self.block_ms,
             "intraday_tick_seconds": self.intraday_tick_seconds,
+            "intraday_include_extended": self.intraday_include_extended,
             "exit_take_profit_pct": self.exit_take_profit_pct,
             "exit_stop_loss_pct": self.exit_stop_loss_pct,
             "exit_intraday_take_profit_pct": self.exit_intraday_take_profit_pct,

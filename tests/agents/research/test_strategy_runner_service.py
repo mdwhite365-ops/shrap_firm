@@ -37,6 +37,7 @@ from shrap.research.strategy_runner.engine import (
     RunnerSignalConfig,
     TargetState,
 )
+from shrap.research.strategy_runner.readers import SingleGrainReaders
 from shrap.research.strategy_runner.sizing import DEFAULT_MAX_EQUITY_AGE
 
 SESSION = date(2026, 7, 29)
@@ -197,7 +198,7 @@ async def _run(
         session_date=SESSION,
         redis=redis or FakeRedis(),  # type: ignore[arg-type]
         registry=FakeRegistry(records),  # type: ignore[arg-type]
-        reader=FakeReader(),  # type: ignore[arg-type]
+        readers=SingleGrainReaders(FakeReader()),  # type: ignore[arg-type]
         state_store=store,  # type: ignore[arg-type]
         config=UNCAPPED,
         adjustment="all",
@@ -322,7 +323,7 @@ async def _poll(records: list[StrategyRecord], store: FakeStateStore, redis: Fak
         redis,  # type: ignore[arg-type]
         subscriber,
         registry=FakeRegistry(records),  # type: ignore[arg-type]
-        reader=FakeReader(),  # type: ignore[arg-type]
+        readers=SingleGrainReaders(FakeReader()),  # type: ignore[arg-type]
         state_store=store,  # type: ignore[arg-type]
         config=UNCAPPED,
         adjustment="all",
@@ -410,7 +411,7 @@ async def test_poll_once_updates_the_tracker_from_the_phase_stream() -> None:
         redis,  # type: ignore[arg-type]
         subscriber,
         registry=FakeRegistry([_record("s1", ACCOUNT_A)]),  # type: ignore[arg-type]
-        reader=FakeReader(),  # type: ignore[arg-type]
+        readers=SingleGrainReaders(FakeReader()),  # type: ignore[arg-type]
         state_store=store,  # type: ignore[arg-type]
         config=UNCAPPED,
         adjustment="all",
@@ -459,7 +460,7 @@ async def test_a_pass_with_nothing_due_reads_no_bars() -> None:
         session_date=SESSION,
         redis=FakeRedis(),  # type: ignore[arg-type]
         registry=FakeRegistry([_record("s1", ACCOUNT_A)]),  # type: ignore[arg-type]
-        reader=reader,  # type: ignore[arg-type]
+        readers=SingleGrainReaders(reader),  # type: ignore[arg-type]
         state_store=StampedStore({ACCOUNT_A: _fresh()}),  # type: ignore[arg-type]
         config=UNCAPPED,
         adjustment="all",
