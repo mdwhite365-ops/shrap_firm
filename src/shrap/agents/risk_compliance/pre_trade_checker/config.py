@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # Firm-wide daily approvals. A 50-name universe entered from flat is 50
     # orders; 80 leaves headroom for same-day rotation without leaving a runaway
     # signal loop unbounded.
-    max_orders_per_day: int = 80
+    max_orders_per_day: int = 300
     symbol_cooldown_seconds: int = 300
     # Tier 3 membership enforcement (ADR-0012). Default off: nothing populates
     # research.universe_tiers until the Universe Curator's first card lands and

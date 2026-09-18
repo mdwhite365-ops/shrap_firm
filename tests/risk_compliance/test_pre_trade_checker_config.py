@@ -35,7 +35,7 @@ def test_settings_redacted_output_is_log_safe() -> None:
         "allowed_universe": ["AAPL", "SPY"],
         "max_quantity_per_order": 100,
         "kill_switch_active": False,
-        "max_orders_per_day": 80,
+        "max_orders_per_day": 300,
         "symbol_cooldown_seconds": 300,
         "tier3_enforcement": False,
         "postgres_dsn": "***",

@@ -484,7 +484,7 @@ services:
       # vetoes, so a larger Runner cap records an intent bigger than the fill.
       PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER: "${PRE_TRADE_CHECKER_MAX_QUANTITY_PER_ORDER:-100}"
       PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE: "${PRE_TRADE_CHECKER_KILL_SWITCH_ACTIVE:-false}"
-      PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY: "${PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY:-80}"
+      PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY: "${PRE_TRADE_CHECKER_MAX_ORDERS_PER_DAY:-300}"
       PRE_TRADE_CHECKER_SYMBOL_COOLDOWN_SECONDS: "${PRE_TRADE_CHECKER_SYMBOL_COOLDOWN_SECONDS:-300}"
       # Tier 3 membership enforcement (ADR-0012). Default off until the
       # Universe Curator's first card populates research.universe_tiers and
