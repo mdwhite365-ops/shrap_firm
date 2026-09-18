@@ -1,9 +1,16 @@
 """The skill posterior that fills the Kelly slot.
 
-The property that makes this safe to merge is **continuity**: with no live
-evidence the posterior returns exactly the flat fraction the firm already uses,
-so nothing changes on the day it ships. Everything after that is evidence moving
-size, in the direction the evidence points.
+**The continuity property this file was built around is gone, and the tests now
+pin its absence.** When this shipped, a zero-evidence posterior returned exactly
+the flat stage fraction (both 0.25), so enabling it changed nothing on day one.
+Mike raised `STAGE_FRACTIONS["paper"]` to 0.80 on 2026-09-18 after the accounts
+turned out to be 84% cash, and this rule stayed at 0.25. Enabling
+`posterior_sizing` on a paper strategy now cuts its size by **3.2x**, and
+because `MAX_POSTERIOR_FRACTION` is 0.50 the posterior can no longer size *up*
+past the paper stage at all — the upside half of the mechanism is dead there.
+
+Both rules are defensible and they answer different questions. Reconciling them
+is unruled. What these tests guarantee is that the disagreement is explicit.
 
 What makes it tolerable to *run* is narrower than the first draft of this file
 claimed, and worth stating precisely: the update is linear and unbiased, and all
@@ -78,17 +85,33 @@ def test_annualisation_agrees_across_the_firm() -> None:
 # --- continuity: nothing changes on the day this ships ------------------------
 
 
-def test_no_evidence_returns_exactly_the_flat_paper_fraction() -> None:
-    """The headline safety property, and the reason there is no cliff.
+def test_no_evidence_returns_exactly_one_quarter() -> None:
+    """The zero-evidence limit of the rule, which is still 0.25.
 
-    The flat 0.25 is the zero-evidence *limit* of this rule, not a special case
-    branched around it. It falls out of three independently calibrated numbers:
-    the promote floor (0.5), the Kelly cap (0.50) and "an IR of 1.0 is
-    exceptional and rare".
+    It falls out of three independently calibrated numbers: the promote floor
+    (0.5), the Kelly cap (0.50) and "an IR of 1.0 is exceptional and rare". It
+    is the *limit* of the rule rather than a special case branched around it.
     """
 
-    assert prior_posterior().fraction == STAGE_FRACTIONS["paper"]
-    assert PRIOR_IR / FULL_SIZE_IR * MAX_POSTERIOR_FRACTION == STAGE_FRACTIONS["paper"]
+    assert prior_posterior().fraction == 0.25
+    assert PRIOR_IR / FULL_SIZE_IR * MAX_POSTERIOR_FRACTION == 0.25
+
+
+def test_enabling_the_posterior_is_now_a_cliff_and_that_is_recorded() -> None:
+    """This module used to claim "there is no cliff at the first session".
+
+    That held only while the zero-evidence posterior and the stage table both
+    read 0.25. Mike raised `STAGE_FRACTIONS["paper"]` to 0.80 on 2026-09-18
+    when the accounts turned out to be 84% cash, and this rule did not move.
+
+    The claim is therefore false and the docstring now says so. Pinned as a
+    test because a silent 3.2x drop in exposure the moment a flag is enabled is
+    exactly the kind of thing that should fail loudly if someone "fixes" one
+    number without the other.
+    """
+
+    assert prior_posterior().fraction < STAGE_FRACTIONS["paper"]
+    assert STAGE_FRACTIONS["paper"] / prior_posterior().fraction == pytest.approx(3.2)
 
 
 def test_too_few_sessions_returns_the_prior() -> None:
@@ -112,14 +135,27 @@ def test_a_flat_series_carries_no_information_however_long() -> None:
 # --- evidence moves size ------------------------------------------------------
 
 
-def test_sustained_outperformance_raises_size_above_the_stage_fraction() -> None:
-    """The governance change Mike took on 2026-09-17: code may raise risk."""
+def test_sustained_outperformance_can_no_longer_outgrow_the_paper_stage() -> None:
+    """The upside half of this mechanism is dead at the `paper` stage.
+
+    When this was written, `STAGE_FRACTIONS["paper"]` was 0.25 and the module
+    documented a deliberate governance change: "code may now increase risk
+    without a human promoting a stage." Mike raised the paper fraction to 0.80
+    on 2026-09-18, and `MAX_POSTERIOR_FRACTION` is 0.50 — the spec's Kelly
+    ceiling, which no amount of evidence passes.
+
+    So at `paper`, enabling the posterior can now only ever size **down**. A
+    strategy running a sustained observed IR of 1.2 reaches 0.425, still well
+    under 0.80. The mechanism is unchanged; what changed is that the stage it is
+    compared against is now above its ceiling.
+    """
 
     posterior = update_posterior(_series_with_ir(1.2, 252))
 
     assert posterior.observed_ir is not None and posterior.observed_ir > PRIOR_IR
-    assert posterior.fraction > STAGE_FRACTIONS["paper"]
-    assert posterior.is_evidence_based
+    assert posterior.fraction > 0.25
+    assert posterior.fraction <= MAX_POSTERIOR_FRACTION
+    assert posterior.fraction < STAGE_FRACTIONS["paper"]
 
 
 def test_sustained_underperformance_sizes_to_zero() -> None:
@@ -201,7 +237,9 @@ def test_nine_sessions_barely_move_the_posterior() -> None:
     posterior = update_posterior(_series_with_ir(0.84, 9))
 
     assert abs(posterior.mean_ir - PRIOR_IR) < 0.2
-    assert abs(posterior.fraction - STAGE_FRACTIONS["paper"]) < 0.1
+    # Compared against the rule's own zero-evidence value (0.25), not the
+    # stage table, which no longer agrees with it.
+    assert abs(posterior.fraction - 0.25) < 0.1
 
 
 # --- wiring into sizing -------------------------------------------------------
@@ -212,7 +250,7 @@ def test_size_intent_without_a_posterior_is_unchanged() -> None:
 
     decision = size_intent(requested_quantity=100.0, stage="paper", regime_multiplier=0.75)
 
-    assert decision.approved_quantity == 100.0 * 0.25 * 0.75
+    assert decision.approved_quantity == pytest.approx(100.0 * 0.80 * 0.75)
     assert decision.kelly_posterior is None
 
 
@@ -230,11 +268,22 @@ def test_size_intent_uses_the_posterior_in_place_of_the_stage_fraction() -> None
     assert decision.approved_quantity == 100.0 * posterior.fraction
     # The stage fraction is still reported, so a decision row shows both the
     # number that would have applied and the one that did.
-    assert decision.stage_fraction == 0.25
+    # Still reported, so the card shows what the stage WOULD have given.
+    assert decision.stage_fraction == 0.80
 
 
-def test_a_no_evidence_posterior_sizes_identically_to_no_posterior() -> None:
-    """Continuity again, this time through the whole sizing path."""
+def test_a_no_evidence_posterior_now_sizes_well_below_no_posterior() -> None:
+    """The continuity this test used to assert is gone, and deliberately so.
+
+    Until 2026-09-18 a zero-evidence posterior and no posterior at all sized
+    identically, because both came to 0.25. Mike raised the paper stage to 0.80
+    and this rule stayed at 0.25, so switching the posterior on now cuts a
+    never-traded strategy to less than a third of its size.
+
+    Pinned with the exact ratio because a silent 3.2x drop the moment a flag is
+    enabled is precisely what should fail loudly if someone adjusts one of
+    these numbers without the other.
+    """
 
     without = size_intent(requested_quantity=80.0, stage="paper", regime_multiplier=0.75)
     with_prior = size_intent(
@@ -244,7 +293,9 @@ def test_a_no_evidence_posterior_sizes_identically_to_no_posterior() -> None:
         posterior=prior_posterior(),
     )
 
-    assert with_prior.approved_quantity == without.approved_quantity
+    assert with_prior.approved_quantity < without.approved_quantity
+    ratio = without.approved_quantity / with_prior.approved_quantity
+    assert ratio == pytest.approx(3.2)
 
 
 def test_regime_still_scales_on_top_of_the_posterior() -> None:

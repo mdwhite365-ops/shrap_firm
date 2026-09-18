@@ -213,17 +213,20 @@ async def test_an_intent_inside_every_limit_is_approved() -> None:
 
     assert assessment.approved
     assert assessment.account_id == ACCOUNT
-    # 8 x 0.25 paper stage x 0.75 regime. This asserted 1 until 2026-08-09 —
-    # the floor threw away a third of the position and did it silently.
-    assert assessment.approved_quantity == 1.5
+    # 8 x 0.80 paper stage x 0.75 regime. Asserted 1 until 2026-08-09 (the
+    # floor threw away a third of the position silently) and 1.5 until
+    # 2026-09-18, when the paper fraction went 0.25 -> 0.80 because the
+    # accounts were 84% cash.
+    assert assessment.approved_quantity == pytest.approx(4.8)
 
 
 async def test_a_small_order_is_scaled_rather_than_vetoed() -> None:
     """The 26-of-89 case, inverted.
 
-    4 shares x 0.25 x 0.75 is 0.75 of a share. That was floored to zero and
-    vetoed SIZED_TO_ZERO — which is how 26 of 89 live decisions died, every one
-    of them a request under six shares. It is a real position now.
+    4 shares x 0.80 x 0.75 is 2.4 shares. At the old 0.25 fraction this was
+    0.75 of a share, and before the floor was removed it was vetoed
+    SIZED_TO_ZERO — which is how 26 of 89 live decisions died, every one of them
+    a request under six shares. Both causes are now gone.
     """
 
     officer = _officer(FakeStore(), FakeSwitchStore())
@@ -231,7 +234,7 @@ async def test_a_small_order_is_scaled_rather_than_vetoed() -> None:
     assessment = await _assess(officer, quantity=4)
 
     assert assessment.approved
-    assert assessment.approved_quantity == 0.75
+    assert assessment.approved_quantity == pytest.approx(2.4)
 
 
 async def test_an_order_too_small_to_be_a_position_is_still_refused() -> None:
@@ -265,9 +268,11 @@ async def test_the_stage_fraction_and_regime_both_apply() -> None:
     )
 
     assert assessment.sizing is not None
-    assert assessment.sizing.stage_fraction == 0.25
+    assert assessment.sizing.stage_fraction == 0.80
     assert assessment.regime_multiplier == 0.75
-    assert assessment.sizing.approved_quantity == 18.75  # was 18; the 0.75 was floored away
+    # 100 x 0.80 x 0.75. Was 18.75 at the old 0.25 fraction, and 18 before the
+    # floor was removed.
+    assert assessment.sizing.approved_quantity == pytest.approx(60.0)
 
 
 async def test_the_kelly_slot_is_present_and_empty() -> None:
@@ -437,7 +442,7 @@ async def test_a_buy_is_still_scaled_when_a_position_is_already_held() -> None:
     assessment = await _assess(officer, quantity=8, side="buy")
 
     assert assessment.sizing is not None
-    assert assessment.sizing.stage_fraction == 0.25
+    assert assessment.sizing.stage_fraction == 0.80
 
 
 # --- the heartbeat ------------------------------------------------------------
@@ -615,7 +620,7 @@ async def test_a_buy_is_still_scaled_by_stage_and_regime() -> None:
     assessment = await _assess(officer, quantity=8, side="buy")
 
     assert assessment.approved
-    assert assessment.approved_quantity == 1.5  # 8 x 0.25 x 0.75, unchanged
+    assert assessment.approved_quantity == pytest.approx(4.8)  # 8 x 0.80 x 0.75
 
 
 # --- Exits use the broker's share count, not market_value / price -------------
@@ -798,3 +803,42 @@ async def test_an_exit_is_never_blocked_by_an_unreadable_posterior() -> None:
 
     assert result.approved
     assert result.approved_quantity == 4
+
+
+async def test_the_cluster_cap_starts_binding_at_the_raised_paper_fraction() -> None:
+    """A consequence of the 2026-09-18 exposure ruling, pinned deliberately.
+
+    `max_cluster_weight` is 0.15 and scales with the regime, so in the current
+    0.75 band a cluster may hold 11.25% of NAV. At the old 0.1875 target each
+    of ten names was 1.875% and no portfolio limit had *ever* bound — all 448
+    rows in `risk.decisions` carry a NULL `binding_limit`. At the new 0.60
+    target each name is 6%, so any cluster holding two or more names exceeds
+    the cap and the order is scaled rather than approved in full.
+
+    **That is the diversification control working, not a regression**, and it
+    is visible: the decision records `SCALED_DOWN_PORTFOLIO_LIMIT` with an
+    `EXCEEDS_CLUSTER` note. The practical consequence is that realised exposure
+    will land *below* 0.60 by however much correlation forces. Raising
+    `max_cluster_weight` is a separate ruling and was not taken here.
+    """
+
+    officer = _officer(FakeStore(), FakeSwitchStore())
+
+    assessment = await officer.assess(
+        ticker="AAPL",
+        side="buy",
+        quantity=100,
+        strategy_ids=[STRATEGY],
+        regime_label="late-cycle-melt-up",
+        now=NOW,
+    )
+
+    # Sized on the stage first...
+    assert assessment.sizing is not None
+    assert assessment.sizing.stage_fraction == 0.80
+    assert assessment.sizing.approved_quantity == pytest.approx(60.0)
+    # ...then cut by the cluster cap, with the reason recorded.
+    assert assessment.approved
+    assert assessment.approved_quantity < assessment.sizing.approved_quantity
+    assert assessment.reason_code == "SCALED_DOWN_PORTFOLIO_LIMIT"
+    assert any("CLUSTER" in note for note in assessment.notes)

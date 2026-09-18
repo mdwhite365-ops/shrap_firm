@@ -28,10 +28,44 @@ from dataclasses import dataclass, replace
 # because the posterior these were meant to multiply does not exist — see
 # `docs/risk/policy.md` §Sizing and the `kelly_posterior` slot in `sizing.py`.
 STAGE_FRACTIONS: dict[str, float] = {
-    "paper": 0.25,
+    "paper": 0.80,
     "small-size-paper": 0.25,
     "live-paper": 0.50,
 }
+"""**`paper` raised from 0.25 to 0.80 on 2026-09-18 (Mike: "the 10k is there to
+be used").**
+
+The accounts were running **84% cash** — $8,496 and $8,367 idle out of ~$10,000
+each — and had earned $74 and $55 over several weeks against a benchmark doing a
+Sharpe of +1.15. That is not caution, it is the strategy not being run: the
+Evaluator backtests at ``gross_exposure = 1.0``, so a live book at 0.1875 is
+testing a different thing from the one that was measured.
+
+**Why 0.80 and not 1.00.** ``max_gross_exposure`` is 1.00 and
+:meth:`PortfolioLimits.scaled_for_regime` scales it by the regime multiplier, so
+in the current late-cycle-melt-up band (0.75) the cap is 0.75. A stage fraction
+of 1.00 targets exactly 0.75 — the target would sit *on* the cap, and any drift
+between sizing and the gross check trips it and refuses the order. 0.80 targets
+0.60 and leaves 20% headroom, in this regime and in a 1.0-band regime alike.
+Leverage is not the alternative: ``docs/risk/policy.md`` forbids it on paper.
+
+**The ladder is deliberately not monotonic**, and that is worth saying out loud
+because `paper` now exceeds `live-paper`. These stages do not rank confidence;
+they map *what kind of money this is* onto how much Kelly. Paper money risks
+only the measurement, and under-sizing it destroys the measurement. Real money
+risks capital, and `live-paper` stays at 0.50 for that reason — it also requires
+Mike's approval per the spec and no account is on it (ADR-0003: paper only).
+`small-size-paper` stays at 0.25 because sizing small is its entire purpose.
+
+**This collides with posterior sizing, and the collision got sharper.**
+:mod:`~shrap.risk_compliance.risk_officer.posterior` *replaces* this fraction
+rather than multiplying it, and every strategy the firm has measured supports a
+posterior fraction below 0.25 — momentum 126/21 sizes at 0.147. So enabling
+``posterior_sizing`` now cuts exposure by **5.4x**, not the 1.7x it would have
+before this change. Both numbers are defensible and they answer different
+questions: this one asks "is the strategy being run at all", the posterior asks
+"does the evidence justify the risk". Reconciling them is unruled.
+"""
 DEFAULT_STAGE_FRACTION = 0.25
 """An unrecognised stage sizes at the lowest tier rather than raising.
 
