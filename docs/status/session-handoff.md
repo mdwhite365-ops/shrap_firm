@@ -1,4 +1,4 @@
-# Session handoff — 2026-09-18 (`main` at #247)
+# Session handoff — 2026-09-19 (`main` at #251)
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -14,10 +14,36 @@ them, and `git log` has the history.
 
 ---
 
-## Pick up here (reconciled at #247, deployed 2026-09-18)
+## Pick up here (reconciled at #251, deployed 2026-09-19)
 
-**Everything merged through #247 is deployed and verified by image ID and
-database, not by build log.** Health: `ok 15, degraded 0, down 0`.
+**Everything merged through #251 is deployed and verified by image ID and
+database, not by build log.** 37 containers up, 0 restarting.
+
+### Full-flow sweep, 2026-09-19 — measured, not read
+
+Flowing: order path (submitted == filled every session 9/14–9/18, 100%), daily
+and intraday bars, EDGAR ingest, Filing Processor, Qdrant corpus index (107,384
+points), node-exporter (`up=1`, real values), Health Monitor 8 ok / 0 degraded.
+Zero orders on 9/19 is correct — it was a Saturday.
+
+Two silent faults found and fixed, both of which had been true for days:
+
+- **arXiv dead 48 hours** (#251). 46/46 hourly passes returned HTTP 406 from
+  2026-09-17 14:17. Nothing alarmed, because the freshness check read
+  `max(fetched_at)` over the whole table and EDGAR kept it fresh. Now checked
+  **per source** on `research.ingest_cursors`. See
+  `docs/runbooks/a-dead-ingest-source.md`.
+- **The backup cron had never once fired** (#249). Zero `cronjob.run` entries in
+  an unrotated `/var/log/cron.log` going back to 2026-07-17; both existing
+  backups were hand-run. The script itself is proven — a run on 2026-09-19
+  exited 0 and wrote all five archives. **The first genuinely scheduled run is
+  02:30 the morning after the cron was registered; check `cron.log`, not
+  `/mnt/backups`.**
+
+**Still open, and it is a real gap:** the literature filter records only
+acceptances (9 of 287 q-fin papers), so its *rejections* cannot be audited from
+stored data. KI-009 is a question about the taxonomy, and the evidence needed to
+answer it is not being kept.
 
 | capability | state |
 |---|---|

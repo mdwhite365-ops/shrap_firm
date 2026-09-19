@@ -14,6 +14,7 @@ from shrap.operations.staleness import (
     FreshnessReading,
     FreshnessTarget,
     PostgresStalenessStore,
+    _reading_sql,
     classify,
     sweep,
 )
@@ -297,3 +298,122 @@ async def test_store_coerces_a_naive_timestamp_to_utc() -> None:
     reading = await PostgresStalenessStore(_FakePool(conn)).read(TARGET)
     assert reading.last_row_at == datetime(2026, 7, 30, 11, 0, tzinfo=UTC)
     assert classify(TARGET, reading, NOW).status == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Per-source freshness
+#
+# The 2026-09-17 arXiv outage: both arXiv feeds returned HTTP 406 on 46
+# consecutive hourly passes over two days while EDGAR kept inserting ~1,000
+# items a week. Every table-level check stayed green for the whole outage,
+# because `max(fetched_at)` over the table never aged past minutes.
+# ---------------------------------------------------------------------------
+
+CURSORS = FreshnessTarget(
+    name="research.ingest_cursors",
+    schema="research",
+    table="ingest_cursors",
+    timestamp_column="updated_at",
+    producer="tech-watcher",
+    partition_column="source",
+    max_age=timedelta(hours=3),
+    rationale="test",
+)
+
+
+def test_partitioned_sql_takes_the_oldest_partition_not_the_newest() -> None:
+    sql = _reading_sql(CURSORS)
+
+    assert "GROUP BY source" in sql
+    assert "ORDER BY 1 ASC NULLS FIRST" in sql
+    assert "LIMIT 1" in sql
+    # The bug being fixed: an unpartitioned max() over the whole table.
+    assert "SELECT max(updated_at) FROM research.ingest_cursors) AS last_row_at" not in sql
+
+
+def test_unpartitioned_target_sql_is_unchanged() -> None:
+    sql = _reading_sql(TARGET)
+
+    assert "GROUP BY" not in sql
+    assert "max(fetched_at)" in sql
+
+
+async def test_one_dead_source_among_healthy_ones_is_stale() -> None:
+    """The exact shape of the outage: arXiv frozen, EDGAR fine."""
+
+    arxiv_last_seen = NOW - timedelta(hours=48)
+    conn = _FakeConn(
+        [
+            {"table_exists": True},
+            {"last_row_at": arxiv_last_seen, "partition": "arxiv", "has_rows": True},
+        ]
+    )
+    store = PostgresStalenessStore(_FakePool(conn))
+
+    reading = await store.read(CURSORS)
+    verdict = classify(CURSORS, reading, NOW)
+
+    assert verdict.status == "degraded"
+    assert verdict.reason == "stale"
+    assert reading.partition == "arxiv"
+    # The alarm must name the feed, or it sends an operator to all six.
+    assert verdict.evidence()["partition"] == "arxiv"
+    assert verdict.evidence()["partition_column"] == "source"
+
+
+async def test_all_sources_fresh_reads_ok() -> None:
+    conn = _FakeConn(
+        [
+            {"table_exists": True},
+            {
+                "last_row_at": NOW - timedelta(minutes=20),
+                "partition": "usaspending",
+                "has_rows": True,
+            },
+        ]
+    )
+    store = PostgresStalenessStore(_FakePool(conn))
+
+    verdict = classify(CURSORS, await store.read(CURSORS), NOW)
+
+    assert verdict.status == "ok"
+
+
+async def test_unpartitioned_reading_carries_no_partition() -> None:
+    conn = _FakeConn(
+        [{"table_exists": True}, {"last_row_at": NOW, "partition": "ignored", "has_rows": True}]
+    )
+    store = PostgresStalenessStore(_FakePool(conn))
+
+    reading = await store.read(TARGET)
+
+    assert reading.partition is None
+    assert "partition" not in classify(TARGET, reading, NOW).evidence()
+
+
+def test_the_registry_watches_ingest_cursors_per_source() -> None:
+    """Wiring check: the target must be registered, or none of this runs."""
+
+    target = next(t for t in DEFAULT_TARGETS if t.name == "research.ingest_cursors")
+
+    assert target.partition_column == "source"
+    # On the cursor table, not the items table: raw_source_items upserts ON
+    # CONFLICT DO NOTHING, so its fetched_at only moves when a genuinely new
+    # item appears. USASpending has legitimately inserted nothing since
+    # 2026-08-27 while working, and would alarm forever.
+    assert target.table == "ingest_cursors"
+    assert target.timestamp_column == "updated_at"
+
+
+def test_a_partition_column_must_be_a_safe_identifier() -> None:
+    with pytest.raises(ValueError, match="unsafe SQL identifier"):
+        FreshnessTarget(
+            name="bad",
+            schema="research",
+            table="ingest_cursors",
+            timestamp_column="updated_at",
+            producer="tech-watcher",
+            partition_column="source; DROP TABLE research.strategies --",
+            max_age=timedelta(hours=3),
+            rationale="test",
+        )

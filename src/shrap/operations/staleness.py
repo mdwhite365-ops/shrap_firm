@@ -85,9 +85,28 @@ class FreshnessTarget:
     producer: str
     max_age: timedelta
     rationale: str
+    partition_column: str | None = None
+    """Check each distinct value of this column separately, not the table as a whole.
+
+    **A table-level maximum hides a partial outage, and that cost the firm 48
+    hours.** ``research.raw_source_items`` has a six-hour target whose own
+    rationale reads "six consecutive passes in which EDGAR, arXiv, USASpending,
+    DOE and the Federal Register *all* returned nothing" — an AND across six
+    feeds. On 2026-09-17 both arXiv feeds began returning HTTP 406 on every
+    pass and kept doing so for two days. EDGAR went on inserting ~1,000 items a
+    week, so ``max(fetched_at)`` never aged past minutes and the check stayed
+    green the entire time.
+
+    When set, the reading is the *oldest* per-partition maximum and
+    :attr:`FreshnessReading.partition` names which one, so the alarm says
+    "arxiv is stale" rather than "the table is fine".
+    """
 
     def __post_init__(self) -> None:
-        for part in (self.schema, self.table, self.timestamp_column):
+        parts = [self.schema, self.table, self.timestamp_column]
+        if self.partition_column is not None:
+            parts.append(self.partition_column)
+        for part in parts:
             if not _IDENTIFIER_RE.match(part):
                 raise ValueError(
                     f"unsafe SQL identifier in freshness target {self.name!r}: {part!r}"
@@ -100,7 +119,7 @@ class FreshnessTarget:
         return f"{self.schema}.{self.table}"
 
 
-# The six tables that must grow for the firm to be doing anything, with the
+# The seven tables that must grow for the firm to be doing anything, with the
 # cadence each threshold was derived from. Every number here is an unruled first
 # cut: set to clear the producer's longest legitimate quiet period, so a firing
 # check means broken rather than weekend.
@@ -120,7 +139,43 @@ DEFAULT_TARGETS: tuple[FreshnessTarget, ...] = (
         rationale=(
             "Tech Watcher ingests hourly (TECH_WATCHER_INTERVAL_SECONDS=3600) across five "
             "sources. Six hours is six consecutive passes in which EDGAR, arXiv, "
-            "USASpending, DOE and the Federal Register all returned nothing."
+            "USASpending, DOE and the Federal Register all returned nothing. "
+            "Note the 'all': this target cannot see one dead feed among healthy "
+            "ones, which is what research.ingest_cursors is for."
+        ),
+    ),
+    # **The check that would have caught the 2026-09-17 arXiv outage.**
+    #
+    # Partitioned by source, and on the cursor table rather than on the items
+    # table, because those two choices are what make it work:
+    #
+    # - *Per source*, because a table-level maximum is an AND across six feeds.
+    #   Both arXiv feeds returned HTTP 406 on every pass for two days while
+    #   EDGAR kept inserting ~1,000 items a week, so every table-level check
+    #   stayed green and the only trace was `sweep_empty` in the Hypothesis
+    #   Generator's log — which is exactly what a genuinely quiet week looks
+    #   like.
+    # - *On the cursor*, because `raw_source_items` upserts `ON CONFLICT DO
+    #   NOTHING`, so its `fetched_at` only advances when a genuinely new item
+    #   appears. USASpending has inserted nothing since 2026-08-27 while working
+    #   perfectly — its feed simply returns the same award. Per-source freshness
+    #   over the items table would alarm on that forever. `ingest_cursors`
+    #   upserts `updated_at = EXCLUDED.updated_at` on every *successful* pass,
+    #   so it separates "fetched and there was nothing new" from "did not fetch".
+    FreshnessTarget(
+        name="research.ingest_cursors",
+        schema="research",
+        table="ingest_cursors",
+        timestamp_column="updated_at",
+        producer="tech-watcher",
+        partition_column="source",
+        max_age=timedelta(hours=3),
+        rationale=(
+            "Tech Watcher advances every source's cursor on every successful hourly pass, "
+            "whether or not that pass found new items. Three hours is three consecutive "
+            "passes in which one named source failed to fetch at all. Checked per source: "
+            "arXiv returned HTTP 406 on 46 consecutive passes over 2026-09-17/19 while "
+            "EDGAR stayed healthy, and no table-level check could see it."
         ),
     ),
     FreshnessTarget(
@@ -223,6 +278,13 @@ class FreshnessReading:
     has_rows: bool
     last_row_at: datetime | None
     error: str | None = None
+    partition: str | None = None
+    """For a partitioned target, the partition ``last_row_at`` belongs to.
+
+    Always the *oldest* one, because that is the one at risk. Naming it is the
+    whole point: "research.ingest_cursors is stale" sends an operator to six
+    feeds, "research.ingest_cursors[arxiv] is stale" sends them to one.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +305,14 @@ class FreshnessVerdict:
             "column": self.target.timestamp_column,
             "producer": self.target.producer,
             "reason": self.reason,
+            **(
+                {
+                    "partition_column": self.target.partition_column,
+                    "partition": self.reading.partition,
+                }
+                if self.target.partition_column
+                else {}
+            ),
             "table_exists": self.reading.table_exists,
             "has_rows": self.reading.has_rows,
             "last_row_at": (
@@ -326,11 +396,26 @@ def _reading_sql(target: FreshnessTarget) -> str:
     ``max()`` returns NULL both for an empty table and for a table whose column
     is entirely NULL; the EXISTS tells those apart, and it stops at the first
     row rather than counting them.
+
+    For a partitioned target the newest timestamp is taken **per partition and
+    then minimised**, so the target reports its worst feed rather than its best.
+    ``NULLS FIRST`` keeps a partition whose timestamps are all NULL at the front
+    of that ordering — it is a fault, not a fresh reading, and it must not be
+    sorted behind a healthy partition and lost.
     """
 
     table = target.qualified_table
+    ts = target.timestamp_column
+    if target.partition_column is None:
+        return (
+            f"SELECT (SELECT max({ts}) FROM {table}) AS last_row_at, "
+            f"EXISTS (SELECT 1 FROM {table}) AS has_rows"
+        )
+    col = target.partition_column
+    oldest = f"SELECT max({ts}) AS last_row_at, {col}::text AS partition FROM {table} GROUP BY {col} ORDER BY 1 ASC NULLS FIRST LIMIT 1"  # noqa: E501
     return (
-        f"SELECT (SELECT max({target.timestamp_column}) FROM {table}) AS last_row_at, "
+        f"SELECT (SELECT last_row_at FROM ({oldest}) o) AS last_row_at, "
+        f"(SELECT partition FROM ({oldest}) o) AS partition, "
         f"EXISTS (SELECT 1 FROM {table}) AS has_rows"
     )
 
@@ -371,8 +456,12 @@ class PostgresStalenessStore:
             # raises, and taking down the monitor over it would be the worst
             # possible trade.
             last_row_at = last_row_at.replace(tzinfo=UTC)
+        partition = row["partition"] if target.partition_column else None
         return FreshnessReading(
-            table_exists=True, has_rows=bool(row["has_rows"]), last_row_at=last_row_at
+            table_exists=True,
+            has_rows=bool(row["has_rows"]),
+            last_row_at=last_row_at,
+            partition=str(partition) if partition is not None else None,
         )
 
 
