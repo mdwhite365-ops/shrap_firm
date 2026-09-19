@@ -36,6 +36,7 @@ from typing import Any
 
 import numpy as np
 
+from shrap.market_data.store import DEFAULT_BAR_SOURCE
 from shrap.research.ir_precision import PrecisionResult
 from shrap.research.strategy_evaluator.benchmark import (
     EqualWeightBuyAndHold,
@@ -130,6 +131,15 @@ class EvalConfig:
     stress_execution_lag: int = DEFAULT_STRESS_EXECUTION_LAG
     periods_per_year: int = TRADING_DAYS_PER_YEAR
     adjustment: str = "all"
+    bar_source: str = DEFAULT_BAR_SOURCE
+    """Which stored feed the panel was built from.
+
+    Recorded for the same reason ``adjustment`` is: it changes the numbers and
+    is otherwise invisible. Two runs of one strategy on two feeds produce two
+    ledger rows identical in every field that explains them, and a reader
+    comparing those IRs later would have no way to know they measured different
+    markets. The reader enforces the feed; this records it.
+    """
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -142,6 +152,7 @@ class EvalConfig:
             "stress_execution_lag": self.stress_execution_lag,
             "periods_per_year": self.periods_per_year,
             "adjustment": self.adjustment,
+            "bar_source": self.bar_source,
             "cost_model": {
                 "commission_bps": self.cost_model.commission_bps,
                 "half_spread_bps": self.cost_model.half_spread_bps,
