@@ -218,9 +218,7 @@ class _FakeStore:
     ) -> None:
         self.advanced.append((source, documents, points))
 
-    async def fetch(
-        self, since: datetime | None, ref: str, limit: int
-    ) -> list[CorpusDocument]:
+    async def fetch(self, since: datetime | None, ref: str, limit: int) -> list[CorpusDocument]:
         start = 0
         if ref:
             start = next(i for i, d in enumerate(self._docs) if d.ref == ref) + 1
@@ -353,3 +351,73 @@ async def test_a_dimension_mismatch_refuses_before_embedding_anything() -> None:
 
     with pytest.raises(RuntimeError, match="cannot be migrated in place"):
         await indexer.ensure_ready()
+
+
+# --- request sizing, learned from a real failure ------------------------------
+#
+# The first real indexing run died with `httpx.WriteTimeout` after 65 documents.
+# Every test above passed, because they use a fake Qdrant that accepts a list of
+# any size. The indexer batches by DOCUMENT and twenty 400 KB filings produce
+# ~2,000 chunks, each carrying a 768-float vector plus 2,000 characters of text
+# — a ~34 MB JSON body in one PUT.
+#
+# The cursor design held: 65 filings and 7,254 points survived the crash and a
+# re-run resumed from the right place. Nothing was lost. But the run could not
+# finish, and no test could have told me so.
+
+
+def test_upsert_splits_into_bounded_requests() -> None:
+    """Sizing the HTTP request belongs to the layer that makes the request.
+
+    The caller hands over however many points it produced and cannot know how
+    large they are. Raising the timeout instead would only have made the same
+    failure slower.
+    """
+
+    import inspect
+
+    from shrap.common.qdrant_client import DEFAULT_UPSERT_BATCH, QdrantClient
+
+    assert DEFAULT_UPSERT_BATCH <= 512, "a batch this large risks the 34 MB body again"
+
+    source = inspect.getsource(QdrantClient.upsert)
+    assert "range(0, len(points), batch_size)" in source, "upsert sends one request"
+    assert "_write_timeout" in source, "bulk writes share the read timeout"
+
+
+async def test_upsert_sends_every_point_across_batches() -> None:
+    """Splitting must not drop the tail — a partial index is a silent one."""
+
+    import httpx
+
+    from shrap.common.qdrant_client import QdrantClient
+
+    seen: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.append(len(json.loads(request.content)["points"]))
+        return httpx.Response(200, json={"result": {}, "status": "ok"})
+
+    transport = httpx.MockTransport(handler)
+    client = QdrantClient("http://qdrant:6333")
+
+    points = [{"id": str(i), "vector": [0.1], "payload": {}} for i in range(650)]
+
+    original = httpx.AsyncClient
+
+    class _Patched(original):  # type: ignore[misc, valid-type]
+        def __init__(self, **kwargs: object) -> None:
+            kwargs["transport"] = transport
+            super().__init__(**kwargs)  # type: ignore[arg-type]
+
+    httpx.AsyncClient = _Patched  # type: ignore[misc]
+    try:
+        sent = await client.upsert(points, batch_size=256)
+    finally:
+        httpx.AsyncClient = original  # type: ignore[misc]
+
+    assert sent == 650, "upsert under-reported what it sent"
+    assert seen == [256, 256, 138], f"unexpected request sizes: {seen}"
+    assert sum(seen) == 650, "points were dropped between batches"

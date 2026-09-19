@@ -32,6 +32,21 @@ DEFAULT_COLLECTION = "shrap_corpus"
 # ranks by the wrong thing, which is the failure mode this project keeps meeting.
 DEFAULT_DISTANCE = "Cosine"
 
+# **Points per HTTP request, and this number was learned the hard way.** The
+# first real indexing run died with `httpx.WriteTimeout` after 65 documents: the
+# indexer batches by DOCUMENT, and twenty 400 KB filings produce ~2,000 chunks,
+# each carrying a 768-float vector plus 2,000 characters of text. That is a
+# ~34 MB JSON body in a single PUT, which no sane timeout accommodates.
+#
+# Bounding the request is the fix; raising the timeout would only have made the
+# failure slower. 256 points is roughly 4 MB — large enough that the round trips
+# are not the bottleneck, small enough that one is never in doubt.
+DEFAULT_UPSERT_BATCH = 256
+
+# Writes are bulk and slow; reads are small. One timeout for both would either
+# make a search hang on a dead backend or make a legitimate bulk write fail.
+DEFAULT_WRITE_TIMEOUT = 120.0
+
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
@@ -50,9 +65,15 @@ class SearchHit:
 class QdrantClient:
     """The four calls the corpus index makes."""
 
-    def __init__(self, base_url: str = "http://qdrant:6333", timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        base_url: str = "http://qdrant:6333",
+        timeout: float = 30.0,
+        write_timeout: float = DEFAULT_WRITE_TIMEOUT,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
+        self._write_timeout = write_timeout
 
     async def collection_exists(self, collection: str = DEFAULT_COLLECTION) -> bool:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -107,8 +128,15 @@ class QdrantClient:
         collection: str = DEFAULT_COLLECTION,
         *,
         wait: bool = True,
+        batch_size: int = DEFAULT_UPSERT_BATCH,
     ) -> int:
         """Insert or replace ``points``; returns how many were sent.
+
+        **Split into bounded requests.** The caller decides how many points to
+        hand over and has no idea how large they are — a document-batching
+        indexer can produce two thousand at once. Sizing the HTTP request is
+        this layer's job, not the caller's, because this is the layer that knows
+        a request is being made at all.
 
         ``wait=True`` because the indexer's cursor advances on the strength of
         this call. Returning before the write is durable would let a crash lose
@@ -118,14 +146,18 @@ class QdrantClient:
 
         if not points:
             return 0
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            resp = await client.put(
-                f"{self._base_url}/collections/{collection}/points",
-                params={"wait": "true" if wait else "false"},
-                json={"points": list(points)},
-            )
-            resp.raise_for_status()
-        return len(points)
+        sent = 0
+        async with httpx.AsyncClient(timeout=self._write_timeout) as client:
+            for start in range(0, len(points), batch_size):
+                slice_ = list(points[start : start + batch_size])
+                resp = await client.put(
+                    f"{self._base_url}/collections/{collection}/points",
+                    params={"wait": "true" if wait else "false"},
+                    json={"points": slice_},
+                )
+                resp.raise_for_status()
+                sent += len(slice_)
+        return sent
 
     async def search(
         self,
