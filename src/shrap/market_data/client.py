@@ -40,6 +40,20 @@ from shrap.trading_floor.alpaca import AsyncHttpClient
 IEX_FEED = "iex"
 ADJUSTMENT_ALL = "all"
 
+# The consolidated tape. IEX is a single venue carrying a median 3.7% of a
+# name's consolidated volume, and that share is not constant — its within-name
+# coefficient of variation is 0.246 across the universe. A volume factor
+# therefore reads partly as routing drift rather than as a volume event, which
+# is why the two feeds need to be held side by side and compared rather than
+# argued about.
+#
+# **The 15-minute restriction does not bite on daily bars.** Alpaca refuses SIP
+# data for the most recent 15 minutes on this plan; a daily strategy decides at
+# the open on the prior completed session, ~17 hours old. It DOES bite on the
+# intraday sweep, which runs to the present — so this constant is safe for the
+# daily backfill and is not wired into the intraday trigger.
+SIP_FEED = "sip"
+
 # Alpaca timeframe tokens. 1Min is the finest grain the API offers and the one
 # ADR-0016's intraday equities path is scoped against.
 TIMEFRAME_1DAY = "1Day"
@@ -273,6 +287,7 @@ def _opt_float(value: object) -> float | None:
 __all__ = [
     "ADJUSTMENT_ALL",
     "IEX_FEED",
+    "SIP_FEED",
     "TIMEFRAME_1DAY",
     "TIMEFRAME_1MIN",
     "AlpacaDailyBarsClient",

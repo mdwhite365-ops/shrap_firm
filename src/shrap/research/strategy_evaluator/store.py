@@ -495,15 +495,22 @@ class IntradayEvaluatorReader:
         timeframe: str,
         include_extended: bool = False,
         calendar_name: str = DEFAULT_CALENDAR,
+        source: str = DEFAULT_BAR_SOURCE,
     ) -> None:
-        self._delegate = PostgresEvaluatorReader(pool)
+        # Both halves take the same feed. The delegate answers questions about a
+        # strategy rather than about bars, but it also owns the daily
+        # `read_bars` this class overrides, and a delegate left on the default
+        # feed would be a quiet second opinion about what the market did.
+        self._delegate = PostgresEvaluatorReader(pool, source=source)
         self._bars = PostgresIntradayBarReader(
             pool,
             timeframe=timeframe,
             include_extended=include_extended,
             calendar_name=calendar_name,
+            source=source,
         )
         self.timeframe = timeframe
+        self.source = source
 
     async def world_changer_status(self, candidate_id: str) -> str | None:
         return await self._delegate.world_changer_status(candidate_id)

@@ -26,6 +26,7 @@ from typing import cast
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.events import EventPublisher, RedisPublisher
+from shrap.market_data.store import DEFAULT_BAR_SOURCE
 from shrap.research.strategy_evaluator.engine import (
     DEFAULT_FOLDS,
     DEFAULT_MIN_TRADES,
@@ -84,20 +85,26 @@ async def _run(args: argparse.Namespace) -> str:
     store = PostgresEvaluationStore(pool)
     reader: PostgresEvaluatorReader | IntradayEvaluatorReader
     if args.timeframe == TIMEFRAME_DAILY:
-        reader = PostgresEvaluatorReader(pool)
+        reader = PostgresEvaluatorReader(pool, source=args.bar_source)
     else:
         reader = IntradayEvaluatorReader(
             pool,
             timeframe=args.timeframe,
             include_extended=args.include_extended,
+            source=args.bar_source,
         )
     registry = PostgresStrategyRegistry(pool)
     publisher = EventPublisher(cast(RedisPublisher, redis))
+    # `bar_source` is set from the same argument that built the reader above.
+    # One value, used twice — the reader enforces the feed and the config
+    # records it, and they cannot disagree because neither is derived
+    # independently. A test pins that.
     config = EvalConfig(
         n_folds=args.folds,
         window_years=args.window_years,
         min_trades=args.min_trades,
         sharpe_floor=args.sharpe_floor,
+        bar_source=args.bar_source,
     )
     pipeline = EvaluationPipeline(
         registry=registry,
@@ -188,6 +195,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "Include pre/post-market bars in an intraday panel. Off by default: the "
             "backfill stores 04:00-20:00, where a handful of shares sets a price no "
             "strategy could have traded at size."
+        ),
+    )
+    parser.add_argument(
+        "--bar-source",
+        default=DEFAULT_BAR_SOURCE,
+        help=(
+            "Which stored feed to backtest against, e.g. alpaca-iex (default) "
+            "or alpaca-sip. The panel is built from this feed alone; a run "
+            "cannot mix them."
         ),
     )
     parser.add_argument(
