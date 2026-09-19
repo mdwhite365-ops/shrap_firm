@@ -67,6 +67,7 @@ from shrap.research.strategy_evaluator.pipeline import (
     SpecHygieneError,
 )
 from shrap.research.strategy_evaluator.store import (
+    IntradayEvaluatorReader,
     PostgresEvaluationStore,
     PostgresEvaluatorReader,
 )
@@ -74,6 +75,11 @@ from shrap.research.strategy_registry import (
     STATUS_HYPOTHESIS,
     PostgresStrategyRegistry,
     StrategyRecord,
+)
+from shrap.research.strategy_runner.cadence import (
+    Cadence,
+    alpaca_timeframe,
+    read_cadence,
 )
 
 log = structlog.get_logger(__name__)
@@ -83,6 +89,14 @@ TRIGGER_NAME = "scheduled-sweep"
 
 DEFAULT_SWEEP_INTERVAL_SECONDS = 900.0
 DEFAULT_REEVAL_INTERVAL_HOURS = 24.0
+
+# How much history an intraday evaluation reads. Mandatory below a daily grain:
+# the CLI refuses an unbounded intraday lookback because one ticker-year is ~252
+# daily rows but ~6,500 at 15Min, and an unattended sweep has no human to ask.
+# Six years matches the 15Min depth backfilled on 2026-09-18 (2021-01-04 ->
+# present, 37,116 bars). Raise it only after backfilling deeper, or the window
+# silently exceeds the data and the panel is shorter than the verdict claims.
+DEFAULT_INTRADAY_WINDOW_YEARS = 6
 
 
 class Disposition(Enum):
@@ -141,6 +155,102 @@ class PipelinePort(Protocol):
     ) -> CommitResult: ...
 
 
+class PipelineResolver(Protocol):
+    """Picks the pipeline whose bar grain matches a strategy's declared cadence."""
+
+    def for_cadence(self, cadence: Cadence) -> PipelinePort: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SingleGrainPipelines:
+    """Every cadence evaluates on the same panel.
+
+    The behaviour this service had before cadence existed, named rather than
+    implied, so "this ignores cadence" is a statement in the code. Used by tests
+    and by any caller that genuinely has one grain.
+    """
+
+    pipeline: PipelinePort
+
+    def for_cadence(self, cadence: Cadence) -> PipelinePort:
+        return self.pipeline
+
+
+class CadencePipelines:
+    """One evaluation pipeline per bar grain, chosen by a strategy's cadence.
+
+    The daily pipeline is built eagerly because everything in the registry today
+    needs it; intraday pipelines are built on first use and kept, keyed by the
+    Alpaca timeframe token ``alpaca_timeframe`` derives. Same shape as the
+    Runner's ``CadenceBarReaders`` (#234), for the same reason: the cadence is
+    read once from the spec and used everywhere, rather than each component
+    deciding for itself what grain a strategy trades.
+
+    **``window_years`` is mandatory below a daily grain and that is deliberate.**
+    The CLI refuses an unbounded intraday lookback outright, because one
+    ticker-year is ~252 daily rows but ~6,500 at 15Min and ~98,000 at 1Min, and
+    a silently truncated window produces a verdict on a different panel than the
+    caller believes they asked for. An unattended sweep cannot ask a human, so
+    it carries a configured window instead — the depth actually backfilled.
+
+    Everything else in ``EvalConfig`` stays at its defaults. ``min_trades`` and
+    ``sharpe_floor`` are the protocol rather than a per-deployment knob, and
+    exposing them here would make "lower the gate until something passes" a
+    config change.
+    """
+
+    def __init__(
+        self,
+        *,
+        pool: object,
+        registry: object,
+        store: object,
+        publisher: object,
+        card_root: Path,
+        intraday_window_years: int,
+        include_extended: bool = False,
+    ) -> None:
+        self._pool = pool
+        self._registry = registry
+        self._store = store
+        self._publisher = publisher
+        self._card_root = card_root
+        self._intraday_window_years = intraday_window_years
+        self._include_extended = include_extended
+        self._daily: PipelinePort = self._build(PostgresEvaluatorReader(pool), EvalConfig())  # type: ignore[arg-type]
+        self._intraday: dict[str, PipelinePort] = {}
+
+    def _build(self, reader: object, config: EvalConfig) -> PipelinePort:
+        return cast(
+            PipelinePort,
+            EvaluationPipeline(
+                registry=self._registry,  # type: ignore[arg-type]
+                reader=reader,  # type: ignore[arg-type]
+                store=self._store,  # type: ignore[arg-type]
+                publisher=self._publisher,  # type: ignore[arg-type]
+                config=config,
+                card_root=self._card_root,
+            ),
+        )
+
+    def for_cadence(self, cadence: Cadence) -> PipelinePort:
+        if not cadence.is_intraday:
+            return self._daily
+        timeframe = alpaca_timeframe(cadence)
+        pipeline = self._intraday.get(timeframe)
+        if pipeline is None:
+            pipeline = self._build(
+                IntradayEvaluatorReader(
+                    self._pool,  # type: ignore[arg-type]
+                    timeframe=timeframe,
+                    include_extended=self._include_extended,
+                ),
+                EvalConfig(window_years=self._intraday_window_years),
+            )
+            self._intraday[timeframe] = pipeline
+        return pipeline
+
+
 class EvaluatorTrigger:
     """One sweep's worth of policy, kept separate from the process loop."""
 
@@ -149,13 +259,18 @@ class EvaluatorTrigger:
         *,
         registry: RegistryPort,
         ledger: EvaluationLedgerPort,
-        pipeline: PipelinePort,
+        pipeline: PipelinePort | None = None,
+        pipelines: PipelineResolver | None = None,
         reeval_interval_hours: float = DEFAULT_REEVAL_INTERVAL_HOURS,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
+        if pipelines is None:
+            if pipeline is None:
+                raise ValueError("EvaluatorTrigger needs a pipeline or a pipeline resolver")
+            pipelines = SingleGrainPipelines(pipeline)
         self._registry = registry
         self._ledger = ledger
-        self._pipeline = pipeline
+        self._pipelines = pipelines
         self._reeval_interval = timedelta(hours=reeval_interval_hours)
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         # A refusal is re-attempted every sweep on purpose: `_check_tickers_tradeable`
@@ -207,8 +322,17 @@ class EvaluatorTrigger:
         try:
             if await self._recently_evaluated(record):
                 return Disposition.SKIPPED_RECENT, False
-            outcome = await self._pipeline.evaluate(strategy_id, trigger=TRIGGER_NAME)
-            result = await self._pipeline.commit(outcome, promote_requires_review=True)
+            # The strategy's OWN declared cadence picks the panel it is judged
+            # on. Before this the sweep evaluated everything on daily bars, and
+            # an intraday strategy's horizons are counted in BARS — so a
+            # 15-minute rule with a six-month formation asked for 3,276 daily
+            # sessions, thirteen years against a 5.1-year panel, and came back
+            # `insufficient-data` with zero periods. Measured on
+            # 01M2V2ZG57AY3773KR3HJ8WZHN, 2026-09-18: the sweep auto-killed it
+            # within the hour it was seeded, on a grain it never claimed.
+            pipeline = self._pipelines.for_cadence(read_cadence(record.spec))
+            outcome = await pipeline.evaluate(strategy_id, trigger=TRIGGER_NAME)
+            result = await pipeline.commit(outcome, promote_requires_review=True)
         except SpecHygieneError as exc:
             # Not a kill. A spec we refused to evaluate has not earned a terminal
             # verdict, so nothing is written and the strategy stays at hypothesis.
@@ -302,6 +426,7 @@ async def run(
     card_root: str = str(DEFAULT_CARD_ROOT),
     sweep_interval_seconds: float = DEFAULT_SWEEP_INTERVAL_SECONDS,
     reeval_interval_hours: float = DEFAULT_REEVAL_INTERVAL_HOURS,
+    intraday_window_years: int = DEFAULT_INTRADAY_WINDOW_YEARS,
 ) -> None:
     """Run the sweep loop until SIGTERM/SIGINT."""
 
@@ -315,21 +440,22 @@ async def run(
         store = PostgresEvaluationStore(pool)
         await registry.ensure_schema()
         await store.ensure_schema()
-        pipeline = EvaluationPipeline(
+        # One pipeline per grain, resolved from each strategy's own cadence.
+        # EvalConfig defaults deliberately: min_trades and sharpe_floor are the
+        # protocol, not a per-deployment knob. Exposing them as env vars would
+        # make "lower the gate until something passes" a config change.
+        pipelines = CadencePipelines(
+            pool=pool,
             registry=registry,
-            reader=PostgresEvaluatorReader(pool),
             store=store,
             publisher=EventPublisher(cast(RedisPublisher, redis)),
-            # EvalConfig defaults deliberately: min_trades and sharpe_floor are
-            # the protocol, not a per-deployment knob. Exposing them as env vars
-            # would make "lower the gate until something passes" a config change.
-            config=EvalConfig(),
             card_root=Path(card_root),
+            intraday_window_years=intraday_window_years,
         )
         trigger = EvaluatorTrigger(
             registry=registry,
             ledger=store,
-            pipeline=pipeline,
+            pipelines=pipelines,
             reeval_interval_hours=reeval_interval_hours,
         )
         log.info(
