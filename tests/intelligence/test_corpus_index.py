@@ -421,3 +421,76 @@ async def test_upsert_sends_every_point_across_batches() -> None:
     assert sent == 650, "upsert under-reported what it sent"
     assert seen == [256, 256, 138], f"unexpected request sizes: {seen}"
     assert sum(seen) == 650, "points were dropped between batches"
+
+
+# --- concurrency, and the property it could break -----------------------------
+#
+# The first full run held Ollama at 120% CPU on a twelve-core box — one request
+# in flight at a time, ten cores idle, because `embed` awaited each batch in
+# turn. Concurrency fixes that and introduces exactly one way to be catastrophi-
+# cally wrong: if results came back in completion order rather than submission
+# order, vectors would attach to the wrong chunks. Nothing downstream would
+# notice — the counts match, the writes succeed, and the index is quietly full
+# of passages filed under other documents.
+
+
+async def test_concurrent_batches_return_in_submission_order() -> None:
+    """The one property concurrency could break, with the timing to break it.
+
+    Later batches are made to finish FIRST. If `embed` returned completion
+    order, this test sees the sequence reversed.
+    """
+
+    import asyncio
+
+    from shrap.intelligence.corpus_index.embedder import OllamaEmbedder
+
+    embedder = OllamaEmbedder(batch_size=1, concurrency=8)
+    order: list[int] = []
+
+    async def fake_batch(batch, client):  # type: ignore[no-untyped-def]
+        marker = int(batch[0])
+        # Invert the delays: the last submitted batch completes soonest.
+        await asyncio.sleep((100 - marker) / 1000)
+        order.append(marker)
+        return [[float(marker)]]
+
+    embedder._embed_batch = fake_batch  # type: ignore[assignment, method-assign]
+
+    vectors = await embedder.embed([str(i) for i in range(20)])
+
+    assert [v[0] for v in vectors] == [float(i) for i in range(20)], (
+        "embeddings came back in completion order — vectors would attach to the wrong chunks"
+    )
+    assert order != sorted(order), "the test did not actually run out of order"
+
+
+async def test_concurrency_is_bounded() -> None:
+    """Unbounded would saturate a box that is also running the trading path."""
+
+    import asyncio
+
+    from shrap.intelligence.corpus_index.embedder import (
+        DEFAULT_CONCURRENCY,
+        OllamaEmbedder,
+    )
+
+    assert 1 < DEFAULT_CONCURRENCY <= 8, "default should speed things up, not take the box"
+
+    embedder = OllamaEmbedder(batch_size=1, concurrency=3)
+    in_flight = 0
+    peak = 0
+
+    async def fake_batch(batch, client):  # type: ignore[no-untyped-def]
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        return [[1.0]]
+
+    embedder._embed_batch = fake_batch  # type: ignore[assignment, method-assign]
+    await embedder.embed([str(i) for i in range(30)])
+
+    assert peak <= 3, f"semaphore did not bound concurrency: peak {peak}"
+    assert peak > 1, "no concurrency actually happened"
