@@ -37,6 +37,43 @@ with the new code absent, while the build log said `Built`. Only
 `--force-recreate` fixed it. **Verify a deploy by image ID, never by the build
 log** — and confirm the behaviour in the database, not in the container.
 
+**#232–#247 (2026-09-18)** closed the intraday path end to end (#234, #236,
+#237, #241) and then found **three things that had been silently wrong for
+weeks, none of which raised anything**:
+
+- **node-exporter had never once been scraped** (#244).
+  `max_over_time(up{job="node-exporter"}[45d])` was **0**. Two independent
+  faults, each fatal alone: the exporter bound `127.0.0.1` under
+  `network_mode: host`, unreachable from any container at any address; and
+  Prometheus targeted `172.17.0.1`, the *default* bridge, when this project's
+  gateway is `172.16.0.1`. The config's comment said "typically 172.17.0.1 on
+  Linux … adjust if your bridge gateway differs" — a guess plus an instruction
+  nobody ran. The firm had no host CPU, memory or disk metrics, ever.
+- **The filing roster covered 4 of the 50 names** (#246). EDGAR ingest was
+  healthy the whole time (~1,000 items/week); everything else was dropped at
+  `roster.ticker_for(cik)`. Fifteen days with no filing recorded, which reads
+  exactly like a quiet market. Now 42 of 50, and 113 → 169 filings.
+- **`source` was not in the bar tables' primary key** (#245), while the
+  module's own docstring claimed it was "part of the primary key intent … if a
+  future card ever backfills SIP". That backfill would have overwritten IEX row
+  by row and made every recorded IR irreproducible. **Not one of the eight
+  bar-reading queries filtered on `source`** — all were correct only by
+  accident, because the table held one feed.
+
+**Two measured negatives, both worth not repeating.** Intraday cadence does not
+multiply a daily edge — IR **0.003** at 15 minutes against **0.415** daily,
+where `IR = IC x sqrt(breadth)` predicted ~8.8x (#242). And the IEX-vs-SIP feed
+difference does not survive the folds: the sign flips on aggregate
+(−0.1315 → +0.2275) but SIP wins only **3 of 6 folds** and dropping the single
+dominant fold leaves a mean delta of **+0.0011** (#247,
+`docs/research/feed-comparison-experiment.md`). The naive comparison of those
+feeds *clears the promote floor* and is confounded by window — a live example
+of the error KI-036 exists to refuse.
+
+**Write the docs with the card, not at session end (Mike's ruling,
+2026-09-18).** This set went 16 PRs stale again during that session — the
+fourth occurrence after #72–80, #92–101 and #129–175.
+
 **The promote gate has never been failed on evidence (KI-036, 2026-09-17).** The
 standard error of an annualised IR over 5.1 years on this firm's panel is
 **±0.47**; the best IR ever recorded is **0.448**. That is **0.11 standard
@@ -79,17 +116,22 @@ lack edge. The seven `capability-gap` rows are a prioritised build list; market
 capitalisation is the cheapest and is absent from every table. **Prefer feeding the
 funnel over building another thing that measures it.**
 
-**Always-on services (34 containers, verified 2026-07-31):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger. **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker.
+**Always-on services (verified 2026-09-18, 39 containers):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger, Market Data Trigger, **Market Data Intraday Trigger** (#236), plus the substrate: Postgres/TimescaleDB, Redis, Qdrant, Ollama, Prometheus, Grafana, Langfuse (+ its DB), cAdvisor, node-exporter, postgres-exporter, redis-exporter and **docker-state-exporter** (#239). **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker. **`ib-gateway` was stopped and removed 2026-09-18**; its compose project lives at `infra/ibgateway/` (#243) and needs a gitignored `.env` to revive — ADR-0003 gates IBKR on live capital.
 
 Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike reviews and merges; never stack PRs — see KI-001).
 
 **Ground truth for what's next, in reading order:** **`docs/status/session-handoff.md`** (latest rulings + what to pick up), then **`docs/roadmap/implementation-timeline.md`** (the ordered plan). `docs/status/current-sprint.md` is longer-form history. `docs/roadmap/paper-spine-tree.md` is history — its last card shipped weeks ago.
 
 > **Check the status docs before trusting them.** They have now fallen behind
-> `main` three times — #72–#80, #92–#101, and #129–#175, the last being
-> forty-six PRs of finished work still described as pending. Run
-> **`make doc-drift`** first (last reconciled at **#214**). When it fails, trust
-> `git log`, `docker compose ps` and the database over any document.
+> `main` four times — #72–#80, #92–#101, #129–#175 (forty-six PRs of finished
+> work still described as pending), and #232–#247. Run **`make doc-drift`**
+> first (last reconciled at **#247**). When it fails, trust `git log`,
+> `docker compose ps` and the database over any document.
+>
+> **Mike's ruling, 2026-09-18: update the docs and the session memory with the
+> card that caused the change, not in a cleanup pass at session end.** Batching
+> the write-up means it competes with running out of context, which is exactly
+> when it gets dropped — four times now.
 >
 > **`make doc-drift` compares PR numbers, not claims.** On 2026-08-04 it
 > reported every status doc `ok` while the handoff said *"Orders: none yet"* on a

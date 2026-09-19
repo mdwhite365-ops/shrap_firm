@@ -1,6 +1,6 @@
 # Recent changes
 
-**Last updated:** 2026-09-17 (`main` at #221 — a measurement session, and KI-035: the research loop has produced one strategy, ever)
+**Last updated:** 2026-09-18 (`main` at #247 — the intraday path closed end to end, three silent infrastructure faults found and fixed, and IEX vs SIP measured to a negative result)
 
 ## Merged since the inner-loop paper spine push began
 
@@ -1110,6 +1110,87 @@ filter task.
   anything cleared the 1.0 floor — and **IR got worse in every configuration**,
   because lowering a book's volatility lowers its participation in a rising
   benchmark. Risk engineering cannot substitute for alpha.
+
+## 2026-09-18 — #232–#247
+
+**The intraday path closed end to end, and three faults were found that had
+each been silently wrong for weeks.** The recurring shape held in every one:
+*a component reconstructed a fact that was already recorded, and the
+reconstruction disagreed.*
+
+### The intraday path (#233–#242)
+
+- **#233** use the capital; **#234** the Runner resolves a bar reader per
+  strategy cadence (`CadenceBarReaders`), ending the assumption that every
+  strategy is daily.
+- **#235** rate limits became account-scoped and slot-aware; the per-account
+  cap was raised to **300/day** on Mike's ruling.
+- **#236** intraday bars advance on their own, at the grain strategies declare
+  — `resolve_interval` treats the configured sweep as a *ceiling* and lowers it
+  to half the finest declared cadence, floored at 60s.
+- **#237** the Hypothesis Generator may now propose intraday effects; an
+  intraday input named without a cadence returns `missing-data` rather than
+  being built daily.
+- **#241** the scheduled sweep judges a strategy on the grain it declared.
+- **#242** measured whether intraday cadence multiplies a daily edge.
+  **It does not** — IR **0.003** at 15-minute cadence against **0.415** daily.
+  `IR = IC x sqrt(breadth)` predicts ~8.8x; the realised answer is that IC does
+  not survive the shorter horizon.
+
+### Three silent faults
+
+- **#238** two healthchecks that could never have passed (`shrap_qdrant`,
+  `shrap_langfuse`) — the qdrant probe used `/dev/tcp` under `/bin/sh`, which
+  is dash.
+- **#239** the firm can now see when a container is unhealthy or crashlooping
+  (`docker-state-exporter`, plus `check_container_health` /
+  `check_container_restarts`). `count()` over an empty result set returns *no
+  data*, not 0, so both checks carry `or vector(0)`.
+- **#244** **node-exporter had never once been scraped.**
+  `max_over_time(up{job="node-exporter"}[45d])` was **0** — not flapping, never.
+  Two independent faults, each fatal alone: the exporter bound `127.0.0.1`
+  under `network_mode: host` (unreachable from any container at any address),
+  and Prometheus targeted `172.17.0.1`, the *default* bridge, while this
+  project's gateway is `172.16.0.1`. The config's own comment said "typically
+  172.17.0.1 on Linux … adjust if your bridge gateway differs" — a guess plus an
+  instruction nobody ran. The firm had no host CPU, memory or disk metrics and
+  never had.
+
+### Feeds and filings
+
+- **#245** `source` joined the primary key of `daily_bars` and `intraday_bars`.
+  The store's own docstring had claimed this since it was written ("part of the
+  primary key intent … if a future card ever backfills SIP") while the key did
+  not contain it. A SIP backfill would have **overwritten IEX row by row**,
+  restating five years of volume in place and silently making every recorded IR
+  irreproducible. Not one of the eight bar-reading queries filtered on `source`.
+- **#246** **the filing roster covered 4 of the firm's 50 names.** EDGAR ingest
+  was healthy throughout — ~1,000 items a week — and every non-roster registrant
+  was dropped at `roster.ticker_for(cik)`, so `matched: 0` on every pass and no
+  filing recorded for fifteen days. 42 of 50 CIKs resolved from SEC's own
+  registry; eight ETF trusts left unresolved rather than guessed. Backfilled:
+  **113 → 169 filings, 4 → 34 distinct symbols.**
+- **#247** IEX vs SIP, measured. **Negative result** — see
+  `docs/research/feed-comparison-experiment.md`.
+
+### Performance
+
+- **#240** the panel's compressed series are precomputed — **~7x end to end**
+  (Amdahl; the 24x is the inner loop alone), bit-identical output. A 2.5-hour
+  evaluation became ~19 minutes, diagnosed with py-spy against a live container.
+
+### Why #247 is a negative result and not a win
+
+The uncontrolled comparison said SIP scored **IR +0.5372** against IEX's
+**+0.2332** — clearing the 0.50 promote floor. It is wrong. IEX has almost no
+history before mid-2020, so SIP's panel was 433 sessions longer and included
+the COVID crash; the run confounded feed with window.
+
+Controlled on identical 1,433-session panels the sign flips (**IEX −0.1315**,
+**SIP +0.2275**) — but SIP is higher in only **3 of 6 folds**, the whole
+aggregate advantage is one year, and dropping that fold leaves a mean delta of
+**+0.0011**. The feed changes what the strategy *selects*; it does not reliably
+change what it *earns*.
 
 ## Security notes
 
