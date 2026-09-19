@@ -1,4 +1,4 @@
-# Session handoff — 2026-09-18
+# Session handoff — 2026-09-18 (`main` at #247)
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -14,19 +14,44 @@ them, and `git log` has the history.
 
 ---
 
-## Pick up here (reconciled at #231, deployed 2026-09-18)
+## Pick up here (reconciled at #247, deployed 2026-09-18)
 
-**The firm is ready for the 2026-09-18 open and nothing is pending.** What is
-live, and what is deliberately not:
+**Everything merged through #247 is deployed and verified by image ID and
+database, not by build log.** Health: `ok 15, degraded 0, down 0`.
 
 | capability | state |
 |---|---|
-| Tech Watcher filter → `kimi-k3` | **live** — beat the 2026-09-25 retirement |
+| Tech Watcher filter → `kimi-k3` | **live** — but see the binding constraint below |
 | Position unrealized P&L capture | **live** — 24 positions carry it |
 | Exit rules | **ARMED**: stop −10%, intraday take-profit +7% |
 | Exit rules (other two thresholds) | deliberately unarmed — see below |
 | Posterior sizing (`posterior_sizing`) | **off** — arming it cuts exposure to ~0.11 |
-| Intraday *trading* (Runner reads intraday bars) | **not built** — measurement only |
+| Intraday *trading* (Runner reads intraday bars) | **live** (#234, #236, #241) — but no intraday strategy is at `paper`, and #242 measured why |
+| Host metrics (CPU/memory/disk) | **live since #244** — had never been collected before |
+| Container health / crashloop alerts | **live since #239** |
+| Two market-data feeds side by side | **live since #245** — 74,247 IEX + 91,051 SIP daily rows |
+| Filing coverage | **42 of 50 names** (#246), up from 4 |
+| `ib-gateway` | **stopped and removed.** Compose restored at `infra/ibgateway/` (#243); needs a `.env` to revive. ADR-0003 gates IBKR on live capital. |
+
+### The next three cards, in priority order
+
+1. **The archetype bar (KI-009) — Mike-owned, and it is the only one that
+   touches the binding constraint.** `kimi-k3` has scored **172 items and
+   admitted 0**. Five model families now return the same answer.
+   `research.literature_items` holds **9 rows**, and the Hypothesis Generator
+   logs `sweep_empty` hourly. The spec is written and waiting:
+   `docs/research/archetype-bar-experiment.md`, still "Proposed — spec only."
+2. **Market cap** — the cheapest `capability-gap` row
+   (`volatility-rank-forecast` needs only market capitalisation) and it is
+   half-built: `market_data.shares_outstanding` holds 1,594 rows across 35 of
+   50 names, and `SELECT_MARKET_CAP_SQL` is written and exported with **zero
+   callers**. Finish the shares for 15 names, wire a factor into
+   `FACTOR_SCORERS`.
+3. **Smaller debts**, in order: the Risk Officer's price queries pin `source`
+   but still not `adjustment` (deliberately left out of #245); Redis streams are
+   unbounded (`ops.health-tick` 25,083, `operations.reconciliation-completed`
+   25,027, `intel.regime.tick` 21,213); the intraday trigger has no 429 backoff;
+   27 orphaned pending stream entries.
 
 **Verified before the open: zero exits fire on the current book.** Worst
 position is `U` at −9.14%, which sits 0.86% from the stop. If it trips
@@ -73,6 +98,19 @@ Everything shipped on 2026-09-16/18 is apparatus for measuring and allocating.
 None of it changes whether a strategy makes money. The remaining
 `capability-gap` rows are the build list, and two of them (news text, 10-K full
 text) are closable against data the firm already ingests.
+
+**Measured again at #247, and it has got sharper.** The filter promoted in #231
+has now scored **172 items and admitted none**:
+
+| model | scored (14d) | relevant |
+|---|---|---|
+| `kimi-k3` | 172 | **0** |
+| `qwen3.5:397b` | 2,917 | 31 (1.1%) |
+
+Every rejection is the same shape — an arXiv paper failing a *"compute-substrate
+bar requiring real-world adoption economics."* The filter is applying the
+taxonomy correctly; the taxonomy admits nothing. That is KI-009 unchanged
+across five model families, and no further model change can reach it.
 
 ### Known traps re-confirmed this session
 

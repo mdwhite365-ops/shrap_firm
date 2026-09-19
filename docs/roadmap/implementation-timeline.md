@@ -1,6 +1,14 @@
 # Implementation timeline
 
-**Last updated:** 2026-09-16 (`main` at #214)
+**Last updated:** 2026-09-18 (`main` at #247)
+
+**The ordered plan as of #247 is the three-card list at the top of
+`docs/status/session-handoff.md`**, and only the first of them moves the
+binding constraint: the archetype bar (KI-009), which is Mike's ruling and not
+an implementation. `kimi-k3` has scored 172 items and admitted zero, making it
+five model families with the same answer. Market cap is the cheapest
+`capability-gap` row and is half-built. Everything below this line is the
+longer-form plan and predates both facts.
 **Supersedes** `docs/roadmap/paper-spine-tree.md` as the answer to "what's next."
 That document is the Month-1/2 paper-spine plan; its last card (Card 18) shipped
 weeks ago and it has not tracked anything since.
