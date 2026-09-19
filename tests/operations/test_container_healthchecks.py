@@ -104,3 +104,67 @@ def test_every_healthcheck_is_a_list_not_a_bare_string(services: dict[str, Any])
         if check is None:
             continue
         assert isinstance(check["test"], list), f"{name} healthcheck must be a list"
+
+
+# ---------------------------------------------------------------------------
+# ib-gateway, a separate compose project (infra/ibgateway/).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def ibgateway() -> dict[str, Any]:
+    data = yaml.safe_load(Path("infra/ibgateway/docker-compose.yml").read_text())
+    return dict(data["services"]["ib-gateway"])
+
+
+def test_the_gateway_probe_uses_no_binary_the_image_lacks(ibgateway: dict[str, Any]) -> None:
+    """The third image in this stack whose probe named a tool it does not ship.
+
+    `gnzsnz/ib-gateway` has bash, socat and timeout — no nc, curl or wget. Its
+    own probe ran `nc`, so the container reported `unhealthy` for its entire
+    life while the gateway was logged in and serving.
+    """
+
+    probe = " ".join(str(p) for p in ibgateway["healthcheck"]["test"])
+    assert "nc " not in probe and not probe.endswith(" nc")
+    assert "curl" not in probe
+    assert "wget" not in probe
+    assert "socat" in probe
+
+
+def test_the_gateway_probe_is_a_connect_not_an_api_session(
+    ibgateway: dict[str, Any],
+) -> None:
+    """Opening an IB API session needs a client id, and a probe claiming one
+    every 30 seconds would collide with a real client. Liveness is the right
+    assertion here."""
+
+    probe = " ".join(str(p) for p in ibgateway["healthcheck"]["test"])
+    assert "TCP:127.0.0.1:4002" in probe
+    assert "-u /dev/null" in probe
+
+
+def test_the_gateway_file_carries_no_credentials(ibgateway: dict[str, Any]) -> None:
+    """TWS_USERID and TWS_PASSWORD come from a gitignored .env, never this file."""
+
+    rendered = str(ibgateway.get("environment", {}))
+    assert "TWS_USERID" not in rendered
+    assert "TWS_PASSWORD" not in rendered
+    assert ".env" in str(ibgateway.get("env_file", []))
+
+
+def test_the_gateway_stays_off_the_firms_network(ibgateway: dict[str, Any]) -> None:
+    """ADR-0003 makes Alpaca the paper-phase broker interface.
+
+    Putting a broker gateway on `shrap_net` beside every agent would make IBKR
+    a firm service by the back door. It keeps its own network, as it has been.
+    """
+
+    assert ibgateway["networks"] == ["shrap-trading"]
+    published = " ".join(str(p) for p in ibgateway.get("ports", []))
+    assert "4001" not in published and "4002" not in published
+    assert "4003" not in published and "4004" not in published
+
+
+def test_the_gateway_is_paper_by_default(ibgateway: dict[str, Any]) -> None:
+    assert "paper" in str(ibgateway["environment"]["TRADING_MODE"])

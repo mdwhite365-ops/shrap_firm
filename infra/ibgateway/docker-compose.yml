@@ -1,0 +1,88 @@
+# Interactive Brokers Gateway — a SEPARATE compose project, deliberately.
+#
+# WHY THIS FILE EXISTS. The container has run since 2026-02-28 from a project at
+# /mnt/shrap/ibgateway/, and that directory was deleted in the July wipe that
+# also emptied /mnt/shrap/scripts. The container kept running; its definition
+# did not survive. So it could not be reconfigured, reproduced, or even read —
+# the only record of how it was built was the running container itself. This
+# file restores that record from `docker inspect`, with the healthcheck fixed.
+#
+# WHY IT IS NOT IN THE FIRM'S STACK. ADR-0003 makes the direct Alpaca paper
+# client the broker interface for the paper phase, and NautilusTrader (which is
+# where an IB adapter would belong) is gated on live capital. Folding this into
+# infra/docker-compose.yml would make IBKR a firm service by the back door and
+# put a broker gateway on `shrap_net` alongside every agent. It stays its own
+# project on its own network, exactly as it has been.
+#
+# CREDENTIALS ARE NOT IN THIS FILE AND MUST NOT BE. TWS_USERID and TWS_PASSWORD
+# come from infra/ibgateway/.env, which is gitignored. The running container
+# holds them in its environment; they were never read while writing this.
+#
+# APPLYING IT: `docker compose -p ibgateway up -d` from this directory, with
+# .env present. That RECREATES the container and the gateway will need to log in
+# again — do it outside market hours.
+services:
+  ib-gateway:
+    image: gnzsnz/ib-gateway:stable
+    container_name: ib-gateway
+    restart: always
+    env_file:
+      - .env
+    environment:
+      TRADING_MODE: "${TRADING_MODE:-paper}"
+      GATEWAY_OR_TWS: "gateway"
+      TWS_MAJOR_VRSN: "${TWS_MAJOR_VRSN:-10.37.1o}"
+      TIME_ZONE: "${TIME_ZONE:-America/New_York}"
+      AUTO_RESTART_TIME: "${AUTO_RESTART_TIME:-5:30 PM}"
+      TWOFA_TIMEOUT_ACTION: "restart"
+      RELOGIN_AFTER_2FA_TIMEOUT: "yes"
+      EXISTING_SESSION_DETECTED_ACTION: "primary"
+      # Left as it was found. The API can place orders, which is only safe
+      # because TRADING_MODE is paper — and is worth a deliberate decision
+      # before anything in this firm connects to it.
+      READ_ONLY_API: "${READ_ONLY_API:-no}"
+    ports:
+      # VNC only, on loopback. The API ports are deliberately NOT published:
+      # anything that needs them joins `shrap-trading` instead of reaching the
+      # gateway across the host.
+      - "127.0.0.1:5900:5900"
+    volumes:
+      - ibgw-settings:/home/ibgateway/tws_settings
+    networks:
+      - shrap-trading
+    # THE FIX. The image's own probe runs `nc`, which is not installed in it:
+    #
+    #     exec: "nc": executable file not found in $PATH
+    #
+    # so the container read `unhealthy` for its entire life while the gateway
+    # was logged in and serving. Same class of defect as the qdrant and langfuse
+    # probes (#238) — a probe that cannot run reports a permanent failure
+    # indistinguishable from a real one.
+    #
+    # `socat` IS in the image and is what the gateway itself uses to forward
+    # 4004 -> 4002. Verified against the running container: 4002 answers (on
+    # tcp6, which is why an IPv4-only port scan misses it), and this exact
+    # command exits 0.
+    #
+    # A TCP connect, not an API handshake: opening an API session needs a client
+    # id, and a healthcheck that claimed one every 30 seconds would collide with
+    # a real client. Liveness is what a probe should assert here.
+    healthcheck:
+      test: ["CMD", "timeout", "3", "socat", "-u", "/dev/null", "TCP:127.0.0.1:4002"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 5
+
+volumes:
+  # Pre-existing, created by the original project. Named so compose adopts the
+  # same volume rather than starting the gateway with empty TWS settings.
+  ibgw-settings:
+    external: true
+    name: ibgateway_ibgw-settings
+
+networks:
+  # Pre-existing. `ib-gateway` is currently its only member.
+  shrap-trading:
+    external: true
+    name: shrap-trading
