@@ -185,19 +185,19 @@ async def test_edgar_non_200_raises_source_error() -> None:
 
 
 async def test_arxiv_parses_entry_with_category_and_whitespace_normalized() -> None:
-    http = FakeHTTP([FakeResponse(200, ARXIV_FEED)])
+    http = FakeHTTP([FakeResponse(200, ARXIV_FEED), FakeResponse(200, ARXIV_FEED)])
     source = ArxivSource(categories=("cs.AI", "cs.LG"))
 
     items = await source.fetch(http)
 
+    # One request per category, and the same paper from both is one item.
+    assert [p["search_query"] for _u, p in http.requests] == ["cat:cs.AI", "cat:cs.LG"]
     assert len(items) == 1
     item = items[0]
     assert item.item_id == "arxiv:2607.01234v1"
     assert item.kind == "cs.LG"
     assert item.title == "Scaling Laws for Photonic Interconnects"
     assert item.summary == "We study photonic interconnect scaling."
-    _url, params = http.requests[0]
-    assert params["search_query"] == "cat:cs.AI OR cat:cs.LG"
 
 
 async def test_arxiv_garbage_body_raises_source_error() -> None:
@@ -803,3 +803,67 @@ async def test_arxiv_names_a_format_and_a_client() -> None:
 
     assert source._headers["Accept"] == "application/atom+xml"
     assert "@" in source._headers["User-Agent"]
+
+
+# ---------------------------------------------------------------------------
+# One refused arXiv category must not cost the whole feed
+#
+# Measured 2026-09-19, three clean rounds 8s apart, deterministic every time:
+#
+#     cs.AI               200
+#     cs.LG               200
+#     q-bio.NC            406
+#     cond-mat            406
+#     cond-mat.stat-mech  406
+#
+# The `arxiv` source asked for cs.AI OR cs.LG OR cond-mat OR q-bio.NC in one
+# query, so two refused categories took the two healthy ones down with them —
+# 46 consecutive passes ingesting nothing from a feed that was half fine.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_refused_category_does_not_lose_the_healthy_ones() -> None:
+    """The live failure: cs.AI and cs.LG work, cond-mat and q-bio.NC 406."""
+
+    http = FakeHTTP(
+        [
+            FakeResponse(200, ARXIV_FEED),  # cs.AI
+            FakeResponse(200, ARXIV_FEED),  # cs.LG
+            FakeResponse(406, ""),  # cond-mat
+            FakeResponse(406, ""),  # q-bio.NC
+        ]
+    )
+    source = ArxivSource(
+        categories=("cs.AI", "cs.LG", "cond-mat", "q-bio.NC"),
+        retry=RetryPolicy(attempts=1, backoff_seconds=0, statuses=ARXIV_RETRY.statuses),
+    )
+
+    items = await source.fetch(http)
+
+    assert len(http.requests) == 4
+    assert len(items) == 1  # the healthy categories still produced their paper
+
+
+async def test_every_category_failing_is_still_a_source_failure() -> None:
+    """A wholly dead feed must still raise, or the cursor advances over nothing."""
+
+    http = FakeHTTP([FakeResponse(406, "")] * 2)
+    source = ArxivSource(
+        categories=("cond-mat", "q-bio.NC"),
+        retry=RetryPolicy(attempts=1, backoff_seconds=0, statuses=ARXIV_RETRY.statuses),
+    )
+
+    with pytest.raises(SourceError, match="every category failed"):
+        await source.fetch(http)
+
+
+async def test_items_are_deduped_across_categories() -> None:
+    """A paper cross-listed in cs.AI and cs.LG is one row, not two."""
+
+    http = FakeHTTP([FakeResponse(200, ARXIV_FEED)] * 3)
+    source = ArxivSource(categories=("cs.AI", "cs.LG", "q-bio.NC"))
+
+    items = await source.fetch(http)
+
+    assert len(http.requests) == 3
+    assert len(items) == 1

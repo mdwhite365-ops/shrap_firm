@@ -71,16 +71,19 @@ true for days and neither of which raised anything.**
   a week, so it stayed green throughout. **A table-level maximum is an AND
   across every producer writing to that table.** Now checked per source on
   `research.ingest_cursors`, which advances on every *successful* pass rather
-  than only when new items appear. **arXiv's edge answers a throttled host
-  with 406 and an empty body**, and a throttled host gets 406 on every cache
-  *miss* while cache *hits* keep returning 200 — which is why repeating one
-  query appeared to prove the client was fine. The firm was **violating arXiv's
-  published rate limit on every pass**: their terms ask for one request per
-  three seconds, and the pass fetches two `ArxivSource` instances back to back.
-  Fixed with a shared throttle (the limit is per host), an explicit `Accept` and
-  a descriptive `User-Agent`. **None of it is verified against a working arXiv**
-  — the host was throttled all session, and the diagnostic probing kept tripping
-  it. The per-source freshness check is what will say whether the fix worked.
+  than only when new items appear. Two faults behind one symptom.
+  **arXiv refuses `cond-mat` and `q-bio.NC` outright with 406** (deterministic,
+  three clean rounds) while `cs.AI` and `cs.LG` return 200 — and the source
+  asked for all four in **one OR query**, so two bad categories took the two
+  good ones down with them. Now one request per category: **182 items where the
+  old code returned zero.** Separately, the firm was **violating arXiv's
+  published rate limit on every pass** (one request per three seconds; the pass
+  fetched two `ArxivSource` instances back to back), and a throttled host gets
+  406 on every cache *miss* while cache *hits* keep returning 200 — which is why
+  it looked random. Fixed with a shared per-host throttle. **The throttle fix is
+  unverified** — it could not be tested against a throttled host, and my own
+  probing kept re-tripping it. **Do not diagnose an external API by hammering it
+  from the production IP.**
 - **The backup cron had never once fired (#249).** Zero `cronjob.run` entries in
   an unrotated `/var/log/cron.log` going back to 2026-07-17. Both backups that
   existed were stamped 14:24 and 16:54 — hand-run. **Check `cron.log`, not the

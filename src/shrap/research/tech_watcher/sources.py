@@ -6,7 +6,11 @@ Five source classes, none requiring credentials:
   requires a descriptive ``User-Agent`` with contact info; the value comes
   from settings. Item identity is the accession number.
 - **arXiv** API query over the spec's categories (cs.AI, cs.LG, cond-mat,
-  q-bio.NC), newest first. Item identity is the arXiv id (with version).
+  q-bio.NC), newest first, **one request per category**. Item identity is the
+  arXiv id (with version), deduped across categories. One query per category
+  because arXiv refuses some of them outright with HTTP 406 — measured
+  2026-09-19 — and a single OR query let two refused categories take the two
+  healthy ones down with them for 46 consecutive passes.
 - **USASpending** award search (POST JSON API) filtered to configured
   awarding agencies above a dollar threshold, over a lookback window.
   Item identity is the award's ``generated_internal_id``. This is the
@@ -464,8 +468,45 @@ class ArxivSource:
         return self._name
 
     async def fetch(self, http: HTTPClient, timeout: float = 30.0) -> list[RawSourceItem]:
-        query = " OR ".join(f"cat:{c}" for c in self._categories)
+        items: list[RawSourceItem] = []
+        seen: set[str] = set()
+        failures: list[str] = []
 
+        for category in self._categories:
+            try:
+                response = await self._fetch_category(category, http, timeout)
+            except SourceError as e:
+                # **One refused category must not cost the whole feed.** Measured
+                # 2026-09-19, three clean rounds, 8s apart: `cs.AI` and `cs.LG`
+                # return 200 while `q-bio.NC`, `cond-mat` and
+                # `cond-mat.stat-mech` return 406 every time. This source asked
+                # for all four in one OR query, so two refused categories took
+                # `cs.AI` and `cs.LG` down with them — 46 consecutive passes
+                # ingesting nothing from a feed that was two-thirds healthy.
+                failures.append(f"{category}: {e}")
+                log.warning(
+                    "tech_watcher.arxiv_category_failed",
+                    source=self._name,
+                    category=category,
+                    error=str(e)[:200],
+                )
+                continue
+            for entry in _parse_feed(response.text, f"{self._name}[{category}]"):
+                item = self._entry_to_item(entry)
+                if item is not None and item.item_id not in seen:
+                    seen.add(item.item_id)
+                    items.append(item)
+
+        # Only a total failure is a source failure. A partial one is logged and
+        # the surviving categories are still ingested, because half a feed is
+        # worth strictly more than none of it.
+        if failures and not items:
+            raise SourceError(f"{self._name}: every category failed ({'; '.join(failures)})")
+        return items
+
+    async def _fetch_category(
+        self, category: str, http: HTTPClient, timeout: float
+    ) -> HTTPResponse:
         async def send() -> HTTPResponse:
             # Inside `send`, so it applies to retries too. A retry that ignored
             # the limit would be the fastest way back into the throttle.
@@ -473,7 +514,7 @@ class ArxivSource:
             return await http.get(
                 ARXIV_QUERY_URL,
                 params={
-                    "search_query": query,
+                    "search_query": f"cat:{category}",
                     "sortBy": "submittedDate",
                     "sortOrder": "descending",
                     "start": "0",
@@ -483,13 +524,7 @@ class ArxivSource:
                 timeout=timeout,
             )
 
-        response = await _send_with_retry(send, context=self._name, policy=self._retry)
-        items: list[RawSourceItem] = []
-        for entry in _parse_feed(response.text, "arxiv"):
-            item = self._entry_to_item(entry)
-            if item is not None:
-                items.append(item)
-        return items
+        return await _send_with_retry(send, context=f"{self._name}[{category}]", policy=self._retry)
 
     def _entry_to_item(self, entry: ET.Element) -> RawSourceItem | None:
         entry_id = _text(entry, "id")
