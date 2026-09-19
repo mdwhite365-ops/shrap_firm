@@ -33,6 +33,7 @@ from typing import Any, Protocol
 import structlog
 
 from shrap.agents.operations.reconciliation_agent.db import FLAT_MARKER_TICKER
+from shrap.market_data.store import DEFAULT_BAR_SOURCE
 from shrap.risk_compliance.risk_officer.exposure import Position
 from shrap.risk_compliance.risk_officer.monitor import EquityPoint
 from shrap.risk_compliance.risk_officer.switches import SwitchState
@@ -162,10 +163,20 @@ WHERE account_id = $1 AND equity IS NOT NULL AND at >= $2
 ORDER BY at
 """.strip()
 
+# Both queries pin ``source``. Without it, `LIMIT 1` over a table holding two
+# feeds returns whichever row the planner reaches first — a nondeterministic
+# price feeding a position-sizing decision, differing between calls with nothing
+# in the output to show it.
+#
+# KNOWN GAP, deliberately not widened here: neither query pins ``adjustment``
+# either. It is harmless today because the store holds exactly one adjustment
+# mode, which is precisely the kind of "correct by accident" this card is about.
+# Fixing it means threading an adjustment through the Risk Officer's callers and
+# belongs to its own card rather than riding along in this one.
 SELECT_LATEST_CLOSE_SQL = """
 SELECT close
 FROM market_data.daily_bars
-WHERE ticker = $1
+WHERE ticker = $1 AND source = $2
 ORDER BY session_date DESC
 LIMIT 1
 """.strip()
@@ -175,7 +186,7 @@ SELECT close
 FROM (
     SELECT close, session_date
     FROM market_data.daily_bars
-    WHERE ticker = $1
+    WHERE ticker = $1 AND source = $3
     ORDER BY session_date DESC
     LIMIT $2
 ) recent
@@ -327,16 +338,18 @@ class RiskStore:
             if row["equity"] is not None
         )
 
-    async def latest_close(self, ticker: str) -> float | None:
+    async def latest_close(self, ticker: str, source: str = DEFAULT_BAR_SOURCE) -> float | None:
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(SELECT_LATEST_CLOSE_SQL, ticker.strip().upper())
+            row = await conn.fetchrow(SELECT_LATEST_CLOSE_SQL, ticker.strip().upper(), source)
         if row is None or row["close"] is None:
             return None
         return float(row["close"])
 
-    async def closes(self, ticker: str, limit: int = 90) -> tuple[float, ...]:
+    async def closes(
+        self, ticker: str, limit: int = 90, source: str = DEFAULT_BAR_SOURCE
+    ) -> tuple[float, ...]:
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(SELECT_CLOSES_SQL, ticker.strip().upper(), limit)
+            rows = await conn.fetch(SELECT_CLOSES_SQL, ticker.strip().upper(), limit, source)
         return tuple(float(row["close"]) for row in rows if row["close"] is not None)
 
     async def price_history(

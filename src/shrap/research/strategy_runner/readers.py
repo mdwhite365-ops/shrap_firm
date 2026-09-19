@@ -48,6 +48,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 
+from shrap.market_data.store import DEFAULT_BAR_SOURCE
 from shrap.operations.market_phase import DEFAULT_CALENDAR
 from shrap.research.strategy_evaluator.store import (
     PostgresEvaluatorReader,
@@ -114,11 +115,20 @@ class CadenceBarReaders:
         *,
         include_extended: bool = False,
         calendar_name: str = DEFAULT_CALENDAR,
+        source: str = DEFAULT_BAR_SOURCE,
     ) -> None:
         self._pool = pool
         self._include_extended = include_extended
         self._calendar_name = calendar_name
-        self._daily: BarReader = PostgresEvaluatorReader(pool)  # type: ignore[arg-type]
+        # One feed for every grain this resolver hands out. A daily reader on
+        # IEX beside an intraday reader on SIP would be two different markets
+        # inside one strategy, and the cadence seam is exactly where nobody
+        # would think to look for it.
+        self._source = source
+        self._daily: BarReader = PostgresEvaluatorReader(
+            pool,  # type: ignore[arg-type]
+            source=source,
+        )
         self._intraday: dict[str, BarReader] = {}
 
     def for_cadence(self, cadence: Cadence) -> BarReader:
@@ -132,6 +142,7 @@ class CadenceBarReaders:
                 timeframe=timeframe,
                 include_extended=self._include_extended,
                 calendar_name=self._calendar_name,
+                source=self._source,
             )
             self._intraday[timeframe] = reader
         return reader

@@ -24,6 +24,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
+from shrap.market_data.store import DEFAULT_BAR_SOURCE
 from shrap.operations.market_phase import (
     DEFAULT_CALENDAR,
     DEFAULT_TIMEZONE,
@@ -172,10 +173,17 @@ SELECT_TICKER_TIER_SQL = """
 SELECT tier FROM research.universe_tiers WHERE ticker = $1
 """.strip()
 
+# `source` is a predicate, not a filter of convenience. Before the feed became
+# part of the bar key this query was correct by accident — the table held one
+# feed, so "every row for this ticker" and "every IEX row for this ticker" were
+# the same set. With two feeds stored they are not, and the difference does not
+# announce itself: the panel would simply carry two bars per session and the
+# backtest would run on it without complaint.
 SELECT_DAILY_BARS_SQL = """
 SELECT session_date, open, high, low, close, volume
 FROM market_data.daily_bars
 WHERE ticker = $1 AND adjustment = $2 AND session_date BETWEEN $3 AND $4
+  AND source = $5
 ORDER BY session_date
 """.strip()
 
@@ -188,6 +196,7 @@ SELECT bar_ts, open, high, low, close, volume
 FROM market_data.intraday_bars
 WHERE ticker = $1 AND adjustment = $2 AND timeframe = $3
   AND bar_ts >= $4 AND bar_ts < $5
+  AND source = $6
 ORDER BY bar_ts
 """.strip()
 
@@ -295,10 +304,17 @@ class PostgresEvaluationStore:
 
 
 class PostgresEvaluatorReader:
-    """Read-only consumer of market data and foreign anchor/tier tables."""
+    """Read-only consumer of market data and foreign anchor/tier tables.
 
-    def __init__(self, pool: AsyncPool) -> None:
+    ``source`` is the feed this reader's bars come from. It is a property of the
+    reader rather than an argument to :meth:`read_bars` because it is a property
+    of the *panel*: a backtest that drew some sessions from IEX and others from
+    SIP would not be a backtest of anything. One feed per reader, chosen once.
+    """
+
+    def __init__(self, pool: AsyncPool, *, source: str = DEFAULT_BAR_SOURCE) -> None:
         self._pool = pool
+        self._source = source
 
     async def world_changer_status(self, candidate_id: str) -> str | None:
         async with self._pool.acquire() as conn:
@@ -353,7 +369,9 @@ class PostgresEvaluatorReader:
         self, ticker: str, start: date, end: date, adjustment: str
     ) -> list[BarSample]:
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(SELECT_DAILY_BARS_SQL, ticker, adjustment, start, end)
+            rows = await conn.fetch(
+                SELECT_DAILY_BARS_SQL, ticker, adjustment, start, end, self._source
+            )
         return [
             BarSample(
                 session_date=row["session_date"],
@@ -397,9 +415,11 @@ class PostgresIntradayBarReader:
         timeframe: str,
         include_extended: bool = False,
         calendar_name: str = DEFAULT_CALENDAR,
+        source: str = DEFAULT_BAR_SOURCE,
     ) -> None:
         self._pool = pool
         self._timeframe = timeframe
+        self._source = source
         self._include_extended = include_extended
         self._calendar_name = calendar_name
         self._tz = ZoneInfo(DEFAULT_TIMEZONE)
@@ -429,6 +449,7 @@ class PostgresIntradayBarReader:
                 self._timeframe,
                 begin_utc,
                 finish_utc,
+                self._source,
             )
         bounds = {} if self._include_extended else self._session_bounds(start, end)
         samples: list[BarSample] = []
