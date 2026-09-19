@@ -197,7 +197,11 @@ async def test_get_daily_bars_rejects_malformed_shape() -> None:
 
 
 def test_upsert_sql_is_conflict_upsert() -> None:
-    assert "ON CONFLICT (ticker, session_date, adjustment) DO UPDATE" in UPSERT_DAILY_BAR_SQL
+    # `source` is in the conflict target: a SIP bar for a session the store
+    # already holds on IEX is a new row, not an overwrite of the IEX one.
+    assert (
+        "ON CONFLICT (ticker, session_date, adjustment, source) DO UPDATE" in UPSERT_DAILY_BAR_SQL
+    )
 
 
 async def test_upsert_bars_uses_upsert_sql_and_is_rerunnable() -> None:

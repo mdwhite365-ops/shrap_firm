@@ -90,6 +90,7 @@ CROSS JOIN LATERAL (
 WHERE b.ticker = ANY($1::text[])
   AND b.adjustment = $2
   AND b.session_date BETWEEN $3 AND $4
+  AND b.source = $5
 ORDER BY b.ticker, b.session_date
 """.strip()
 

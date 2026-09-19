@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from shrap.common.db import create_asyncpg_pool
+from shrap.market_data.store import DEFAULT_BAR_SOURCE
 from shrap.research.live_benchmark import (
     SessionPoint,
     compare_to_benchmark,
@@ -71,10 +72,14 @@ LEFT JOIN ops.position_snapshots p
 GROUP BY l.account_id, l.session_date
 """.strip()
 
+# Pinned to one feed: the benchmark is an equal-weight average across the
+# universe, so an unpinned query would average IEX and SIP closes of the same
+# name on the same day and call the result the market.
 SELECT_UNIVERSE_CLOSES_SQL = """
 SELECT ticker, session_date, close
 FROM market_data.daily_bars
 WHERE adjustment = $3 AND session_date BETWEEN $1 AND $2
+  AND source = $4
 ORDER BY ticker, session_date
 """.strip()
 
@@ -93,7 +98,9 @@ async def load_series(
     async with pool.acquire() as conn:  # type: ignore[attr-defined]
         equity_rows = await conn.fetch(SELECT_SESSION_EQUITY_SQL, start, end)
         gross_rows = await conn.fetch(SELECT_SESSION_GROSS_SQL, start, end)
-        bar_rows = await conn.fetch(SELECT_UNIVERSE_CLOSES_SQL, start, end, "all")
+        bar_rows = await conn.fetch(
+            SELECT_UNIVERSE_CLOSES_SQL, start, end, "all", DEFAULT_BAR_SOURCE
+        )
 
     gross: dict[tuple[str, date], float] = {
         (r["account_id"], r["session_date"]): float(r["gross"]) for r in gross_rows
