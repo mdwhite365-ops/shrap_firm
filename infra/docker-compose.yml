@@ -1169,9 +1169,13 @@ services:
     environment:
       FILING_PROCESSOR_REDIS_URL: "redis://redis:6379/0"
       FILING_PROCESSOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
-      # Tier 3 roster, TICKER:CIK keyed by CIK (EDGAR resolution is CIK-based).
-      # Placeholder launch names until the Universe Curator owns Tier 3 state.
-      FILING_PROCESSOR_ROSTER: "${FILING_PROCESSOR_ROSTER:-AAPL:320193,NVDA:1045810,TSLA:1318605,LMT:936468}"
+      # FILING_PROCESSOR_ROSTER is deliberately NOT set here. It used to carry
+      # an inline four-name fallback, which beat the application default and so
+      # pinned the deployed roster at four of fifty names no matter what the
+      # code said — a compose file quietly overriding the thing it was meant to
+      # default. The roster now comes from the locked launch list in
+      # `universe_curator.launch_list`, and `env_file: .env` above still lets an
+      # operator override it for a narrower scope without editing this file.
       FILING_PROCESSOR_SEC_USER_AGENT: "${FILING_PROCESSOR_SEC_USER_AGENT:-shrap-firm/0.1 filing-processor (mdwhite365@gmail.com)}"
       FILING_PROCESSOR_ESCALATION_THRESHOLD: "2"
       FILING_PROCESSOR_PUBLISH_THRESHOLD: "1"
