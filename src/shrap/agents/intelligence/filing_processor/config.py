@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shrap.intelligence.filing_processor.client import parse_roster
 from shrap.intelligence.filing_processor.service import DEFAULT_FEED, FilingRunConfig
+from shrap.research.universe_curator.launch_list import roster_env_value
 
 _DEFAULT_REDIS_URL = "redis" + "://" + "redis" + ":6379/0"
 
@@ -16,13 +17,22 @@ _DEFAULT_REDIS_URL = "redis" + "://" + "redis" + ":6379/0"
 # convention as the Tech Watcher's EdgarSource, scoped to this agent.
 _DEFAULT_SEC_USER_AGENT = "shrap-firm/0.1 filing-processor (mdwhite365@gmail.com)"
 
-# Placeholder Tier 3 roster (ADR-0012), TICKER:CIK keyed by CIK because EDGAR
-# resolution is CIK-based. These four single-name equities carry the firm's
-# launch names with their public EDGAR CIKs; overridden by
-# FILING_PROCESSOR_ROSTER in the deployed env, and superseded by the Universe
-# Curator's Tier 3 state when that exists (mirrors the News Analyzer's symbols
-# placeholder — real calibration comes from live batches, not spec time).
-_DEFAULT_ROSTER = "AAPL:320193,NVDA:1045810,TSLA:1318605,LMT:936468"
+# The Tier 3 roster (ADR-0012), TICKER:CIK keyed by CIK because EDGAR
+# resolution is CIK-based.
+#
+# This used to be four names written out by hand, described as a placeholder
+# "superseded by the Universe Curator's Tier 3 state when that exists". That
+# state does exist — `research.universe_tiers` holds all fifty — and the
+# placeholder outlived it, so the Filing Processor matched 8-Ks against four
+# names out of fifty and dropped every other registrant at `ticker_for(cik)`.
+# EDGAR ingest was healthy throughout: ~1,000 items a week arriving, `matched:
+# 0` on every pass, and not one filing recorded for fifteen days.
+#
+# Derived from the locked launch list rather than restated here, because two
+# hand-maintained copies of the same list is exactly how the four-against-fifty
+# gap opened and stayed open. Still overridable by FILING_PROCESSOR_ROSTER for
+# an operator who wants a narrower scope.
+_DEFAULT_ROSTER = roster_env_value()
 
 
 def _default_postgres_dsn() -> str:

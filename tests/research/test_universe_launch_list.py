@@ -26,6 +26,7 @@ from shrap.research.universe_curator.launch_list import (
     CATEGORY_MEGA_CAP_TECH,
     CATEGORY_MID_CAP,
     LAUNCH_CIKS,
+    LAUNCH_CIKS_UNRESOLVED,
     LAUNCH_LIST,
     LAUNCH_PROFILE_PATHS,
     TIER3_CAP,
@@ -101,12 +102,26 @@ def test_known_ciks_and_profiles_are_launch_members() -> None:
     assert set(LAUNCH_CIKS) <= members
     assert set(LAUNCH_PROFILE_PATHS) <= members
     # Only the four roster CIKs are known; everything else backfills later.
-    assert LAUNCH_CIKS == {
-        "AAPL": "320193",
-        "NVDA": "1045810",
-        "TSLA": "1318605",
-        "LMT": "936468",
-    }
+    # 42 of the 50, resolved from SEC's company_tickers.json. Asserted as a
+    # count plus the invariants rather than as a literal dict: a 42-entry copy
+    # here would be a third hand-maintained list of the same facts, which is
+    # the duplication that let the roster sit at four names for eight weeks.
+    assert len(LAUNCH_CIKS) == 42
+    assert LAUNCH_CIKS["AAPL"] == "320193"  # unchanged by the backfill
+    assert LAUNCH_CIKS["MSFT"] == "789019"  # one the four-name roster missed
+
+    # The eight that did not resolve stay out. This is the "never guess" rule
+    # as an assertion: an ETF trust files under a registrant name that does not
+    # carry its ticker, and inventing a CIK would attribute someone else's 8-K
+    # to this universe.
+    assert LAUNCH_CIKS_UNRESOLVED.isdisjoint(LAUNCH_CIKS)
+    assert len(LAUNCH_CIKS) + len(LAUNCH_CIKS_UNRESOLVED) == len(LAUNCH_LIST)
+
+    # Every CIK is digits, no leading zeros — the form `_normalize_cik` reduces
+    # to, so a roster entry matches what `parse_cik` pulls out of a filing URL.
+    for ticker, cik in LAUNCH_CIKS.items():
+        assert cik.isdigit(), f"{ticker}: {cik!r}"
+        assert not cik.startswith("0"), f"{ticker}: {cik!r}"
     # Exactly the six seed-profiled names.
     assert set(LAUNCH_PROFILE_PATHS) == {"SPY", "QQQ", "TSLA", "NVDA", "AAPL", "LMT"}
 
@@ -169,9 +184,12 @@ async def test_load_launch_list_promotes_all_fifty_with_mike_seed() -> None:
         assert payload["evidence_ref"] == LAUNCH_EVIDENCE_REF
         assert payload["source_tier"] == "discovery"
         assert payload["destination_tier"] == TIER_ACTIVE
-    # CIK populated only for the four known; NULL for the rest.
+    # CIK populated for every name SEC's registry resolved; NULL for the eight
+    # ETF trusts it did not. MSFT used to be asserted NULL here, which pinned
+    # the gap rather than catching it.
     assert store.tiers["AAPL"]["cik"] == "320193"
-    assert store.tiers["MSFT"]["cik"] is None
+    assert store.tiers["MSFT"]["cik"] == "789019"
+    assert store.tiers["XLF"]["cik"] is None
     # profile_path set for the six seed-profiled names; None (grandfathered) else.
     assert store.tiers["SPY"]["profile_path"] == "docs/universe/spy.md"
     assert store.tiers["MSFT"]["profile_path"] is None
