@@ -494,3 +494,65 @@ async def test_concurrency_is_bounded() -> None:
 
     assert peak <= 3, f"semaphore did not bound concurrency: peak {peak}"
     assert peak > 1, "no concurrency actually happened"
+
+
+# --- the corpus the first run missed ------------------------------------------
+#
+# The first full index returned only bank-earnings 8-Ks for "cross-sectional
+# momentum factor predicts equity returns". `document_text` is populated for
+# sec-edgar and nothing else, so 5,843 arXiv and q-fin papers — the literature
+# that would actually serve the Hypothesis Generator — were never indexed.
+# Found by querying the index, not by counting its points.
+
+
+def test_research_query_reads_the_abstract_when_there_is_no_full_text() -> None:
+    """Otherwise the index contains EDGAR and no research literature at all."""
+
+    assert "coalesce(document_text, summary)" in SELECT_RAW_ITEMS_SQL
+    assert "WHERE coalesce(document_text, summary) IS NOT NULL" in SELECT_RAW_ITEMS_SQL
+
+
+def test_the_corpus_size_query_counts_what_the_fetch_would_index() -> None:
+    """A size estimate over a different predicate than the fetch is a lie.
+
+    It would have reported 15,318 documents while the indexer walked 21,518, or
+    the reverse — and the estimate is what decides whether a run is minutes or
+    hours.
+    """
+
+    from shrap.intelligence.corpus_index.store import COUNT_RAW_ITEMS_SQL
+
+    assert "coalesce(document_text, summary)" in COUNT_RAW_ITEMS_SQL
+
+
+def test_an_abstract_is_labelled_so_it_cannot_pass_for_full_text() -> None:
+    """A hit on an abstract must not read as a hit on the paper."""
+
+    assert "'abstract'" in SELECT_RAW_ITEMS_SQL
+    assert "'full-text'" in SELECT_RAW_ITEMS_SQL
+
+    doc = CorpusDocument(
+        source="research-items",
+        ref="arxiv:2609.05485v1",
+        title="Are AI Risks Priced in the U.S. Stock Market?",
+        url="https://arxiv.org/abs/2609.05485v1",
+        body="We study...",
+        fetched_at=datetime(2026, 9, 19, tzinfo=UTC),
+        feed="arxiv-qfin",
+        body_kind="abstract",
+    )
+
+    assert doc.payload()["body_kind"] == "abstract"
+
+
+def test_full_text_is_the_default_so_filings_are_not_mislabelled() -> None:
+    doc = CorpusDocument(
+        source=SOURCE_FILINGS,
+        ref="acc-1",
+        title="t",
+        url="u",
+        body="b",
+        fetched_at=datetime(2026, 9, 19, tzinfo=UTC),
+    )
+
+    assert doc.payload()["body_kind"] == "full-text"
