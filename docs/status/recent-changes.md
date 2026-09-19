@@ -1254,13 +1254,25 @@ items table, because `raw_source_items` upserts `ON CONFLICT DO NOTHING` — its
 `fetched_at` moves only on genuinely new items, and USASpending has legitimately
 inserted nothing since 2026-08-27 while working perfectly.
 
-**The arXiv 406 itself is not understood and the fix does not depend on it.**
-Ruled out by experiment: URL, user-agent, container-vs-host, public IP,
-HTTP/1.1-vs-2, sync-vs-async, query shape. The identical request succeeded 8/8
-in one window and failed 6/6 twenty minutes later. Sources now retry transient
-statuses (406 for arXiv only; never 403, which is how a client earns an SEC
-ban), but **retry does not rescue a sustained outage** — ten attempts over sixty
-seconds all returned 406. The mitigation is detection, not prevention.
+**arXiv's edge answers a throttled host with 406 and an empty body** — Fastly,
+not the API, and `x-cache: MISS` on every one. The behaviour that took longest
+to see: a throttled host gets 406 on every cache *miss* while cache *hits* keep
+returning 200, which is why repeating one query appeared to prove the client was
+fine. Ruled out along the way: URL, user-agent, container-vs-host, public IP,
+HTTP version, sync-vs-async, category set, query shape.
+
+**We were violating arXiv's published rate limit on every pass.** Their terms
+ask for "no more than one request every three seconds, and… a single connection
+at a time"; the pass registers two `ArxivSource` instances and fetches them back
+to back with no delay. Now a shared 3-second throttle across both (the limit is
+per host, so a per-instance throttle would satisfy nothing), applied inside the
+retry too, plus an explicit `Accept` and a descriptive `User-Agent`.
+
+**None of it is verified against a working arXiv**, because the host was
+throttled all session — all four header combinations and ten retries over sixty
+seconds returned 406. The diagnostic probing was itself heavy enough to keep
+tripping the throttle. The per-source freshness check is what will say whether
+the fix worked.
 
 See `docs/runbooks/a-dead-ingest-source.md`.
 

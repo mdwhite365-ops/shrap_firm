@@ -71,11 +71,16 @@ true for days and neither of which raised anything.**
   a week, so it stayed green throughout. **A table-level maximum is an AND
   across every producer writing to that table.** Now checked per source on
   `research.ingest_cursors`, which advances on every *successful* pass rather
-  than only when new items appear. The 406 itself is **not understood** — URL,
-  user-agent, container-vs-host, IP, HTTP version, sync-vs-async and query shape
-  were all ruled out, and the identical request succeeded 8/8 then failed 6/6
-  twenty minutes later. **Retry does not rescue it** (10 attempts over 60s all
-  406); detection does.
+  than only when new items appear. **arXiv's edge answers a throttled host
+  with 406 and an empty body**, and a throttled host gets 406 on every cache
+  *miss* while cache *hits* keep returning 200 — which is why repeating one
+  query appeared to prove the client was fine. The firm was **violating arXiv's
+  published rate limit on every pass**: their terms ask for one request per
+  three seconds, and the pass fetches two `ArxivSource` instances back to back.
+  Fixed with a shared throttle (the limit is per host), an explicit `Accept` and
+  a descriptive `User-Agent`. **None of it is verified against a working arXiv**
+  — the host was throttled all session, and the diagnostic probing kept tripping
+  it. The per-source freshness check is what will say whether the fix worked.
 - **The backup cron had never once fired (#249).** Zero `cronjob.run` entries in
   an unrotated `/var/log/cron.log` going back to 2026-07-17. Both backups that
   existed were stamped 14:24 and 16:54 — hand-run. **Check `cron.log`, not the

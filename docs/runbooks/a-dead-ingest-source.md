@@ -78,29 +78,60 @@ ssh dell 'docker logs --since 6h shrap_tech_watcher 2>&1 | grep source_failed'
 
 ## About the arXiv 406 specifically
 
-**I could not determine the cause, and the fix does not depend on knowing it.**
+**arXiv's edge answers a throttled host with 406 and an empty body.** Not 429,
+and not from the API — from Fastly. A 406 response carries `via: varnish` and no
+`server: Google Frontend` header, so the origin is never reached.
 
-Ruled out by experiment on 2026-09-19: the URL, the user-agent, container
-vs. host, the public IP, HTTP/1.1 vs. HTTP/2, sync vs. async clients, and the
-query shape. The identical request succeeded 8/8 in one window and failed 6/6
-twenty minutes later from the same address. The 406 carries an empty body and is
-served by arXiv's Fastly edge (`via: varnish`, and no `server: Google Frontend`
-header), so the origin is never reached. It correlates with recent request
-volume and nothing else I could isolate.
+The behaviour that took longest to see, and the reason this looked random for an
+hour: **a throttled host gets 406 on every cache MISS while cache HITS keep
+returning 200.** Repeating one query appeared to prove the client was fine,
+because Fastly was answering it. Any fresh query failed. Ruled out along the way,
+all by experiment: the URL, the user-agent, container-vs-host, the public IP,
+HTTP/1.1-vs-2, sync-vs-async, the category set and the query shape.
 
-The sources now treat 406 as transient **for arXiv only** and retry it. Two
-honest caveats:
+### What we were doing wrong
 
-- **Retry does not rescue a sustained outage.** Ten attempts over sixty seconds
-  all returned 406 during this one. Retry is for the brief version — EDGAR, the
-  DOE newsroom and the Federal Register each blipped at least once in the same
-  48 hours, and none of those needed to cost an hour.
-- **406 is retryable only for arXiv.** Everywhere else it is a genuine
-  content-negotiation failure and retrying it would turn one wrong request into
-  three. `403` is never retried anywhere: SEC bans clients that keep knocking.
+arXiv's terms of use (https://info.arxiv.org/help/api/tou.html):
 
-So the real mitigation here is **detection, not prevention**. The firm cannot
-stop arXiv returning 406. It can stop losing two days to it.
+> make no more than one request every three seconds, and limit requests to a
+> single connection at a time
+
+The ingest pass registers **two** `ArxivSource` instances — `arxiv` and
+`arxiv-qfin` — and the pass loop fetches them back to back with no delay. Two
+requests inside 100 ms, twice an hour, for months. That is a documented
+violation, and it is the most plausible reason this host is throttled.
+
+Three changes, in order of confidence:
+
+1. **A shared 3-second throttle across both arXiv sources** (`ARXIV_THROTTLE`).
+   Shared because the limit is per host — a per-instance throttle would satisfy
+   nothing. It applies inside the retry too, since a retry that ignored the
+   limit is the fastest way back into a throttle. This is a straightforward
+   compliance fix and is the one worth trusting.
+2. **Explicit `Accept: application/atom+xml` and a descriptive `User-Agent`.**
+   Widely reported as the fix for arXiv 406s, cheap, and good practice
+   regardless.
+3. **406 treated as retryable for arXiv only.** Elsewhere it is a genuine
+   content-negotiation failure and retrying would turn one wrong request into
+   three. `403` is never retried anywhere: SEC bans clients that keep knocking.
+
+### What is not established
+
+**None of the three was verified against a working arXiv, because the host was
+throttled for the whole session.** Once throttled, all four header combinations
+returned 406, and ten retries over sixty seconds returned 406. Testing during
+the outage could not distinguish a good fix from a bad one.
+
+Worse, and worth saying plainly: **the diagnostic probing done on 2026-09-19 was
+itself heavy enough to keep tripping the throttle**, so live probing from this
+address is contaminated evidence for a while. The original outage began
+2026-09-17 14:17, before any of it.
+
+So the honest status is: the rate-limit violation is real and is fixed; whether
+it was *the* cause is unproven. **The check that tells us is the per-source
+freshness target** — if `research.ingest_cursors[arxiv]` goes green and stays
+green, the fix worked. If it goes stale again, it did not, and this runbook is
+where the next attempt starts.
 
 ## Adding a per-source check for something else
 

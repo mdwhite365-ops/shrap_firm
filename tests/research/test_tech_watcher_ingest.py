@@ -14,12 +14,15 @@ from shrap.research.tech_watcher.service import (
 )
 from shrap.research.tech_watcher.sources import (
     ARXIV_RETRY,
+    ARXIV_THROTTLE,
+    DEFAULT_QFIN_CATEGORIES,
     DEFAULT_RETRY,
     ArxivSource,
     DoeNewsroomSource,
     EdgarSource,
     FederalRegisterSource,
     RawSourceItem,
+    RequestThrottle,
     RetryPolicy,
     SourceError,
     UsaSpendingSource,
@@ -120,6 +123,25 @@ class FakeHTTP:
     ) -> FakeResponse:
         self.post_bodies.append(json)
         return self._responses[len(self.requests) + len(self.post_bodies) - 1]
+
+
+@pytest.fixture(autouse=True)
+def _no_real_arxiv_sleeps() -> Any:
+    """Neutralise the shared arXiv throttle for tests that are not testing it.
+
+    `ARXIV_THROTTLE` is module-level and shared on purpose — the rate limit is
+    per host, so per-instance throttles would satisfy nothing. That makes it
+    shared state across tests, and at its real 3-second interval it turned this
+    file from 0.1s into 15s. The interval is neutered rather than the object
+    replaced, so the identity assertions still mean what they say.
+    """
+
+    original = ARXIV_THROTTLE._min_interval
+    ARXIV_THROTTLE._min_interval = 0.0
+    ARXIV_THROTTLE._last = None
+    yield
+    ARXIV_THROTTLE._min_interval = original
+    ARXIV_THROTTLE._last = None
 
 
 # --- sources -------------------------------------------------------------------
@@ -676,3 +698,108 @@ def test_zero_backoff_never_sleeps() -> None:
 def test_a_policy_must_allow_at_least_one_attempt() -> None:
     with pytest.raises(ValueError, match="at least 1"):
         RetryPolicy(attempts=0)
+
+
+# ---------------------------------------------------------------------------
+# arXiv rate limiting
+#
+# arXiv's terms of use: "make no more than one request every three seconds, and
+# limit requests to a single connection at a time."
+# The ingest pass registers two ArxivSource instances and fetched them back to
+# back with no delay — two requests inside 100ms, twice an hour, for months.
+# ---------------------------------------------------------------------------
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+async def test_the_first_request_is_not_delayed() -> None:
+    clock = _FakeClock()
+    throttle = RequestThrottle(3.0, clock=clock, sleep=clock.sleep)
+
+    assert await throttle.acquire() == 0.0
+    assert clock.slept == []
+
+
+async def test_a_second_request_waits_out_the_interval() -> None:
+    clock = _FakeClock()
+    throttle = RequestThrottle(3.0, clock=clock, sleep=clock.sleep)
+
+    await throttle.acquire()
+    waited = await throttle.acquire()
+
+    assert waited == 3.0
+    assert clock.slept == [3.0]
+
+
+async def test_no_wait_when_the_interval_has_already_passed() -> None:
+    clock = _FakeClock()
+    throttle = RequestThrottle(3.0, clock=clock, sleep=clock.sleep)
+
+    await throttle.acquire()
+    clock.now += 10.0
+    waited = await throttle.acquire()
+
+    assert waited == 0.0
+    assert clock.slept == []
+
+
+async def test_both_arxiv_sources_share_one_throttle() -> None:
+    """The limit is per host, so per-instance throttles would satisfy nothing.
+
+    This is the actual defect: `arxiv` and `arxiv-qfin` are two instances that
+    hit one API back to back in the same pass.
+    """
+
+    assert ArxivSource(categories=("cs.AI",))._throttle is ARXIV_THROTTLE
+    assert ArxivSource(categories=DEFAULT_QFIN_CATEGORIES)._throttle is ARXIV_THROTTLE
+
+
+async def test_the_throttle_is_applied_before_each_arxiv_request() -> None:
+    clock = _FakeClock()
+    throttle = RequestThrottle(3.0, clock=clock, sleep=clock.sleep)
+    http = FakeHTTP([FakeResponse(200, ARXIV_FEED), FakeResponse(200, ARXIV_FEED)])
+    first = ArxivSource(categories=("cs.AI",), throttle=throttle)
+    second = ArxivSource(categories=("q-fin.PM",), throttle=throttle)
+
+    await first.fetch(http)
+    await second.fetch(http)
+
+    assert clock.slept == [3.0]
+
+
+async def test_a_retry_also_waits_rather_than_hammering() -> None:
+    """A retry that ignored the limit is the fastest way back into a throttle."""
+
+    clock = _FakeClock()
+    throttle = RequestThrottle(3.0, clock=clock, sleep=clock.sleep)
+    http = FakeHTTP([FakeResponse(406, ""), FakeResponse(200, ARXIV_FEED)])
+    source = ArxivSource(
+        categories=("cs.AI",),
+        throttle=throttle,
+        retry=RetryPolicy(attempts=3, backoff_seconds=0, statuses=ARXIV_RETRY.statuses),
+    )
+
+    await source.fetch(http)
+
+    assert len(http.requests) == 2
+    assert clock.slept == [3.0]
+
+
+async def test_arxiv_names_a_format_and_a_client() -> None:
+    """Both are cheap, both are asked for, and neither was being sent."""
+
+    source = ArxivSource(categories=("cs.AI",))
+
+    assert source._headers["Accept"] == "application/atom+xml"
+    assert "@" in source._headers["User-Agent"]
