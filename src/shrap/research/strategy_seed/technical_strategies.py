@@ -66,6 +66,12 @@ from shrap.research.strategy_evaluator.reference_strategy import (
     PARAM_BOUNDS,
 )
 from shrap.research.strategy_registry import STATUS_HYPOTHESIS, StrategyRecord
+from shrap.research.strategy_runner.cadence import (
+    CADENCE_INTRADAY,
+    DAILY,
+    Cadence,
+    bars_per_session,
+)
 from shrap.research.universe_curator.launch_list import LAUNCH_LIST
 
 CODE_REF = "src/shrap/research/strategy_seed/technical_strategies.py"
@@ -118,6 +124,18 @@ class MomentumSeed(NamedTuple):
     long_short: bool = False
     """Short the bottom of the ranking as well as buying the top."""
 
+    cadence_minutes: int | None = None
+    """Decide every N minutes instead of once a session. None means daily.
+
+    **``lookback`` and ``skip`` stay in SESSIONS whatever this is set to**, and
+    :func:`_momentum_spec` converts them to bars. That is what makes an intraday
+    seed comparable to its daily sibling: both declare a six-month formation and
+    a one-month skip, and only the decision frequency differs. Declaring the
+    intraday one as ``lookback=3276`` would be the same number expressed in a
+    unit nobody could compare, and reviewing whether two seeds share an economic
+    thesis would mean doing arithmetic in your head.
+    """
+
     parent_strategy_id: str | None = None
     revision_reason: str | None = None
     derived_from_evaluation_id: str | None = None
@@ -156,6 +174,11 @@ TECHNICAL_SEEDS: tuple[TechnicalSeed, ...] = (
 # a name dropped from Tier 3 would otherwise sit in this spec silently and be
 # refused at evaluation with nothing pointing at why.
 _MOMENTUM_TICKERS: tuple[str, ...] = tuple(sorted(e.ticker for e in LAUNCH_LIST))
+
+# Params counted in bars, so they scale with the grain. `top_n` is a count of
+# names and `gross_exposure` a fraction; neither is a horizon, and scaling them
+# would be a unit error that the bounds check would not catch.
+_SESSION_SCALED_PARAMS: frozenset[str] = frozenset({"lookback", "skip"})
 
 MOMENTUM_SEEDS: tuple[MomentumSeed, ...] = (
     MomentumSeed(
@@ -272,6 +295,55 @@ MOMENTUM_SEEDS: tuple[MomentumSeed, ...] = (
             "this is a research question until that path exists."
         ),
     ),
+    MomentumSeed(
+        key="xs-momentum-126-21-10-intraday15",
+        strategy_id="01M2V2ZG57AY3773KR3HJ8WZHN",
+        name="Cross-sectional momentum (126/21, top 10) - 15-minute cadence",
+        tickers=_MOMENTUM_TICKERS,
+        # IDENTICAL to xs-momentum-126-21-10 above. Six-month formation, one-month
+        # skip, top decile. Not re-chosen, not re-tuned, not re-derived — copied,
+        # so that the only difference between the two seeds is how often the book
+        # acts on the ranking. `_momentum_spec` converts these to 3276 and 546
+        # bars at a 15-minute grain; the numbers here stay in sessions precisely
+        # so that this line can be compared to its sibling by eye.
+        lookback=126,
+        skip=21,
+        top_n=10,
+        cadence_minutes=15,
+        thesis=(
+            "The same documented effect as its daily sibling, decided 26 times a "
+            "session instead of once. This is not a new claim about the market — "
+            "it is a measurement of an existing one, and the thesis under test is "
+            "arithmetic rather than economics: IR = IC x sqrt(breadth) says that "
+            "holding per-decision skill constant, 26 decisions a session is worth "
+            "~5.1x the information ratio of one. The daily version scores IR 0.415 "
+            "on the same universe, so if breadth multiplied cleanly this would "
+            "score far above any floor the firm has ever set.\n\n"
+            "IT ALMOST CERTAINLY WILL NOT, and the reasons are the result. "
+            "Breadth multiplies IR only if the decisions are independent and the "
+            "per-decision IC survives the shorter horizon; a six-month formation "
+            "re-ranked every fifteen minutes produces decisions that are nearly "
+            "identical to each other, which is breadth in name and not in "
+            "information. Turnover costs, meanwhile, scale with the decision count "
+            "and do not care whether the decisions were independent. So the "
+            "honest prior is that IR falls rather than rises.\n\n"
+            "WHY RUN IT ANYWAY. The firm has never measured this, and KI-035 says "
+            "the binding constraint is research throughput rather than execution. "
+            "A negative result is worth more than another untested assumption: it "
+            "would mean intraday cadence cannot rescue a daily edge, which closes "
+            "a direction rather than leaving it open as a maybe. A positive result "
+            "would be the first thing the firm has found that multiplies. Either "
+            "way the number is new information, and this is the only strategy in "
+            "the registry seeded to answer a question rather than to trade an "
+            "effect.\n\n"
+            "NOT A GATE SEARCH (KI-036). No parameter here was chosen against "
+            "this data or any other. If it fails, the correct response is to "
+            "record that intraday cadence does not multiply this edge — NOT to "
+            "try 5-minute, or 30-minute, or a different lookback until one passes. "
+            "That would be a search for a favourable measurement error, which is "
+            "the specific mistake KI-036 exists to name."
+        ),
+    ),
 )
 
 # Falsifiers specific to a cross-sectional momentum book. The generic protocol
@@ -327,11 +399,31 @@ def reversal_kill_criteria() -> list[str]:
 
 
 def _momentum_spec(seed: MomentumSeed) -> dict[str, Any]:
-    return {
+    """The stored spec. Horizons in BARS, because that is what the engine counts.
+
+    A daily seed converts one-to-one and its spec is byte-identical to what it
+    was before ``cadence_minutes`` existed — no ``cadence`` key is written when
+    the seed does not declare one, so every seed already in the registry keeps
+    its ``spec_hash``. Changing those hashes would register the live strategies
+    as new rows describing runs that never happened.
+
+    An intraday seed multiplies by :func:`bars_per_session`, and the bounds with
+    it. The bounds are in the same unit as the params they bound; scaling one
+    without the other would reject a six-month formation at a 15-minute grain
+    for exceeding a ceiling written for daily bars.
+    """
+
+    cadence = (
+        DAILY
+        if seed.cadence_minutes is None
+        else Cadence(kind=CADENCE_INTRADAY, interval_minutes=seed.cadence_minutes)
+    )
+    per_session = bars_per_session(cadence)
+    spec: dict[str, Any] = {
         "rule": RULE_CROSS_SECTIONAL_MOMENTUM,
         "params": {
-            "lookback": seed.lookback,
-            "skip": seed.skip,
+            "lookback": seed.lookback * per_session,
+            "skip": seed.skip * per_session,
             "top_n": seed.top_n,
             "gross_exposure": 1.0,
             # Boolean, so `_validate_param_bounds` requires no [lo, hi] — and
@@ -340,8 +432,14 @@ def _momentum_spec(seed: MomentumSeed) -> dict[str, Any]:
             "market_filter": seed.market_filter,
             "long_short": seed.long_short,
         },
-        "param_bounds": {k: list(v) for k, v in MOMENTUM_PARAM_BOUNDS.items()},
+        "param_bounds": {
+            key: [lo * per_session, hi * per_session] if key in _SESSION_SCALED_PARAMS else [lo, hi]
+            for key, (lo, hi) in MOMENTUM_PARAM_BOUNDS.items()
+        },
     }
+    if seed.cadence_minutes is not None:
+        spec["cadence"] = {"kind": CADENCE_INTRADAY, "interval_minutes": seed.cadence_minutes}
+    return spec
 
 
 def compute_momentum_spec_hash(seed: MomentumSeed) -> str:

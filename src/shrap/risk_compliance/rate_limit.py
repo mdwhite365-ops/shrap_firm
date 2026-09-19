@@ -68,7 +68,17 @@ class RateLimitRedis(Protocol):
 class RateLimitConfig:
     """Guardrail knobs. Zero/negative values disable the respective limit."""
 
-    max_orders_per_day: int = 10
+    # Per ACCOUNT, per UTC day. A runaway guard, not a trading budget: it bounds
+    # the damage a signal loop can do, and any level that a working strategy
+    # reaches in normal operation is throttling rather than guarding.
+    #
+    # Raised 80 -> 300 (Mike, 2026-09-18) for the intraday path. A 15-minute
+    # cadence is 26 decision slots a session, so a top-10 book has a ceiling of
+    # 260 orders a day; the realistic number is far lower because a six-month
+    # momentum ranking rarely turns over within a session. 80 would have bound,
+    # and it would have bound SILENTLY, as a rate veto indistinguishable from a
+    # correctly suppressed duplicate. 300 still bounds a runaway to 300.
+    max_orders_per_day: int = 300
     symbol_cooldown_seconds: int = 300
 
 

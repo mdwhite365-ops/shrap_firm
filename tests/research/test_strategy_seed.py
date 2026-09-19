@@ -447,11 +447,38 @@ def test_momentum_seed_names_the_cross_sectional_rule() -> None:
 
 
 def test_momentum_seed_builds_the_rule_it_declares() -> None:
+    """The built rule must carry the seed's horizons, converted to the seed's grain.
+
+    A seed declares `lookback` and `skip` in SESSIONS; the engine counts warmup
+    in BARS. For a daily seed those are the same number and this test read as an
+    equality for as long as every seed was daily. At a 15-minute grain they
+    differ by 26x, and asserting raw equality would demand the wrong answer:
+    126 fifteen-minute bars is under five sessions, a horizon at which the
+    literature says momentum REVERSES.
+    """
+
+    from shrap.research.strategy_runner.cadence import (
+        CADENCE_INTRADAY,
+        DAILY,
+        Cadence,
+        bars_per_session,
+    )
+
     for seed in MOMENTUM_SEEDS:
         record = momentum_record(seed)
         rule = _default_strategy_factory(record, list(seed.tickers))
         assert isinstance(rule, CrossSectionalMomentumStrategy)
-        assert (rule.lookback, rule.skip, rule.top_n) == (seed.lookback, seed.skip, seed.top_n)
+        cadence = (
+            DAILY
+            if seed.cadence_minutes is None
+            else Cadence(kind=CADENCE_INTRADAY, interval_minutes=seed.cadence_minutes)
+        )
+        per_session = bars_per_session(cadence)
+        assert (rule.lookback, rule.skip, rule.top_n) == (
+            seed.lookback * per_session,
+            seed.skip * per_session,
+            seed.top_n,
+        )
 
 
 def test_momentum_seed_passes_spec_hygiene_for_every_ticker() -> None:
