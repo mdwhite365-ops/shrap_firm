@@ -1,10 +1,14 @@
 # Prometheus scrape config for the shrap-prod substrate.
 #
 # Targets are reached over the shrap_net Docker bridge using service DNS,
-# except node-exporter which runs in host networking mode and is reached at
-# host.docker.internal (Docker Desktop) or the docker bridge gateway
-# (typically 172.17.0.1 on Linux). Adjust NODE_EXPORTER_TARGET below if your
-# bridge gateway differs.
+# except node-exporter, which runs in host networking mode and is reached at
+# host.docker.internal - resolved by the `extra_hosts: host-gateway` entry on
+# the prometheus service in docker-compose.yml.
+#
+# This comment used to say "typically 172.17.0.1 on Linux" and to tell the
+# reader to adjust it if their gateway differed. Nobody did, nothing checked,
+# and node-exporter was never scraped once. A hostname Docker fills in cannot
+# drift the way a hardcoded address did.
 #
 # ADR-0004: 30-day retention, single-host, Mike's daily surface is the
 # briefing - Grafana is for incident drilling.
@@ -24,10 +28,14 @@ scrape_configs:
       - targets: ["localhost:9090"]
 
   - job_name: node-exporter
-    # node-exporter runs with network_mode: host. From inside Prometheus
-    # container, the host is reachable via the docker0 bridge gateway.
+    # node-exporter runs with network_mode: host, so it is reached through the
+    # host rather than by service DNS. `host.docker.internal` comes from the
+    # `extra_hosts: host-gateway` entry on the prometheus service, which lets
+    # Docker supply this bridge's real gateway instead of the config asserting
+    # one. Paired with the exporter binding 0.0.0.0 - a loopback bind is
+    # unreachable from this container whatever address is named here.
     static_configs:
-      - targets: ["172.17.0.1:9100"]
+      - targets: ["host.docker.internal:9100"]
 
   - job_name: cadvisor
     static_configs:

@@ -201,6 +201,13 @@ services:
       - "127.0.0.1:9090:9090"
     networks:
       - shrap_net
+    # Lets the scrape config name the host instead of guessing its address.
+    # Docker resolves `host-gateway` to whatever this bridge's gateway actually
+    # is, so the node-exporter target stays correct if the subnet changes. The
+    # previous config hardcoded 172.17.0.1 (the DEFAULT bridge); this compose
+    # project's network gateway is 172.16.0.1, so the scrape never connected.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
       interval: 30s
@@ -277,6 +284,17 @@ services:
   # -------------------------------------------------------------------------
   # node-exporter - host CPU / memory / disk / network metrics.
   # Uses host networking on :9100 - intentional, needs host-level visibility.
+  #
+  # BINDS 0.0.0.0, NOT 127.0.0.1. Under `network_mode: host` this process lives
+  # in the host's network namespace, so a loopback bind is reachable only from
+  # the host itself. Prometheus runs on the `shrap_net` bridge - a different
+  # namespace - so against a loopback bind it cannot reach this exporter at ANY
+  # address. That is why the fix is two changes and not one: correcting only the
+  # scrape target would still have failed with `connection refused`.
+  #
+  # The exposure this accepts: host telemetry on LAN port 9100. It carries no
+  # credentials, and the box is not internet-facing. Narrowing it further would
+  # mean naming an interface, and naming addresses is what broke here.
   # -------------------------------------------------------------------------
   node-exporter:
     image: prom/node-exporter:v1.8.2
@@ -284,7 +302,7 @@ services:
     restart: unless-stopped
     command:
       - --path.rootfs=/host
-      - --web.listen-address=127.0.0.1:9100
+      - --web.listen-address=0.0.0.0:9100
     pid: host
     network_mode: host
     volumes:
