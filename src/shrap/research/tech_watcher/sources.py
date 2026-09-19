@@ -33,15 +33,22 @@ synthesis slice.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
+import random
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.parse import urlparse
+
+import structlog
+
+log = structlog.get_logger(__name__)
 
 SOURCE_EDGAR = "sec-edgar"
 SOURCE_ARXIV = "arxiv"
@@ -115,6 +122,109 @@ class SourceError(Exception):
     """A source fetch or parse failed; the pass continues with other sources."""
 
 
+# Statuses worth a second attempt: the server is saying "not now", not "no".
+# 4xx is otherwise excluded on purpose — a 400, 401, 403 or 404 will still be
+# wrong on the third try, and retrying a 403 against SEC is how a client earns
+# a ban.
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+# **arXiv answers 406 when it means 429, and this is measured, not assumed.**
+# On 2026-09-19 the identical request succeeded 8/8 in one window and failed
+# 6/6 twenty minutes later, from the same host and address, with an empty body
+# served by arXiv's Fastly edge (`via: varnish`, no `server: Google Frontend`
+# header — the origin is never reached). Ruled out by experiment: the URL, the
+# user-agent, container-vs-host, the public IP, HTTP/1.1-vs-2, sync-vs-async
+# and the query shape. It correlates with recent request volume and nothing
+# else I could find.
+#
+# **A retry does not rescue a sustained one** — 10 attempts over 60 seconds all
+# returned 406 during the outage. This entry is for the brief version; the
+# sustained version is caught by the per-source freshness target in
+# `shrap.operations.staleness`, not here.
+ARXIV_RETRYABLE_STATUSES = RETRYABLE_STATUSES | {406}
+
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class RetryPolicy:
+    """How hard to try again before giving the source up for this pass.
+
+    Deliberately shallow. The pass runs hourly, so the cost of giving up is one
+    hour, and the cost of hammering a source that is rate-limiting us is that it
+    keeps rate-limiting us. ``backoff_seconds=0`` disables the wait, which is
+    what the tests use.
+    """
+
+    attempts: int = DEFAULT_RETRY_ATTEMPTS
+    backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS
+    statuses: frozenset[int] = RETRYABLE_STATUSES
+
+    def __post_init__(self) -> None:
+        if self.attempts < 1:
+            raise ValueError("retry attempts must be at least 1")
+        if self.backoff_seconds < 0:
+            raise ValueError("retry backoff must not be negative")
+
+    def delay_for(self, attempt: int) -> float:
+        """Exponential, with jitter so several sources never resynchronise.
+
+        Full jitter rather than a fixed multiple: three sources that failed in
+        the same pass would otherwise retry in the same instant, which is the
+        pattern a rate limiter is looking for.
+        """
+
+        if self.backoff_seconds <= 0:
+            return 0.0
+        return random.uniform(0.0, self.backoff_seconds * (2 ** (attempt - 1)))
+
+
+DEFAULT_RETRY = RetryPolicy()
+ARXIV_RETRY = RetryPolicy(statuses=ARXIV_RETRYABLE_STATUSES)
+
+
+async def _send_with_retry(
+    send: Callable[[], Awaitable[HTTPResponse]],
+    *,
+    context: str,
+    policy: RetryPolicy = DEFAULT_RETRY,
+) -> HTTPResponse:
+    """Call ``send`` until it returns 200, the status is final, or attempts run out.
+
+    Before this existed every source raised on the first non-200, so a single
+    transient blip cost that source a full hour. EDGAR, the DOE newsroom and
+    the Federal Register each blipped at least once in the 48 hours to
+    2026-09-19; none of those needed to cost an hour.
+    """
+
+    last = ""
+    for attempt in range(1, policy.attempts + 1):
+        response = await send()
+        if response.status_code == 200:
+            if attempt > 1:
+                log.info("tech_watcher.fetch_recovered", source=context, attempt=attempt)
+            return response
+        last = f"HTTP {response.status_code}"
+        final = response.status_code not in policy.statuses
+        if final or attempt == policy.attempts:
+            raise SourceError(
+                f"{context}: {last}"
+                + (f" after {attempt} attempts" if attempt > 1 else "")
+                + (" (not retryable)" if final and attempt == 1 else "")
+            )
+        delay = policy.delay_for(attempt)
+        log.info(
+            "tech_watcher.fetch_retrying",
+            source=context,
+            attempt=attempt,
+            status=response.status_code,
+            delay_seconds=round(delay, 2),
+        )
+        await asyncio.sleep(delay)
+    raise SourceError(f"{context}: {last} after {policy.attempts} attempts")  # pragma: no cover
+
+
 def _text(entry: ET.Element, tag: str) -> str | None:
     node = entry.find(f"{_ATOM_NS}{tag}")
     if node is None or node.text is None:
@@ -170,9 +280,16 @@ def _parse_feed(xml_text: str, context: str) -> list[ET.Element]:
 class EdgarSource:
     """SEC EDGAR current-filings Atom feed, one query per form type."""
 
-    def __init__(self, user_agent: str, forms: tuple[str, ...], max_results: int = 100) -> None:
+    def __init__(
+        self,
+        user_agent: str,
+        forms: tuple[str, ...],
+        max_results: int = 100,
+        retry: RetryPolicy = DEFAULT_RETRY,
+    ) -> None:
         self._headers = {"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"}
         self._forms = forms
+        self._retry = retry
         self._max_results = max_results
 
     @property
@@ -183,19 +300,21 @@ class EdgarSource:
         items: list[RawSourceItem] = []
         seen: set[str] = set()
         for form in self._forms:
-            response = await http.get(
-                EDGAR_CURRENT_URL,
-                params={
-                    "action": "getcurrent",
-                    "type": form,
-                    "count": str(self._max_results),
-                    "output": "atom",
-                },
-                headers=self._headers,
-                timeout=timeout,
+            response = await _send_with_retry(
+                lambda form=form: http.get(  # type: ignore[misc]
+                    EDGAR_CURRENT_URL,
+                    params={
+                        "action": "getcurrent",
+                        "type": form,
+                        "count": str(self._max_results),
+                        "output": "atom",
+                    },
+                    headers=self._headers,
+                    timeout=timeout,
+                ),
+                context=f"sec-edgar[{form}]",
+                policy=self._retry,
             )
-            if response.status_code != 200:
-                raise SourceError(f"sec-edgar: HTTP {response.status_code} for form {form}")
             for entry in _parse_feed(response.text, f"sec-edgar {form}"):
                 item = self._entry_to_item(entry, form)
                 if item is not None and item.item_id not in seen:
@@ -253,10 +372,12 @@ class ArxivSource:
         categories: tuple[str, ...],
         max_results: int = 100,
         name: str = SOURCE_ARXIV,
+        retry: RetryPolicy = ARXIV_RETRY,
     ) -> None:
         self._categories = categories
         self._max_results = max_results
         self._name = name
+        self._retry = retry
 
     @property
     def name(self) -> str:
@@ -264,20 +385,22 @@ class ArxivSource:
 
     async def fetch(self, http: HTTPClient, timeout: float = 30.0) -> list[RawSourceItem]:
         query = " OR ".join(f"cat:{c}" for c in self._categories)
-        response = await http.get(
-            ARXIV_QUERY_URL,
-            params={
-                "search_query": query,
-                "sortBy": "submittedDate",
-                "sortOrder": "descending",
-                "start": "0",
-                "max_results": str(self._max_results),
-            },
-            headers={},
-            timeout=timeout,
+        response = await _send_with_retry(
+            lambda: http.get(
+                ARXIV_QUERY_URL,
+                params={
+                    "search_query": query,
+                    "sortBy": "submittedDate",
+                    "sortOrder": "descending",
+                    "start": "0",
+                    "max_results": str(self._max_results),
+                },
+                headers={},
+                timeout=timeout,
+            ),
+            context=self._name,
+            policy=self._retry,
         )
-        if response.status_code != 200:
-            raise SourceError(f"arxiv: HTTP {response.status_code}")
         items: list[RawSourceItem] = []
         for entry in _parse_feed(response.text, "arxiv"):
             item = self._entry_to_item(entry)
@@ -335,11 +458,13 @@ class UsaSpendingSource:
         min_amount: float = 5_000_000.0,
         lookback_days: int = 30,
         max_results: int = 100,
+        retry: RetryPolicy = DEFAULT_RETRY,
     ) -> None:
         self._agencies = agencies
         self._min_amount = min_amount
         self._lookback_days = lookback_days
         self._max_results = min(max_results, 100)  # API page-size cap
+        self._retry = retry
 
     @property
     def name(self) -> str:
@@ -389,14 +514,16 @@ class UsaSpendingSource:
             "limit": self._max_results,
             "page": 1,
         }
-        response = await http.post(
-            USASPENDING_SEARCH_URL,
-            json=body,
-            headers={"Content-Type": "application/json"},
-            timeout=timeout,
+        response = await _send_with_retry(
+            lambda: http.post(
+                USASPENDING_SEARCH_URL,
+                json=body,
+                headers={"Content-Type": "application/json"},
+                timeout=timeout,
+            ),
+            context=SOURCE_USASPENDING,
+            policy=self._retry,
         )
-        if response.status_code != 200:
-            raise SourceError(f"usaspending: HTTP {response.status_code}")
         try:
             data = json.loads(response.text)
         except json.JSONDecodeError as e:
@@ -448,17 +575,22 @@ def _strip_html(value: str) -> str | None:
 class DoeNewsroomSource:
     """DOE Energy News RSS 2.0 feed (energy.gov redirects to the live feed)."""
 
-    def __init__(self, feed_url: str = DOE_NEWS_FEED_URL) -> None:
+    def __init__(
+        self, feed_url: str = DOE_NEWS_FEED_URL, retry: RetryPolicy = DEFAULT_RETRY
+    ) -> None:
         self._feed_url = feed_url
+        self._retry = retry
 
     @property
     def name(self) -> str:
         return SOURCE_DOE_NEWS
 
     async def fetch(self, http: HTTPClient, timeout: float = 30.0) -> list[RawSourceItem]:
-        response = await http.get(self._feed_url, params={}, headers={}, timeout=timeout)
-        if response.status_code != 200:
-            raise SourceError(f"doe-newsroom: HTTP {response.status_code}")
+        response = await _send_with_retry(
+            lambda: http.get(self._feed_url, params={}, headers={}, timeout=timeout),
+            context=SOURCE_DOE_NEWS,
+            policy=self._retry,
+        )
         try:
             root = ET.fromstring(response.text)
         except ET.ParseError as e:
@@ -505,9 +637,15 @@ class FederalRegisterSource:
     reads license applications/renewals, rules, and notices from the FR API.
     """
 
-    def __init__(self, agencies: tuple[str, ...], max_results: int = 100) -> None:
+    def __init__(
+        self,
+        agencies: tuple[str, ...],
+        max_results: int = 100,
+        retry: RetryPolicy = DEFAULT_RETRY,
+    ) -> None:
         self._agencies = agencies
         self._max_results = max_results
+        self._retry = retry
 
     @property
     def name(self) -> str:
@@ -522,11 +660,13 @@ class FederalRegisterSource:
                 "order": "newest",
                 "per_page": str(min(self._max_results, 100)),
             }
-            response = await http.get(
-                FED_REGISTER_DOCUMENTS_URL, params=params, headers={}, timeout=timeout
+            response = await _send_with_retry(
+                lambda params=params: http.get(  # type: ignore[misc]
+                    FED_REGISTER_DOCUMENTS_URL, params=params, headers={}, timeout=timeout
+                ),
+                context=f"federal-register[{agency}]",
+                policy=self._retry,
             )
-            if response.status_code != 200:
-                raise SourceError(f"federal-register[{agency}]: HTTP {response.status_code}")
             try:
                 data = json.loads(response.text)
             except json.JSONDecodeError as e:

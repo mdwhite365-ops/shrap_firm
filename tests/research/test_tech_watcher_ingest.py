@@ -13,11 +13,14 @@ from shrap.research.tech_watcher.service import (
     ingest_pass,
 )
 from shrap.research.tech_watcher.sources import (
+    ARXIV_RETRY,
+    DEFAULT_RETRY,
     ArxivSource,
     DoeNewsroomSource,
     EdgarSource,
     FederalRegisterSource,
     RawSourceItem,
+    RetryPolicy,
     SourceError,
     UsaSpendingSource,
 )
@@ -205,12 +208,17 @@ async def test_usaspending_parses_award_and_skips_recipientless_row() -> None:
     assert body["filters"]["agencies"][0]["name"] == "Department of Energy"
 
 
-async def test_usaspending_non_200_raises_source_error() -> None:
-    http = FakeHTTP([FakeResponse(500, "oops")])
-    source = UsaSpendingSource(agencies=("Department of Energy",))
+async def test_usaspending_non_200_raises_source_error_after_retrying() -> None:
+    """A 500 is retried, then given up on — and the error says how many tries."""
 
-    with pytest.raises(SourceError, match="500"):
+    http = FakeHTTP([FakeResponse(500, "oops")] * 3)
+    source = UsaSpendingSource(
+        agencies=("Department of Energy",), retry=RetryPolicy(attempts=3, backoff_seconds=0)
+    )
+
+    with pytest.raises(SourceError, match="500 after 3 attempts"):
         await source.fetch(http)
+    assert len(http.post_bodies) == 3
 
 
 async def test_usaspending_garbage_json_raises_source_error() -> None:
@@ -300,12 +308,16 @@ async def test_federal_register_dedupes_across_agency_queries() -> None:
     assert len(items) == 1  # same document number from both queries
 
 
-async def test_federal_register_non_200_raises_source_error() -> None:
-    http = FakeHTTP([FakeResponse(503, "unavailable")])
-    source = FederalRegisterSource(agencies=("nuclear-regulatory-commission",))
+async def test_federal_register_non_200_raises_source_error_after_retrying() -> None:
+    http = FakeHTTP([FakeResponse(503, "unavailable")] * 3)
+    source = FederalRegisterSource(
+        agencies=("nuclear-regulatory-commission",),
+        retry=RetryPolicy(attempts=3, backoff_seconds=0),
+    )
 
-    with pytest.raises(SourceError, match="503"):
+    with pytest.raises(SourceError, match="503 after 3 attempts"):
         await source.fetch(http)
+    assert len(http.requests) == 3
 
 
 async def test_federal_register_garbage_body_raises_source_error() -> None:
@@ -555,3 +567,112 @@ async def test_usaspending_still_scopes_by_window_agency_and_floor() -> None:
         "Department of Defense",
     ]
     assert http.post_bodies[0]["filters"]["award_amounts"] == [{"lower_bound": 5_000_000.0}]
+
+
+# ---------------------------------------------------------------------------
+# Retry: a transient blip must not cost a source its whole hour
+#
+# Before 2026-09-19 every source raised on the first non-200, and the ingest
+# pass skips a source that raises. One blip therefore cost that source a full
+# hour. EDGAR, the DOE newsroom and the Federal Register each blipped at least
+# once in the 48 hours to 2026-09-19.
+# ---------------------------------------------------------------------------
+
+
+async def test_arxiv_retries_a_406_and_succeeds() -> None:
+    """The measured arXiv failure, and the case this card exists for.
+
+    arXiv's edge answers 406 where it means 429 — verified 2026-09-19, when the
+    identical request succeeded 8/8 in one window and failed 6/6 twenty minutes
+    later from the same address.
+    """
+
+    http = FakeHTTP([FakeResponse(406, ""), FakeResponse(200, ARXIV_FEED)])
+    source = ArxivSource(
+        categories=("q-fin.PM",),
+        # Keep arXiv's own status set; only the sleep is removed.
+        retry=RetryPolicy(attempts=3, backoff_seconds=0, statuses=ARXIV_RETRY.statuses),
+    )
+
+    items = await source.fetch(http)
+
+    assert len(http.requests) == 2
+    assert [i.source for i in items] == ["arxiv"]
+
+
+def test_arxiv_source_treats_406_as_transient_without_being_told_to() -> None:
+    """The wiring, not just the policy: a default ArxivSource must retry a 406.
+
+    Asserted separately because the test above passes a policy in, so it would
+    still pass if the constructor's default were the wrong one — which is the
+    only way this fix reaches production.
+    """
+
+    assert ArxivSource(categories=("q-fin.PM",))._retry is ARXIV_RETRY
+    assert DoeNewsroomSource()._retry is DEFAULT_RETRY
+
+
+async def test_a_406_is_not_retried_for_sources_other_than_arxiv() -> None:
+    """406 is only transient because arXiv makes it so; elsewhere it is final.
+
+    Retrying a genuine content-negotiation failure would turn one wrong request
+    into three.
+    """
+
+    http = FakeHTTP([FakeResponse(406, "")] * 3)
+    source = DoeNewsroomSource(retry=RetryPolicy(attempts=3, backoff_seconds=0))
+
+    with pytest.raises(SourceError, match="not retryable"):
+        await source.fetch(http)
+    assert len(http.requests) == 1
+
+
+async def test_a_403_is_never_retried() -> None:
+    """SEC bans clients that keep knocking after a 403; so do not knock."""
+
+    http = FakeHTTP([FakeResponse(403, "banned")] * 3)
+    source = EdgarSource(
+        user_agent="Shrap Research (test)",
+        forms=("8-K",),
+        retry=RetryPolicy(attempts=3, backoff_seconds=0),
+    )
+
+    with pytest.raises(SourceError, match="403"):
+        await source.fetch(http)
+    assert len(http.requests) == 1
+
+
+async def test_retry_gives_up_rather_than_looping_forever() -> None:
+    http = FakeHTTP([FakeResponse(503, "")] * 5)
+    source = ArxivSource(categories=("q-fin.PM",), retry=RetryPolicy(attempts=2, backoff_seconds=0))
+
+    with pytest.raises(SourceError, match="after 2 attempts"):
+        await source.fetch(http)
+    assert len(http.requests) == 2
+
+
+def test_arxiv_policy_treats_406_as_transient_and_the_default_does_not() -> None:
+    assert 406 in ARXIV_RETRY.statuses
+    assert 406 not in DEFAULT_RETRY.statuses
+    # Both agree on the genuinely transient ones.
+    for status in (429, 500, 502, 503, 504):
+        assert status in DEFAULT_RETRY.statuses
+        assert status in ARXIV_RETRY.statuses
+
+
+def test_backoff_is_bounded_and_grows() -> None:
+    policy = RetryPolicy(attempts=4, backoff_seconds=2.0)
+    # Full jitter: each delay is somewhere in [0, base * 2**(n-1)].
+    for attempt, ceiling in ((1, 2.0), (2, 4.0), (3, 8.0)):
+        for _ in range(50):
+            assert 0.0 <= policy.delay_for(attempt) <= ceiling
+
+
+def test_zero_backoff_never_sleeps() -> None:
+    policy = RetryPolicy(attempts=3, backoff_seconds=0)
+    assert all(policy.delay_for(n) == 0.0 for n in (1, 2, 3))
+
+
+def test_a_policy_must_allow_at_least_one_attempt() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        RetryPolicy(attempts=0)

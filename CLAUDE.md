@@ -60,6 +60,33 @@ weeks, none of which raised anything**:
   bar-reading queries filtered on `source`** — all were correct only by
   accident, because the table held one feed.
 
+**#248–#251 (2026-09-19) found two more silent faults, both of which had been
+true for days and neither of which raised anything.**
+
+- **A dead ingest source looks exactly like a quiet market (#251).** Both arXiv
+  feeds returned HTTP 406 on **46 consecutive hourly passes** from 2026-09-17;
+  the firm's only quant-literature source was off for two days. There *was* a
+  six-hour freshness check on `research.raw_source_items` — it reads
+  `max(fetched_at)` over the whole table, and EDGAR kept inserting ~1,000 items
+  a week, so it stayed green throughout. **A table-level maximum is an AND
+  across every producer writing to that table.** Now checked per source on
+  `research.ingest_cursors`, which advances on every *successful* pass rather
+  than only when new items appear. The 406 itself is **not understood** — URL,
+  user-agent, container-vs-host, IP, HTTP version, sync-vs-async and query shape
+  were all ruled out, and the identical request succeeded 8/8 then failed 6/6
+  twenty minutes later. **Retry does not rescue it** (10 attempts over 60s all
+  406); detection does.
+- **The backup cron had never once fired (#249).** Zero `cronjob.run` entries in
+  an unrotated `/var/log/cron.log` going back to 2026-07-17. Both backups that
+  existed were stamped 14:24 and 16:54 — hand-run. **Check `cron.log`, not the
+  destination directory:** files in `/mnt/backups` were never evidence that the
+  schedule worked.
+
+**And the merge of #249/#250 left `CLAUDE.md` asserting both that Qdrant held
+zero collections and that it was live**, two lines apart, because both PRs
+edited the same paragraph on the same day. Fixed in #251. Two cards touching one
+doc paragraph is a conflict git resolves by keeping both.
+
 **Two measured negatives, both worth not repeating.** Intraday cadence does not
 multiply a daily edge — IR **0.003** at 15 minutes against **0.415** daily,
 where `IR = IC x sqrt(breadth)` predicted ~8.8x (#242). And the IEX-vs-SIP feed
@@ -167,9 +194,7 @@ All ten foundational docs are drafted: vision, architecture (all open questions 
 - Hardware: Dell 5820 (TrueNAS, prod), Ryzen 7800X + 4070 Super (heavy inference), MacBook M4 24GB (dev/mobile)
 
 ## Tooling stack
-**In production now:** Redis Streams (ADR-0001/0006 event bus), PostgreSQL + TimescaleDB, Prometheus + Grafana (ADR-0004), Langfuse, Ollama, Docker Compose on TrueNAS SCALE, direct Alpaca paper client (ADR-0003 — paper phase). Agents are plain asyncio service loops, not LangGraph, so far.
-
-**Running but unused: Qdrant.** It has held **zero collections since it was deployed on 2026-07-02** — verified 2026-09-19. ADR/architecture specifies "full text to Qdrant" for the Intelligence and Structural Analysis departments (`docs/02-architecture.md`), and that leg was never wired; the firm stores filing and article text in Postgres (`intelligence.filings.full_text`, `research.raw_source_items.document_text`) and reads it from there. It was listed here as "in production" for two and a half months, which is the kind of claim `make doc-drift` cannot catch — the container *is* up and healthy, it simply does nothing. **There is no vector search in the firm, and no RAG pipeline.** Either wire it or retire it; leaving it running is the one option that keeps costing something (a healthcheck, a backup leg, and a line in this list that misleads).
+**In production now:** Redis Streams (ADR-0001/0006 event bus), PostgreSQL + TimescaleDB, Prometheus + Grafana (ADR-0004), Langfuse, Qdrant, Ollama, Docker Compose on TrueNAS SCALE, direct Alpaca paper client (ADR-0003 — paper phase). Agents are plain asyncio service loops, not LangGraph, so far.
 
 **Qdrant became true on 2026-09-19, having been listed here since July.** It was deployed 2026-07-02 and held **zero collections for two and a half months** while 164 MB of filing and paper text sat in Postgres, searchable only by exact string match. `docs/02-architecture.md` specified "full text to Qdrant" for Intelligence and Structural Analysis; nothing implemented it. The corpus index now does: `shrap-corpus-index` chunks, embeds with **local `nomic-embed-text`** (768-dim, on the Dell's own Ollama — not the cloud host, per vision principle 5) and writes ~82,000 points with full provenance. See `docs/runbooks/corpus-index.md`. **This is the firm's only vector search, and no agent consumes it yet** — the CLI queries it; wiring the Hypothesis Generator to retrieve prior work is a separate card. It does **not** address the binding constraint: the funnel is starved because the filter admits nothing (KI-009/KI-035), and making the rejected corpus searchable is a different capability from fixing the taxonomy.
 

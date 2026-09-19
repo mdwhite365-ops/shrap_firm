@@ -1192,6 +1192,78 @@ aggregate advantage is one year, and dropping that fold leaves a mean delta of
 **+0.0011**. The feed changes what the strategy *selects*; it does not reliably
 change what it *earns*.
 
+## 2026-09-19 — #248–#251
+
+### The corpus index, and Qdrant finally doing something (#250)
+
+Qdrant was deployed 2026-07-02, listed in `CLAUDE.md` under "in production" for
+two and a half months, and held **zero collections** the entire time while
+164 MB of filing and paper text sat in Postgres searchable only by exact string
+match. `shrap-corpus-index` now chunks, embeds (local `nomic-embed-text`, 768
+dims, on the Dell's own Ollama) and writes **107,384 points** with full
+provenance. See `docs/runbooks/corpus-index.md`.
+
+Three things this card got wrong first, each found by running it rather than by
+reading it:
+
+- The first full run died at `httpx.WriteTimeout`. Batching by *document* meant
+  twenty 400 KB filings became ~2,000 points — a 34 MB JSON body. Every test
+  passed because the fake Qdrant accepted any list size.
+- It held the box at "120% CPU", which is 1.2 of twelve cores: `embed` awaited
+  each batch in turn, so exactly one request was ever in flight.
+- **It contained zero research papers, and exited 0 while doing it.**
+  `document_text` is populated for `sec-edgar` and nothing else, so the index
+  was 15,487 EDGAR filings and no literature — precisely the corpus that would
+  serve the Hypothesis Generator. Found by *querying* (a momentum query returned
+  bank-earnings 8-Ks), not by counting. A clean exit and a six-figure point count
+  proved nothing.
+
+Retrieval measured at **precision@5 = 86.7%** over 15 queries judged by
+`kimi-k3`: 35/35 on corporate events, 30/40 on research literature. The weak
+queries are corpus-size artefacts — 287 q-fin papers cannot fill a top-5.
+
+### Backups had still never run on a schedule (#249)
+
+The newest backup was **2026-09-01**, 18 days old. Both existing backups are
+stamped 14:24 and 16:54 — afternoon, i.e. hand-run. `/var/log/cron.log` is
+unrotated back to 2026-07-17 and contains **zero** `cronjob.run` entries: the
+scheduled job had never once fired. The script also exited 1 on every run,
+because an empty Qdrant volume tarred to 386 B, below the 1024 B floor, and
+`fail` exits before retention pruning.
+
+**Check `/var/log/cron.log` for `cronjob.run`, not `/mnt/backups` for files.**
+Files in the destination were never evidence the schedule worked.
+
+### A dead ingest source looked exactly like a quiet market (#251)
+
+Both arXiv feeds returned HTTP 406 on **46 consecutive hourly passes** from
+2026-09-17 14:17. The firm's only source of quantitative-finance literature was
+off for two days; the sole trace was the Hypothesis Generator logging
+`sweep_empty`, which is what it logs during a genuinely quiet week.
+
+There *was* a six-hour freshness check on `research.raw_source_items`. It reads
+`max(fetched_at)` over the whole table, and EDGAR kept inserting ~1,000 items a
+week throughout, so it stayed green for the entire outage. **A table-level
+maximum is an AND across every producer that writes to that table** — the same
+shape as the filing roster covering 4 of 50 names and node-exporter never being
+scraped, where an aggregate stayed healthy while a component inside it was dead.
+
+Now `research.ingest_cursors` is checked **per source** on a three-hour
+threshold, and the alarm names the feed. On the cursor table rather than the
+items table, because `raw_source_items` upserts `ON CONFLICT DO NOTHING` — its
+`fetched_at` moves only on genuinely new items, and USASpending has legitimately
+inserted nothing since 2026-08-27 while working perfectly.
+
+**The arXiv 406 itself is not understood and the fix does not depend on it.**
+Ruled out by experiment: URL, user-agent, container-vs-host, public IP,
+HTTP/1.1-vs-2, sync-vs-async, query shape. The identical request succeeded 8/8
+in one window and failed 6/6 twenty minutes later. Sources now retry transient
+statuses (406 for arXiv only; never 403, which is how a client earns an SEC
+ban), but **retry does not rescue a sustained outage** — ten attempts over sixty
+seconds all returned 406. The mitigation is detection, not prevention.
+
+See `docs/runbooks/a-dead-ingest-source.md`.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.
