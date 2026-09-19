@@ -9,6 +9,7 @@ which only a live Qdrant can say.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from itertools import pairwise
 
 import pytest
 
@@ -56,7 +57,7 @@ def test_chunks_overlap_so_a_straddling_sentence_survives_whole() -> None:
     chunks = chunk_text(text, chunk_chars=1000, overlap_chars=100)
 
     assert len(chunks) > 1
-    for earlier, later in zip(chunks, chunks[1:], strict=False):
+    for earlier, later in pairwise(chunks):
         assert earlier[-50:] in later, "consecutive chunks do not overlap"
 
 
