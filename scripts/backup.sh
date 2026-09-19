@@ -39,9 +39,15 @@ STAMP="$(date +%F)"
 # passes `gzip -t` happily, so integrity alone does not prove content.
 MIN_BYTES="${BACKUP_MIN_BYTES:-1024}"
 
-# How to invoke Docker. `truenas_admin` is not in the `docker` group on this
-# host, so an interactive run needs sudo; the scheduled run is root and does
-# not. Read into an array so DOCKER="sudo docker" splits into two words rather
+# How to invoke Docker. The default is plain `docker`: `truenas_admin` was added
+# to the `docker` group on 2026-09-17, so neither an interactive run nor the
+# scheduled one needs sudo any more. This comment previously asserted the
+# opposite ("not in the docker group ... the scheduled run is root"), which had
+# stopped being true and would have sent the next reader looking for a root
+# crontab that does not exist. Override with DOCKER="sudo docker" on a host where
+# the group membership is absent.
+#
+# Read into an array so DOCKER="sudo docker" splits into two words rather
 # than being looked up as a single command named "sudo docker".
 # `|| true`: a here-string always supplies a terminated line so `read` returns 0,
 # but `set -e` would turn any surprise into an exit before the first log line.
@@ -178,17 +184,51 @@ dump_redis() {
 # mid-write. Acceptable because nothing in the firm currently treats Qdrant as a
 # system of record — if that changes, this needs the snapshots API and a
 # download, not a tar.
+#
+# **AN EMPTY QDRANT IS A SKIP, NOT A FAILURE, AND THAT DISTINCTION COST 18 DAYS
+# OF BACKUPS.** Qdrant has held zero collections since it was deployed on
+# 2026-07-02 — the architecture specifies "full text to Qdrant" for Intelligence
+# and Structural Analysis, and that leg was never wired. So its volume is a 6.5K
+# skeleton, its tarball is 386 bytes, and `publish`'s 1024-byte floor correctly
+# called that "not a real dump" and `fail`ed.
+#
+# `fail` exits 1 immediately. Every run therefore ended non-zero AFTER postgres,
+# langfuse and redis had all succeeded and BEFORE retention pruning ran — so the
+# one signal an operator has ("did the backup work?") said no, every single
+# time, for a reason that did not matter. A check that always fails is a check
+# nobody can act on, which is the same shape as node-exporter sitting `down`
+# behind a signal nobody read (#244).
+#
+# The fix asks Qdrant what it holds rather than inferring from byte count. The
+# size floor is UNCHANGED and still applies the moment a collection exists — so
+# this weakens nothing, it only stops reporting "nothing to back up" as "the
+# backup broke". Read off the volume rather than the HTTP API because the qdrant
+# image carries neither curl nor wget, and because the volume is the thing being
+# archived: asking it directly cannot disagree with what the tar would contain.
+qdrant_collection_count() {
+    local volume="$1"
+    "${DOCKER_CMD[@]}" run --rm -v "$volume":/data:ro alpine \
+        sh -c 'ls -A /data/collections 2>/dev/null | wc -l' 2>/dev/null | tr -d '[:space:]'
+}
+
 dump_qdrant() {
     local container="shrap_qdrant"
     local final="$DEST/shrap-qdrant-${STAMP}.tar.gz"
     local partial="${final}.partial"
-    local volume
+    local volume collections
     if ! "${DOCKER_CMD[@]}" inspect "$container" >/dev/null 2>&1; then
         log "skip: $container is not running"
         return 0
     fi
     volume="$(volume_for "$container" /qdrant/storage)"
-    log "archiving volume $volume"
+
+    collections="$(qdrant_collection_count "$volume")"
+    if [ "${collections:-0}" -eq 0 ] 2>/dev/null; then
+        log "skip: $container holds no collections — nothing to archive"
+        return 0
+    fi
+
+    log "archiving volume $volume (${collections} collection(s))"
     "${DOCKER_CMD[@]}" run --rm -v "$volume":/data:ro -v "$DEST":/backup alpine \
         tar czf "/backup/$(basename "$partial")" -C /data . \
         || { rm -f "$partial"; fail "qdrant volume archive failed"; }

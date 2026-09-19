@@ -167,7 +167,9 @@ All ten foundational docs are drafted: vision, architecture (all open questions 
 - Hardware: Dell 5820 (TrueNAS, prod), Ryzen 7800X + 4070 Super (heavy inference), MacBook M4 24GB (dev/mobile)
 
 ## Tooling stack
-**In production now:** Redis Streams (ADR-0001/0006 event bus), PostgreSQL + TimescaleDB, Prometheus + Grafana (ADR-0004), Langfuse, Qdrant, Ollama, Docker Compose on TrueNAS SCALE, direct Alpaca paper client (ADR-0003 — paper phase). Agents are plain asyncio service loops, not LangGraph, so far.
+**In production now:** Redis Streams (ADR-0001/0006 event bus), PostgreSQL + TimescaleDB, Prometheus + Grafana (ADR-0004), Langfuse, Ollama, Docker Compose on TrueNAS SCALE, direct Alpaca paper client (ADR-0003 — paper phase). Agents are plain asyncio service loops, not LangGraph, so far.
+
+**Running but unused: Qdrant.** It has held **zero collections since it was deployed on 2026-07-02** — verified 2026-09-19. ADR/architecture specifies "full text to Qdrant" for the Intelligence and Structural Analysis departments (`docs/02-architecture.md`), and that leg was never wired; the firm stores filing and article text in Postgres (`intelligence.filings.full_text`, `research.raw_source_items.document_text`) and reads it from there. It was listed here as "in production" for two and a half months, which is the kind of claim `make doc-drift` cannot catch — the container *is* up and healthy, it simply does nothing. **There is no vector search in the firm, and no RAG pipeline.** Either wire it or retire it; leaving it running is the one option that keeps costing something (a healthcheck, a backup leg, and a line in this list that misleads).
 
 **Planned / gated:** NautilusTrader (gate: live capital or execution needs beyond market/day orders, per ADR-0003), LangGraph (when an agent actually needs multi-node orchestration), OpenHands SDK (Development Department), VectorBT PRO (Strategy Evaluator), Mem0 (agent memory).
 

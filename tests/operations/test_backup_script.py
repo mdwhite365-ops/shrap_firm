@@ -171,3 +171,92 @@ def test_the_size_floor_is_overridable_per_dump(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert final.exists()
+
+
+# --- an empty Qdrant is a skip, not a failure ---------------------------------
+#
+# This distinction cost eighteen days of backups. Qdrant has held zero
+# collections since 2026-07-02 — the architecture specifies "full text to
+# Qdrant" and that leg was never wired — so its tarball was 386 bytes,
+# `publish`'s floor correctly rejected it, and `fail` exited 1. Every run ended
+# non-zero *after* postgres, langfuse and redis had succeeded and *before*
+# retention pruning ran. The only signal an operator has said "failed", every
+# time, for a reason that did not matter.
+
+
+def _dump_qdrant(collections: int, dest: Path) -> subprocess.CompletedProcess[str]:
+    """Run `dump_qdrant` with Docker and the collection count stubbed out.
+
+    Stubs rather than mocks a daemon: the function's decision depends on two
+    things it asks the outside world for, and this pins the decision, not the
+    plumbing.
+    """
+
+    harness = f"""
+        set -uo pipefail
+        source "{SCRIPT}"
+        DEST="{dest}"
+        STAMP="2026-09-19"
+        DOCKER_CMD=(true)                       # `docker inspect` succeeds
+        volume_for() {{ printf 'infra_qdrant_storage'; }}
+        qdrant_collection_count() {{ printf '{collections}'; }}
+        publish() {{ printf 'PUBLISH CALLED\\n'; }}
+        dump_qdrant
+    """
+    return subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+
+
+def test_an_empty_qdrant_is_skipped_not_failed(tmp_path: Path) -> None:
+    """Zero collections must exit 0, so the run reaches retention pruning."""
+
+    result = _dump_qdrant(0, tmp_path)
+
+    assert result.returncode == 0, f"an empty Qdrant failed the run: {result.stderr}"
+    assert "holds no collections" in result.stdout
+    assert "PUBLISH CALLED" not in result.stdout, "archived a volume with nothing in it"
+
+
+def test_a_populated_qdrant_is_still_archived_and_verified(tmp_path: Path) -> None:
+    """The size floor is unchanged the moment a collection exists.
+
+    The skip must not become a permanent excuse: once Qdrant holds anything,
+    a 386-byte tarball is once again a failed dump.
+    """
+
+    result = _dump_qdrant(3, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "3 collection(s)" in result.stdout
+    assert "PUBLISH CALLED" in result.stdout, "a populated Qdrant skipped verification"
+
+
+def test_qdrant_absent_entirely_is_also_a_skip(tmp_path: Path) -> None:
+    """Pre-existing behaviour, pinned so the new branch does not displace it."""
+
+    harness = f"""
+        set -uo pipefail
+        source "{SCRIPT}"
+        DEST="{tmp_path}"
+        DOCKER_CMD=(false)                      # `docker inspect` fails
+        dump_qdrant
+    """
+    result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0
+    assert "is not running" in result.stdout
+
+
+def test_retention_prune_is_reachable_after_qdrant(tmp_path: Path) -> None:
+    """The prune sits after `dump_qdrant` in `main`, so a failure there hid it.
+
+    Asserted on the ordering in the source rather than by running `main`, which
+    needs a live stack. The point is that nothing between the last real dump and
+    the prune may exit non-zero on a condition that is not an error.
+    """
+
+    body = SCRIPT.read_text()
+    qdrant_at = body.index("    dump_qdrant\n")
+    prune_at = body.index("pruning backups older than")
+
+    assert qdrant_at < prune_at, "test assumes dump_qdrant precedes the prune"
+    assert "skip: $container holds no collections" in body
