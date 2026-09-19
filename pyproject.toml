@@ -112,6 +112,7 @@ shrap-literature-refilter = "shrap.research.tech_watcher.literature_refilter_cli
 shrap-model-eval = "shrap.research.model_eval_cli:main"
 shrap-universe-curator = "shrap.agents.research.universe_curator.__main__:main"
 shrap-universe-promote = "shrap.research.universe_curator.cli:main"
+shrap-corpus-index = "shrap.intelligence.corpus_index.cli:main"
 shrap-market-data-backfill = "shrap.market_data.backfill:main"
 shrap-market-data-intraday-backfill = "shrap.market_data.intraday_backfill:main"
 shrap-market-data-shares-backfill = "shrap.market_data.shares_backfill:main"

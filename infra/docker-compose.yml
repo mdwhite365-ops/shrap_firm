@@ -1329,6 +1329,43 @@ services:
     networks:
       - shrap_net
 
+  # -------------------------------------------------------------------------
+  # Corpus Index - "full text to Qdrant" (docs/02-architecture.md), the leg
+  # that was specified for Intelligence and Structural Analysis and never
+  # built. Qdrant ran healthy with zero collections from 2026-07-02 until this
+  # shipped, while 156 MB of filing and paper text sat in Postgres searchable
+  # only by exact string match.
+  #
+  # Run to completion, resumable, idempotent:
+  #     docker compose run --rm corpus-index shrap-corpus-index build
+  #     docker compose run --rm corpus-index shrap-corpus-index search "..."
+  #
+  # Embeddings are LOCAL (nomic-embed-text on the Dell's own Ollama), not the
+  # cloud host the filter uses. Vision principle 5 - cloud is scaffolding - and
+  # 156 MB through a paid API would be the largest LLM spend the firm has made,
+  # for a job a 274 MB local model does on CPU.
+  # -------------------------------------------------------------------------
+  corpus-index:
+    build:
+      context: ../
+      dockerfile: infra/corpus-index.Dockerfile
+    container_name: shrap_corpus_index
+    profiles: ["tools"]
+    env_file:
+      - .env
+    environment:
+      CORPUS_INDEX_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      CORPUS_INDEX_QDRANT_URL: "http://qdrant:6333"
+      # Deliberately the local Ollama, not ${SHRAP_TW_OLLAMA_URL}.
+      CORPUS_INDEX_OLLAMA_URL: "http://ollama:11434"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
   market-data:
     build:
       context: ../
