@@ -1,5 +1,110 @@
 # Archetype bar experiment — results
 
+> ## Correction, 2026-09-20 — all three bars already ran in July
+>
+> **The first version of this page said "bars B and C have never been run." That
+> was wrong**, and the mistake is worth more than the claim was.
+>
+> **Second correction, same page:** the first version of this correction blamed
+> the wrong thing. It said `bar_experiment_runs` held one row while
+> `bar_experiment_results` held four, and drew a lesson about reading a summary
+> table instead of a detail table. Both tables were right. `bar_experiment_runs`
+> has always held **four** rows for 2026-07-31, one per invocation, and the
+> `bars` column of each names the bar it ran.
+>
+> The actual query was:
+>
+> ```
+> psql -c "select * from research.bar_experiment_runs order by 1 desc limit 5" | head -14
+> ```
+>
+> `report_markdown` is a multi-line `TEXT` column holding the whole run report.
+> In psql's aligned output one row therefore spans **dozens** of lines, so
+> `head -14` cut the result off inside the first row. Four rows came back; I was
+> shown one. **I read my own truncation as a finding.**
+>
+> Two things follow, and the second is the useful one:
+>
+> - `SELECT *` on a table with a wide text column is not a listing. Select the
+>   columns the question needs — here `run_id, bars, started_at` would have
+>   printed four clean lines — or use `\pset expanded`, or `count(*)`.
+> - **A pipe is part of the query.** `head`, `tail` and `| head -n` truncate
+>   without saying so, and the truncation looks exactly like a short result. When
+>   a count is the finding, ask the database for the count.
+>
+> This is a near relative of the `filter_verdict_history` error earlier the same
+> day — both were confident claims about what the firm had recorded, made from
+> evidence that did not support them — but the mechanism is different and the
+> earlier diagnosis was a guess dressed as a root cause.
+>
+> The four runs, with the hard-leg column KI-009 actually needs (recomputed
+> against the database on 2026-09-20, not carried over from the earlier text):
+>
+> | run | bar | scored | admits | hard scored | hard admits |
+> |---|---|---|---|---|---|
+> | `01KYX0BSTM8F…` | `A-incumbent` | 600 | 0 | **0** | 0 |
+> | `01KYX4DDC3JK…` | `A-incumbent` | 599 | 2 | 454 | **2** |
+> | `01KYX0XJJ97Q…` | `B-evidence-contribution` | 600 | 2 | 453 | **2** |
+> | `01KYX259F67E…` | `C-signal-tagging` | 599 | 1 | 454 | **1** |
+>
+> The first row is the arXiv-only run its own report flagged as scoring no
+> hard-leg items; it is not a contradictory `A` result, it is a different corpus.
+> The other three share an item set — A∩B = 598, A∩C = 599 of ~600 — so they are
+> a genuine three-bar comparison on one corpus with one model (`qwen3.5:397b`).
+>
+> **Which means step 3 of the spec largely happened in July and was never written
+> up**, and the pilot below re-measured on 200 items what 599 items already said.
+>
+> ### What the July data says
+>
+> Every admitted item, across all three bars, is one of **two USASpending DOE
+> awards** — Anduril, and American Centrifuge Operating:
+>
+> ```
+> A-incumbent   usaspending  ANDURIL INDUSTRIES        physical-realization
+> A-incumbent   usaspending  AMERICAN CENTRIFUGE OPS   cost-curve
+> B-evidence    usaspending  ANDURIL INDUSTRIES        physical-realization
+> B-evidence    usaspending  AMERICAN CENTRIFUGE OPS   cost-curve
+> C-signal      usaspending  AMERICAN CENTRIFUGE OPS   bio-mechanism:1
+> ```
+>
+> `B` admits exactly what `A` admits. `C` admits one of them, and labels it
+> `bio-mechanism` — a uranium enrichment contract tagged as a biology signal,
+> which is not a promising sign for signal-level tagging.
+>
+> **The hypothesis predicts B and especially C should admit substantially more
+> than A. They do not.** On 454 hard-leg items the counts are 2, 2 and 1. That is
+> the outcome the spec names as falsifying: *"If Bar A wins … the hypothesis is
+> falsified, the bars are not misapplied, and the constraint is upstream in what
+> we ingest rather than in how we read it."*
+>
+> It does not *quite* say all three admit nothing — they admit one or two — but
+> the reformulations plainly do not unblock the hard leg, which is the question
+> the card was built to answer.
+>
+> ### What is still open
+>
+> Only the **model** question, and that is the one the 2026-09-20 pilot raised:
+> DQ-006's named exemplar flips between `qwen3.5:397b` and `kimi-k3` on the
+> unmodified prompt v4. A replay of the July item set under `kimi-k3` was started
+> and **stopped at 192 of 599 on Ollama's per-session request cap**. That run is
+> `01M2YHEGZ5KSBAADGHYK96QGAY`: 599 result rows, of which **407 carry an error**
+> and every one of the 407 is the same HTTP 429, *"you have reached your session
+> usage limit."* Not a partial write — a complete run in which two thirds of the
+> calls were refused.
+>
+> `https://ollama.com/api/usage`, read with the firm's own key, reports
+> `limits.session.usage = 1.0` (974 `kimi-k3` requests) against
+> `limits.weekly.usage = 0.277`. **The session window is the binding one and the
+> weekly figure this project has been budgeting against is the wrong number.**
+> The payload does not say how long the session window is, and it had not reset
+> an hour after the run stopped.
+>
+> **The expensive full-corpus three-bar run is probably not worth funding.** The
+> three-bar comparison exists. What does not exist is the same comparison under
+> the current model, and that is one bar over 599 items — about 10% of a weekly
+> allowance, not 10.6 of them.
+
 **Status:** partial. A 200-item stratified pilot ran 2026-09-20. The full-corpus
 run the spec asks for has **not** happened, for a reason measured below.
 

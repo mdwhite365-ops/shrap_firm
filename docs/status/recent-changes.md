@@ -1456,6 +1456,60 @@ the raw count is a different strategy from one ranking on size, and the module's
 standing rule is that a wording difference may be normalised while a construction
 difference must not.
 
+### Correction: all three archetype bars already ran in July (#260)
+
+#255 said *"bars B and C have never been run."* **That was wrong.**
+
+**And the first version of this correction blamed the wrong cause**, which is
+recorded here because a correction carrying its own error is worth less than
+nothing. It said the summary table held one row while the detail table held
+four. Both tables were right: `research.bar_experiment_runs` has always held
+**four** rows for 2026-07-31, one per invocation, each naming its bar.
+
+The query was `select * from research.bar_experiment_runs order by 1 desc limit
+5` piped to `head -14`. `report_markdown` is a multi-line `TEXT` column holding
+an entire run report, so in psql's aligned output **one row spans dozens of
+lines** and `head -14` cut the result off inside the first one. Four rows came
+back; one was shown. **I read my own truncation as a finding.**
+
+**A pipe is part of the query.** `head` truncates silently and the truncation is
+indistinguishable from a short result. `SELECT *` on a table with a wide text
+column is not a listing — name the columns, or ask for `count(*)` when a count
+is the claim.
+
+The three comparable runs share an item set (A∩B = 598, A∩C = 599 of ~600), one
+corpus, one model:
+
+| bar | hard scored | hard admits |
+|---|---|---|
+| `A-incumbent` | 454 | **2** |
+| `B-evidence-contribution` | 453 | **2** |
+| `C-signal-tagging` | 454 | **1** |
+
+Every admit across all three is one of **two USASpending DOE awards**. `B`
+admits exactly what `A` admits; `C` admits one of them and labels a uranium
+enrichment contract `bio-mechanism`.
+
+**The hypothesis predicts B and especially C should admit substantially more
+than A. They do not.** That is the outcome the spec names as falsifying.
+
+So the full three-bar run on 21,231 items — the one I costed at **10.6 weekly
+Ollama allowances** — is probably not worth funding. The three-bar comparison
+already exists. What does not exist is the same comparison under the current
+model, and that is **one bar over 599 items**, roughly 10% of a week.
+
+That replay ran as `01M2YHEGZ5KSBAADGHYK96QGAY` and **407 of its 599 rows carry
+an error**, every one the same HTTP 429: *"you have reached your session usage
+limit."* 192 items were actually scored.
+
+**The budget number this project has been using is the wrong one.**
+`https://ollama.com/api/usage` — an endpoint nobody here had read, returning JSON
+to the firm's own key — reports `limits.session.usage = 1.0` against
+`limits.weekly.usage = 0.277`. Every cost estimate in #255 and in the spec is
+denominated in the weekly window, and the **session** window is what actually
+stops a run. It had not reset an hour later, and the payload does not say how
+long it lasts.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.
