@@ -65,6 +65,7 @@ from shrap.research.bar_experiment import (
     BarVerdict,
     ExperimentReport,
     QuotaDecision,
+    all_bars,
     bars_by_key,
     cross_bar_agreement,
     render_markdown,
@@ -746,17 +747,41 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _validate_selectors(
+    parser: argparse.ArgumentParser, args: argparse.Namespace, bar_keys: Sequence[str] | None
+) -> None:
+    """Refuse selector combinations that would silently score the wrong corpus."""
+
+    if args.report_only and (args.items_from_run or args.resume_run or args.limit):
+        parser.error("--report-only scores nothing; it takes no item selector")
+
+    # `--items-from-run` with `--resume-run` means "finish this run against that
+    # item set", which is how a cleanly stopped run is completed: the guard
+    # leaves its remaining items unwritten, so there are no errored rows to find.
+    #
+    # **Only for one bar at a time, and the refusal is deliberate.**
+    # `load_corpus` returns a single item list that every bar then scores, and
+    # `SELECT_RUN_SCORED_ITEM_IDS_SQL` does not filter by bar — so across two
+    # bars, an item bar B had already scored would be subtracted from bar C's
+    # set as well. C would silently skip it and its report would describe a
+    # smaller run than B's while claiming to be the same comparison. Refusing is
+    # better than a resume that quietly returns a different corpus per bar.
+    if args.resume_run and len(bar_keys or all_bars()) != 1:
+        parser.error(
+            "--resume-run works on one bar at a time: resume state is per item, "
+            "not per (bar, item), so resuming several bars at once would skip "
+            "items in one bar because another had already scored them. "
+            "Pass --bars with a single key."
+        )
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    # Together they mean "finish this run against that item set", which is how a
-    # cleanly stopped run is completed: the guard leaves its remaining items
-    # unwritten, so there are no errored rows to find.
-    if args.report_only and (args.items_from_run or args.resume_run or args.limit):
-        parser.error("--report-only scores nothing; it takes no item selector")
-
     bar_keys = [b.strip() for b in args.bars.split(",")] if args.bars else None
+    _validate_selectors(parser, args, bar_keys)
+
     configure_logging("bar-experiment", os.environ.get("TECH_WATCHER_LOG_LEVEL", "INFO"))
     dsn = os.environ.get("TECH_WATCHER_POSTGRES_DSN")
     if not dsn:

@@ -48,6 +48,8 @@ from shrap.research.bar_experiment_cli import (
     INSERT_RESULT_SQL,
     INSERT_RUN_SQL,
     SELECT_CORPUS_SQL,
+    _build_parser,
+    _validate_selectors,
     build_report,
     load_corpus,
     render_plan,
@@ -1091,6 +1093,38 @@ async def test_a_cheap_run_is_not_re_checked_every_few_items() -> None:
     )
 
     assert asks <= 3, f"{asks} meter reads for 300 cheap items"
+
+
+def test_resume_refuses_more_than_one_bar() -> None:
+    """Resume state is per item, not per (bar, item): `load_corpus` returns one
+    list that every bar scores, and the already-scored query does not filter by
+    bar. Resuming two bars at once would subtract items bar B had scored from
+    bar C's set, so C would silently skip them and report a smaller run while
+    claiming to be the same comparison."""
+
+    parser = _build_parser()
+    args = parser.parse_args(["--resume-run", "01RUN"])
+
+    with pytest.raises(SystemExit):
+        _validate_selectors(parser, args, [BAR_INCUMBENT, BAR_EVIDENCE])
+
+    with pytest.raises(SystemExit):
+        _validate_selectors(parser, args, None)  # None means all three
+
+
+def test_resume_accepts_a_single_bar() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["--resume-run", "01RUN"])
+
+    _validate_selectors(parser, args, [BAR_INCUMBENT])
+
+
+def test_report_only_takes_no_item_selector() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(["--report-only", "01RUN", "--items-from-run", "01SRC"])
+
+    with pytest.raises(SystemExit):
+        _validate_selectors(parser, args, [BAR_INCUMBENT])
 
 
 async def test_the_guard_is_told_how_many_items_have_been_scored() -> None:
