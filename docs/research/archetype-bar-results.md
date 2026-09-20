@@ -1,5 +1,76 @@
 # Archetype bar experiment — results
 
+> ## Correction, 2026-09-20 — all three bars already ran in July
+>
+> **The first version of this page said "bars B and C have never been run." That
+> was wrong**, and the mistake is worth more than the claim was.
+>
+> `research.bar_experiment_runs` holds **one** row for 2026-07-31.
+> `research.bar_experiment_results` holds **four separate runs** from that day. I
+> read the summary table, found one row, and inferred about the detail table
+> without querying it — the same shape of error as reading
+> `filter_verdict_history` and concluding the literature filter kept no
+> rejections. *Check the table that holds the rows, not the table that summarises
+> them.*
+>
+> The four runs, with the hard-leg column KI-009 actually needs:
+>
+> | run | bar | scored | admits | hard scored | hard admits |
+> |---|---|---|---|---|---|
+> | `01KYX0BSTM8F…` | `A-incumbent` | 600 | 0 | **0** | 0 |
+> | `01KYX4DDC3JK…` | `A-incumbent` | 599 | 2 | 454 | **2** |
+> | `01KYX0XJJ97Q…` | `B-evidence-contribution` | 600 | 2 | 453 | **2** |
+> | `01KYX259F67E…` | `C-signal-tagging` | 599 | 1 | 454 | **1** |
+>
+> The first row is the arXiv-only run its own report flagged as scoring no
+> hard-leg items; it is not a contradictory `A` result, it is a different corpus.
+> The other three share an item set — A∩B = 598, A∩C = 599 of ~600 — so they are
+> a genuine three-bar comparison on one corpus with one model (`qwen3.5:397b`).
+>
+> **Which means step 3 of the spec largely happened in July and was never written
+> up**, and the pilot below re-measured on 200 items what 599 items already said.
+>
+> ### What the July data says
+>
+> Every admitted item, across all three bars, is one of **two USASpending DOE
+> awards** — Anduril, and American Centrifuge Operating:
+>
+> ```
+> A-incumbent   usaspending  ANDURIL INDUSTRIES        physical-realization
+> A-incumbent   usaspending  AMERICAN CENTRIFUGE OPS   cost-curve
+> B-evidence    usaspending  ANDURIL INDUSTRIES        physical-realization
+> B-evidence    usaspending  AMERICAN CENTRIFUGE OPS   cost-curve
+> C-signal      usaspending  AMERICAN CENTRIFUGE OPS   bio-mechanism:1
+> ```
+>
+> `B` admits exactly what `A` admits. `C` admits one of them, and labels it
+> `bio-mechanism` — a uranium enrichment contract tagged as a biology signal,
+> which is not a promising sign for signal-level tagging.
+>
+> **The hypothesis predicts B and especially C should admit substantially more
+> than A. They do not.** On 454 hard-leg items the counts are 2, 2 and 1. That is
+> the outcome the spec names as falsifying: *"If Bar A wins … the hypothesis is
+> falsified, the bars are not misapplied, and the constraint is upstream in what
+> we ingest rather than in how we read it."*
+>
+> It does not *quite* say all three admit nothing — they admit one or two — but
+> the reformulations plainly do not unblock the hard leg, which is the question
+> the card was built to answer.
+>
+> ### What is still open
+>
+> Only the **model** question, and that is the one the 2026-09-20 pilot raised:
+> DQ-006's named exemplar flips between `qwen3.5:397b` and `kimi-k3` on the
+> unmodified prompt v4. A replay of the July item set under `kimi-k3` was started
+> and **stopped at 192 of 599 on Ollama's per-session request cap** (weekly was
+> only 27.7% used; the session window is the binding one). It can be resumed when
+> that window resets.
+>
+> **The expensive full-corpus three-bar run is probably not worth funding.** The
+> three-bar comparison exists. What does not exist is the same comparison under
+> the current model, and that is one bar over 599 items — about 10% of a weekly
+> allowance, not 10.6 of them.
+
 **Status:** partial. A 200-item stratified pilot ran 2026-09-20. The full-corpus
 run the spec asks for has **not** happened, for a reason measured below.
 

@@ -1378,6 +1378,43 @@ weekly allowances**. The spec's "~3% of a week" was computed in July against a
 corpus eight times smaller. Both the corpus size and the cheaper alternative are
 now recorded in the spec itself so nobody quotes the stale figure.
 
+### Correction: all three archetype bars already ran in July (#260)
+
+#255 said *"bars B and C have never been run."* **That was wrong.**
+
+`research.bar_experiment_runs` holds **one** row for 2026-07-31.
+`research.bar_experiment_results` holds **four separate runs** from that day. I
+read the summary table, found one row, and inferred about the detail table
+without querying it — the same shape of error as reading
+`filter_verdict_history` and concluding the literature filter kept no
+rejections. **Check the table that holds the rows, not the table that summarises
+them.**
+
+The three comparable runs share an item set (A∩B = 598, A∩C = 599 of ~600), one
+corpus, one model:
+
+| bar | hard scored | hard admits |
+|---|---|---|
+| `A-incumbent` | 454 | **2** |
+| `B-evidence-contribution` | 453 | **2** |
+| `C-signal-tagging` | 454 | **1** |
+
+Every admit across all three is one of **two USASpending DOE awards**. `B`
+admits exactly what `A` admits; `C` admits one of them and labels a uranium
+enrichment contract `bio-mechanism`.
+
+**The hypothesis predicts B and especially C should admit substantially more
+than A. They do not.** That is the outcome the spec names as falsifying.
+
+So the full three-bar run on 21,231 items — the one I costed at **10.6 weekly
+Ollama allowances** — is probably not worth funding. The three-bar comparison
+already exists. What does not exist is the same comparison under the current
+model, and that is **one bar over 599 items**, roughly 10% of a week.
+
+That replay was started and stopped at **192 of 599 on Ollama's per-session
+request cap** — weekly was only 27.7% used, the session window is the binding
+one. Resumable when it resets.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.
