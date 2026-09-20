@@ -279,6 +279,19 @@ async def load_corpus(
         )
         for row in rows
     ]
+    # **Order matters, and getting it wrong makes a real warning cry wolf.** The
+    # replay intersection runs against the WHOLE corpus, before any source
+    # filter, so `missing` means "scored once and gone now" — a panel silently
+    # shrinking, which is the thing replaying exists to prevent. Filtering first
+    # made every `--sources` run report the other sources as missing, and a
+    # warning that fires on correct usage is one nobody reads.
+    if replay is not None:
+        kept = [item for item in items if item.item_id in replay]
+        missing = len(replay) - len(kept)
+        if missing:
+            print(f"warning: {missing} of {len(replay)} replayed items are no longer in the corpus")
+        items = kept
+
     if sources:
         wanted = {s.strip() for s in sources if s.strip()}
         unknown = wanted - {item.source for item in items}
@@ -287,14 +300,7 @@ async def load_corpus(
         items = [item for item in items if item.source in wanted]
 
     if replay is not None:
-        kept = [item for item in items if item.item_id in replay]
-        # An item scored then and absent now would silently shrink the panel and
-        # make the two runs incomparable in exactly the way replaying is meant to
-        # prevent. `raw_source_items` is append-only, so this should be zero.
-        missing = len(replay) - len(kept)
-        if missing:
-            print(f"warning: {missing} of {len(replay)} replayed items are no longer in the corpus")
-        return kept
+        return items
 
     # Proportional, never a head-of-list slice. The corpus is ordered by
     # item_id and `arxiv:` sorts first, so `items[:600]` is 600 arXiv items and

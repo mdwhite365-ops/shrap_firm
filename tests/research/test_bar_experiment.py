@@ -10,6 +10,8 @@ cost the model eval two runs.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -967,3 +969,33 @@ async def test_an_unknown_source_is_an_error_not_an_empty_run() -> None:
 
     with pytest.raises(SystemExit, match="no corpus items from source"):
         await load_corpus(pool, None, None, None, ["sec-edgard"])
+
+
+async def test_a_source_filter_does_not_make_replayed_items_look_missing() -> None:
+    """The missing-items warning exists to catch a panel silently shrinking. It
+    fired on every correct `--sources` run because the filter ran before the
+    replay intersection, and a warning that fires on correct usage is one nobody
+    reads."""
+
+    corpus = [
+        _corpus_row("arxiv:1", "arxiv"),
+        _corpus_row("edgar:1", "sec-edgar", document_text="body"),
+    ]
+    pool = _ReplayPool(_ReplayConn(corpus, ["arxiv:1", "edgar:1"]))
+
+    items, out = [], io.StringIO()
+    with contextlib.redirect_stdout(out):
+        items = await load_corpus(pool, None, "01OLD", None, ["sec-edgar"])
+
+    assert [i.item_id for i in items] == ["edgar:1"]
+    assert "no longer in the corpus" not in out.getvalue()
+
+
+async def test_a_genuinely_absent_replayed_item_still_warns() -> None:
+    pool = _ReplayPool(_ReplayConn([_corpus_row("edgar:1", "sec-edgar")], ["edgar:1", "gone:1"]))
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        await load_corpus(pool, None, "01OLD", None, None)
+
+    assert "1 of 2 replayed items are no longer in the corpus" in out.getvalue()
