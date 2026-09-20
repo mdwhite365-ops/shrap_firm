@@ -1,4 +1,4 @@
-# Session handoff — 2026-09-19 (`main` at #251)
+# Session handoff — 2026-09-20 (`main` at #263)
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -14,7 +14,77 @@ them, and `git log` has the history.
 
 ---
 
-## Pick up here (reconciled at #251, deployed 2026-09-19)
+## Pick up here (reconciled at #263, deployed 2026-09-20)
+
+### Changelog entries moved (#263)
+
+**Do not append to `recent-changes.md`.** It is frozen. Write your card's entry
+as a new file in `docs/status/changes/<pr>-<slug>.md`; `make changelog` reads
+them in order. Appending to one shared file meant every card landed at the same
+anchor and any two open PRs conflicted — four resolution passes in one evening.
+See that directory's README.
+
+### The Ollama quota has two windows, and the session one binds (#261)
+
+**Every cost estimate this project made was priced in the weekly window.** A
+599-item experiment was refused after 192 items with `weekly.usage` at **0.277**
+and `session.usage` at **1.0**. `https://ollama.com/api/usage` returns both to
+the firm's own key and nobody had read it — `src/shrap/llm/ollama_usage.py` now
+does.
+
+**The quota is account-wide, so a batch job starves the agents.** Twenty minutes
+after that run, the Tech Watcher's hourly literature pass aborted with
+`scored: 0` on five consecutive 429s. Batch CLIs now hold a **10% reserve** and
+re-check it every 50 items, not only at start. `--resume-run` finishes a stopped
+run by re-scoring only its errored items into the same run id, and the conflict
+clause carries `WHERE error IS NOT NULL` so a recorded verdict is never
+overwritten.
+
+**Outstanding:** run `01M2YHEGZ5KSBAADGHYK96QGAY` still has errored rows — an
+`A-incumbent` replay of the July item set under `kimi-k3`, 407 of 599 unscored.
+Resume with:
+
+```
+docker compose exec -T tech-watcher shrap-bar-experiment \
+  --resume-run 01M2YHEGZ5KSBAADGHYK96QGAY --bars A-incumbent
+```
+
+It refuses (exit 1) while the session window is spent. **Check the meter before
+planning any batch of completions.**
+
+### All three archetype bars already ran, in July (#260)
+
+`bar_experiment_results` holds a genuine three-bar comparison from 2026-07-31 on
+~599 items under `qwen3.5:397b`: hard-leg admits **A 2/454, B 2/453, C 1/454**,
+and every admit across all three is one of two USASpending DOE awards. **The
+hypothesis predicts B and especially C admit substantially more. They do not** —
+the outcome the spec names as falsifying. The expensive full-corpus three-bar
+run is probably not worth funding; only the model question remains open.
+
+#255 claimed B and C had never run. That was wrong, and so was the first
+correction. Cause: `select * from research.bar_experiment_runs limit 5 |
+head -14` returned four rows and displayed one, because `report_markdown` is a
+multi-line `TEXT` column. **A pipe is part of the query.**
+
+### Market cap is a readable series (#258)
+
+`AVAILABLE_SERIES` went from `{close, volume}` to `{close, volume, market cap}` —
+its first addition ever. `volatility-rank-forecast` reclassifies `missing-data`
+→ `missing-scorer`. Caps are derived from the panel's own closes, never from
+`SELECT_MARKET_CAP_SQL`, which would re-read `daily_bars` on its own feed.
+
+### The corpus index has a consumer (#259), and Langfuse stays hand-rolled (#262)
+
+The Hypothesis Generator now retrieves prior work from the corpus index, off
+unless `HYPOTHESIS_GENERATOR_RETRIEVAL` is set. Separately, Langfuse Cloud does
+support SDK v4 and OTel — the #254 constraint is genuinely gone — but the
+hand-rolled client stays because it records **inline** while the SDK and every
+OTel exporter batch in the background, and queued spans lost on restart are
+exactly the unrecoverable sample KI-018 exists to capture.
+
+---
+
+## Earlier: reconciled at #251, deployed 2026-09-19
 
 **Everything merged through #251 is deployed and verified by image ID and
 database, not by build log.** 37 containers up, 0 restarting.

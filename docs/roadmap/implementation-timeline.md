@@ -1,13 +1,32 @@
 # Implementation timeline
 
-**Last updated:** 2026-09-18 (`main` at #247)
+**Last updated:** 2026-09-20 (`main` at #263)
 
-**The ordered plan as of #247 is the three-card list at the top of
-`docs/status/session-handoff.md`**, and only the first of them moves the
-binding constraint: the archetype bar (KI-009), which is Mike's ruling and not
-an implementation. `kimi-k3` has scored 172 items and admitted zero, making it
-five model families with the same answer. Market cap is the cheapest
-`capability-gap` row and is half-built. Everything below this line is the
+**The ordered plan is the card list at the top of
+`docs/status/session-handoff.md`**, and only the first of it moves the binding
+constraint.
+
+**Two of the three cards named at #247 are now closed, and the first one
+answered its own question.**
+
+- **The archetype bar (KI-009) has its measurement (#260).** It did not need
+  the expensive run: `bar_experiment_results` already held a three-bar
+  comparison from 2026-07-31 over ~599 items — hard-leg admits **A 2/454,
+  B 2/453, C 1/454**, every admit one of two USASpending DOE awards. The
+  hypothesis predicts B and especially C admit substantially more. **They do
+  not**, which is the outcome the spec names as falsifying. The full-corpus
+  three-bar run is probably not worth funding. What remains open is the *model*
+  question — one bar, 599 items — and a replay is part-finished.
+- **Market cap landed (#258).** `AVAILABLE_SERIES` went from `{close, volume}`
+  to `{close, volume, market cap}`, its first addition ever, and
+  `volatility-rank-forecast` reclassified `missing-data` → `missing-scorer`.
+
+**And a constraint nobody had measured now bounds every card that spends
+completions (#261):** Ollama Cloud enforces a **session** window as well as a
+weekly one, and the session window is the binding one. Read
+`https://ollama.com/api/usage` before planning a batch — every estimate this
+project made before 2026-09-20 was priced in the window that does not stop
+runs. The quota is account-wide, so a batch job starves the always-on agents. Everything below this line is the
 longer-form plan and predates both facts.
 **Supersedes** `docs/roadmap/paper-spine-tree.md` as the answer to "what's next."
 That document is the Month-1/2 paper-spine plan; its last card (Card 18) shipped

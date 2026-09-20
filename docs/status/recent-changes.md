@@ -1,5 +1,16 @@
 # Recent changes
 
+> **Frozen 2026-09-20 (#263). Do not append to this file.**
+>
+> New entries go one-per-card in [`changes/`](changes/), because appending here
+> meant every card landed at the same anchor and any two open PRs conflicted —
+> four resolution passes across #258, #260, #261 and #262 in one evening, each
+> a merge whose only content was keeping both sections. Separate files cannot
+> conflict.
+>
+> Everything below is history and stays readable. `make changelog` prints what
+> came after it.
+
 **Last updated:** 2026-09-18 (`main` at #247 — the intraday path closed end to end, three silent infrastructure faults found and fixed, and IEX vs SIP measured to a negative result)
 
 ## Merged since the inner-loop paper spine push began
