@@ -27,6 +27,10 @@ import yaml
 
 COMPOSE = Path("infra/docker-compose.yml")
 
+# Retired from the main stack 2026-09-19 (zero traces, ever) but kept revivable,
+# same as infra/ibgateway/. The probe knowledge travels with it.
+LANGFUSE_LOCAL_COMPOSE = Path("infra/langfuse-local/docker-compose.yml")
+
 
 @pytest.fixture(scope="module")
 def services() -> dict[str, Any]:
@@ -79,16 +83,32 @@ def test_qdrant_probe_runs_under_bash_not_sh(services: dict[str, Any]) -> None:
     assert test[1] == "bash"
 
 
-def test_langfuse_probe_does_not_use_loopback(services: dict[str, Any]) -> None:
+def test_the_main_stack_no_longer_runs_a_local_langfuse(services: dict[str, Any]) -> None:
+    """Retired 2026-09-19: it held zero traces for its entire deployed life.
+
+    All 24 agents point at `https://us.cloud.langfuse.com`, which held 4,424
+    traces when this was removed. The local instance cost an 821 MB image, a
+    68 MB volume, two healthchecks and a nightly backup leg to store nothing.
+    """
+
+    assert not [name for name in services if "langfuse" in name]
+
+
+def test_langfuse_probe_does_not_use_loopback() -> None:
     """THE seven-week bug. Langfuse listens on eth0 only.
 
     `localhost` resolves to ::1 inside the container and `127.0.0.1` is refused
     just the same — the service is simply not on loopback. Verified against the
     running container: both refused, `$(hostname -i)` returned
     {"status":"OK","version":"2.95.11"}.
+
+    Kept, and pointed at the revival compose, because the fix is only obvious
+    once you have lost seven weeks to it. Anyone bringing this back gets the
+    working probe rather than rediscovering the broken one.
     """
 
-    probe = _probe(services, "langfuse")
+    revived = dict(yaml.safe_load(LANGFUSE_LOCAL_COMPOSE.read_text())["services"])
+    probe = _probe(revived, "langfuse")
     assert "localhost" not in probe
     assert "127.0.0.1" not in probe
     # $$ is compose's escape for a literal $ passed to the shell.
