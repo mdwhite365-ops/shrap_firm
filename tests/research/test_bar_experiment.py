@@ -938,3 +938,32 @@ async def test_the_loaded_corpus_carries_the_document_body() -> None:
     items = await load_corpus(pool, None, None)
 
     assert items[0].document_text == "the filing body"
+
+
+async def test_sources_narrows_the_corpus_to_named_feeds() -> None:
+    """A change to how one source renders does not change the others. When the
+    filings started being read, the four sources with no `document_text` built
+    byte-identical prompts, so re-scoring them would have spent a third of the
+    budget reproducing numbers already held."""
+
+    corpus = [
+        _corpus_row("arxiv:1", "arxiv"),
+        _corpus_row("edgar:1", "sec-edgar", document_text="body"),
+        _corpus_row("edgar:2", "sec-edgar", document_text="body"),
+        _corpus_row("doe:1", "doe-newsroom"),
+    ]
+    pool = _ReplayPool(_ReplayConn(corpus, []))
+
+    items = await load_corpus(pool, None, None, None, ["sec-edgar"])
+
+    assert sorted(i.item_id for i in items) == ["edgar:1", "edgar:2"]
+
+
+async def test_an_unknown_source_is_an_error_not_an_empty_run() -> None:
+    """A typo would otherwise score nothing and print a confident report over an
+    empty corpus."""
+
+    pool = _ReplayPool(_ReplayConn([_corpus_row("arxiv:1", "arxiv")], []))
+
+    with pytest.raises(SystemExit, match="no corpus items from source"):
+        await load_corpus(pool, None, None, None, ["sec-edgard"])

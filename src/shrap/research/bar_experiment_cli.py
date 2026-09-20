@@ -232,6 +232,7 @@ async def load_corpus(
     limit: int | None,
     items_from_run: str | None = None,
     resume_run: str | None = None,
+    sources: Sequence[str] | None = None,
 ) -> list[UnfilteredItem]:
     """The items to score, in corpus order.
 
@@ -239,6 +240,13 @@ async def load_corpus(
     ``limit`` samples proportionally, ``items_from_run`` replays another run's
     item set, and ``resume_run`` takes only the items a run recorded an error
     against.
+
+    ``sources`` narrows any of those to named feeds. It exists because a change
+    to how one source is rendered does not change the others: when #266 started
+    showing EDGAR filings instead of index entries, the prompts for the four
+    sources that carry no ``document_text`` were byte-identical to the previous
+    run, so re-scoring them would have spent a third of the budget to reproduce
+    numbers already held.
     """
 
     async with pool.acquire() as conn:
@@ -271,6 +279,13 @@ async def load_corpus(
         )
         for row in rows
     ]
+    if sources:
+        wanted = {s.strip() for s in sources if s.strip()}
+        unknown = wanted - {item.source for item in items}
+        if unknown:
+            raise SystemExit(f"no corpus items from source(s): {sorted(unknown)}")
+        items = [item for item in items if item.source in wanted]
+
     if replay is not None:
         kept = [item for item in items if item.item_id in replay]
         # An item scored then and absent now would silently shrink the panel and
@@ -438,6 +453,7 @@ async def run(
     dry_run: bool,
     items_from_run: str | None = None,
     resume_run: str | None = None,
+    sources: Sequence[str] | None = None,
     reserve: float = PRODUCTION_RESERVE,
     ignore_quota: bool = False,
 ) -> tuple[str, ExperimentReport | None, list[BarCall], tuple[Bar, ...]]:
@@ -445,7 +461,7 @@ async def run(
     pool = await create_asyncpg_pool(dsn)
     try:
         await ensure_schema(pool)
-        items = await load_corpus(pool, limit, items_from_run, resume_run)
+        items = await load_corpus(pool, limit, items_from_run, resume_run, sources)
 
         env = dict(os.environ)
         registry = TierRegistry(env)
@@ -608,6 +624,15 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--sources",
+        default=None,
+        metavar="A,B",
+        help=(
+            "Comma-separated sources to score. Combines with --items-from-run. "
+            "For re-running only the feed a change affects."
+        ),
+    )
+    parser.add_argument(
         "--report-only",
         default=None,
         metavar="RUN_ID",
@@ -683,6 +708,7 @@ def main() -> None:
             dry_run=args.dry_run,
             items_from_run=args.items_from_run,
             resume_run=args.resume_run,
+            sources=args.sources.split(",") if args.sources else None,
             reserve=args.reserve,
             ignore_quota=args.ignore_quota,
         )
