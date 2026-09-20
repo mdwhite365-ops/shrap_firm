@@ -105,6 +105,86 @@
 > the current model, and that is one bar over 599 items — about 10% of a weekly
 > allowance, not 10.6 of them.
 
+## The `kimi-k3` replay finished, 2026-09-20 — and the model was never the question
+
+Run `01M2YHEGZ5KSBAADGHYK96QGAY`: **Bar A, the unmodified production prompt v4,
+over the exact 599 items July's control scored**, so the model is the only
+variable. 599 scored, **0 errors, 0 parse failures**.
+
+| model | hard scored | hard admits |
+|---|---|---|
+| `qwen3.5:397b` (2026-07-31) | 454 | **2** |
+| `kimi-k3` (2026-09-20) | 454 | **3** |
+
+**Three is not better than two.** On 454 items at a rate near 0.5% the standard
+error is about ±1.5 admits, so the two runs are indistinguishable and nothing
+here ranks the models. Reading that gap as an improvement would be the error
+KI-036 exists to refuse.
+
+**One targeted result does survive, because it is not a rate.** DQ-006 names a
+specific false negative — the DOE fourth-criticality announcement. `kimi-k3`
+**admits it**; `qwen3.5:397b` rejected it on the identical prompt. That is the
+exemplar the spec asked about, tested directly rather than inferred from a
+count, and it confirms what the 200-item pilot saw.
+
+The two models agree on 596 of 599 items and disagree on three:
+
+| source | `qwen3.5` | `kimi-k3` | item |
+|---|---|---|---|
+| `doe-newsroom` | reject | **admit** | DOE Celebrates Fourth Criticality (DQ-006's exemplar) |
+| `federal-register` | reject | **admit** | Licensing Requirements for Microreactors |
+| `usaspending` | **admit** | reject | DOE award to ANDURIL INDUSTRIES ($5.7M) |
+
+Four distinct items are admitted by either model and **only one by both**. At
+these counts the overlap carries no information; it is recorded so nobody later
+mistakes two runs for a reproducibility check.
+
+### The finding that is not about models at all
+
+Break `kimi-k3`'s 599 items down by where they came from:
+
+| source | scored | admits | share of full corpus |
+|---|---|---|---|
+| `sec-edgar` | 425 | **0** | 15,318 / 21,231 — **72%** |
+| `arxiv` | 145 | **0** | 5,556 — 26% |
+| `usaspending` | 14 | 1 | 129 — 0.6% |
+| `federal-register` | 13 | 1 | 185 — 0.9% |
+| `doe-newsroom` | 2 | 1 | 43 — **0.2%** |
+
+**570 of 599 items — 95% — came from two sources that admitted nothing, under
+either model.** Every admit in the entire experiment, across all three bars and
+both models, came from the three sources that together are **1.7% of what the
+firm ingests**.
+
+EDGAR's 0 of 425 puts its admit rate below **0.7%** at 95% confidence (rule of
+three). It is 72% of the corpus and ~1,000 items a week of continuous ingest.
+`doe-newsroom` is 43 items in total and produced the one admit the spec
+specifically asked for.
+
+**So the volume is in the sources that admit nothing, and the signal is in the
+sources with almost no volume.** That reframes what "feed the funnel" means: not
+more throughput, which is overwhelmingly EDGAR, but more sources shaped like
+`doe-newsroom` — or a different extraction from EDGAR, since what is stored today
+is filing text that this taxonomy demonstrably does not match.
+
+It also settles the cost question the spec left open. A full-corpus run is
+**63,693 completions** to score 20,874 items from two sources with a measured
+admit rate indistinguishable from zero. The single-bar replay that produced
+everything above cost **407 completions, about 6.8% of a weekly allowance**,
+measured on the meter rather than estimated.
+
+### What is now closed, and what is not
+
+**Closed:** the model question. Two model families, one bar, one item set, no
+distinguishable difference. Combined with the July three-bar comparison, the
+experiment has tested both of its variables and neither moves the hard leg.
+
+**Open, and it is Mike's:** whether KI-009's fix is a taxonomy change, a source
+change, or both. The data now points at *source* more strongly than the spec
+anticipated — the spec's falsifying clause said the constraint would be
+"upstream in what we ingest rather than in how we read it", and that is what the
+by-source table says.
+
 **Status:** partial. A 200-item stratified pilot ran 2026-09-20. The full-corpus
 run the spec asks for has **not** happened, for a reason measured below.
 
