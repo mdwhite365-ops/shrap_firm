@@ -215,10 +215,15 @@ leg. Its compose lives at `infra/langfuse-local/` and can be revived, same
 treatment as `infra/ibgateway/` (#243). **`DEFAULT_HOST` is now empty on
 purpose**: keys set with no host disables tracing and says so, because
 defaulting to a container that no longer exists would reproduce KI-018 exactly.
-One knock-on worth knowing: `src/shrap/llm/tracing.py` is hand-rolled against
-the legacy `/api/public/ingestion` endpoint **because** OSS v2 cannot talk to
-Python SDK v3/v4 or OTel — Cloud supports both, so that constraint is now
-obsolete and dropping the hand-rolled client is an available card.
+One knock-on, now resolved (#262): `src/shrap/llm/tracing.py` was hand-rolled
+against the legacy `/api/public/ingestion` endpoint **because** OSS v2 could not
+talk to Python SDK v3/v4 or OTel. Cloud supports all three — verified 2026-09-20,
+OTel at `/api/public/otel` over HTTP/JSON or protobuf with Basic auth — **so the
+constraint is gone and the module keeps the hand-rolled client on its own
+merits**: it records inline, while the SDK and every OTel exporter batch in a
+background processor, and spans queued when a container restarts are precisely
+the unrecoverable sample the card exists to capture. Measured cost of recording
+inline: 48-165 ms per call. Reopen it if a second OTel backend is ever wanted.
 
 **Planned / gated:** NautilusTrader (gate: live capital or execution needs beyond market/day orders, per ADR-0003), LangGraph (when an agent actually needs multi-node orchestration), OpenHands SDK (Development Department), VectorBT PRO (Strategy Evaluator), Mem0 (agent memory).
 

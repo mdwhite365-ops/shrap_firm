@@ -1417,6 +1417,40 @@ agent sent before.
 `shrap.common.qdrant_client` at all. `--profile tools build hypothesis-generator`
 is required, per `docs/runbooks/deploying-after-a-code-change.md`.
 
+### The Langfuse constraint is gone; the hand-rolled client stays anyway (#262)
+
+#254 retired the local `langfuse/langfuse:2` container, and `tracing.py` still
+carried a compatibility table describing it as *"this deployment"* — a matrix
+explaining why Python SDK v3/v4 and OTel were all unavailable against a server
+that no longer exists. Anyone reading the module would have inherited a
+constraint the firm had already removed.
+
+**Verified against Langfuse's docs rather than assumed.** Langfuse Cloud supports
+Python SDK v4 (v3 now legacy) and OTel ingestion at `/api/public/otel`, OTLP over
+HTTP/JSON and HTTP/protobuf with Basic auth, no gRPC. The constraint is real and
+it is gone.
+
+**The module keeps the hand-rolled client anyway, for a different reason.** It
+records **inline**; the SDK and every OTel exporter batch in a background
+processor by default. This card exists because untraced calls are evaluation
+sample that cannot be recovered afterwards, and spans still sitting in a batch
+queue when a container restarts are exactly that. The throughput the batching
+buys is not needed: recording inline was measured at **48–165 ms** per call
+against completions that take seconds. Zero `llm.trace_failed` events across 37
+containers in 24 hours.
+
+What would reopen it is written into the module: a second OTel backend, the
+SDK's auto-instrumentation of libraries the firm does not call, or the client
+growing past the point where maintaining it costs more than the durability.
+
+**One stale claim was load-bearing enough to check rather than just fix.**
+`DEFAULT_TIMEOUT_SECONDS` justified its 5 seconds as *"a same-host POST"*, which
+stopped being true when the local container went away — a 5-second ceiling on a
+localhost POST is generous, and on an internet round trip it might not be. It is:
+five POSTs from the tech-watcher container to `us.cloud.langfuse.com` returned in
+48–165 ms. The number survived the move on merit rather than by luck, and the
+docstring now says which.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.
