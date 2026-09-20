@@ -5,7 +5,8 @@ capability gaps: the Hypothesis Generator refused a paper for want of market
 capitalisation, and no share-count column existed anywhere in the firm.
 
 **Where the data comes from.** SEC XBRL `companyconcept`, which serves the full
-reported history of one concept for one registrant in a single request:
+reported history of one concept for one registrant in a single request, with
+`companyfacts` as a fallback for the registrants it answers empty for:
 
     https://data.sec.gov/api/xbrl/companyconcept/CIK0000320193/dei/EntityCommonStockSharesOutstanding.json
 
@@ -40,7 +41,9 @@ from shrap.market_data.shares import (
     CONCEPT_CHAIN,
     SharesRow,
     company_concept_url,
+    company_facts_url,
     parse_company_concept,
+    parse_company_facts,
 )
 from shrap.market_data.shares_store import PostgresSharesStore
 
@@ -132,7 +135,40 @@ async def fetch_shares_for_ticker(
         rows = parse_company_concept(response.json(), ticker=ticker, cik=cik)
         if rows:
             return rows
-    return []
+
+    # **The concept chain came back empty; companyfacts may still have it.**
+    # Measured 2026-09-19: PYPL's `companyconcept` answers 200 with
+    # `{"units": {"shares": []}}` for a concept that `companyfacts` holds 44
+    # rows of. The chain above cannot tell that apart from a registrant that
+    # genuinely does not tag the concept, because both produce no rows.
+    #
+    # Tried last rather than first because the two endpoints agree exactly where
+    # both have data (AAPL 70/70, MSFT 68/68, NVDA 69/69) and a companyfacts
+    # payload is megabytes against a concept response's kilobytes. Only the
+    # names that would otherwise be recorded as empty pay for it.
+    response = await http.get(
+        company_facts_url(cik),
+        params={},
+        headers={"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"},
+        timeout=timeout,
+    )
+    if response.status_code != 200:
+        log.debug(
+            "market_data_shares_backfill.company_facts_miss",
+            ticker=ticker,
+            cik=cik,
+            status=response.status_code,
+        )
+        return []
+    rows = parse_company_facts(response.json(), ticker=ticker, cik=cik)
+    if rows:
+        log.info(
+            "market_data_shares_backfill.recovered_from_company_facts",
+            ticker=ticker,
+            cik=cik,
+            rows=len(rows),
+        )
+    return rows
 
 
 async def load_ticker_cik_map(http: Any, *, user_agent: str, timeout: float) -> dict[str, str]:

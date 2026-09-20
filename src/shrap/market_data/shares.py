@@ -68,6 +68,19 @@ CONCEPT_CHAIN: tuple[tuple[str, str], ...] = (
 
 COMPANY_CONCEPT_BASE = "https://data.sec.gov/api/xbrl/companyconcept"
 
+# **The same facts, from an endpoint that actually has them.** Measured
+# 2026-09-19: for PYPL (CIK 1633917), `companyconcept` returns HTTP 200 with
+# `{"units": {"shares": []}}` — the concept exists and carries nothing — while
+# `companyfacts` for the same registrant and the same concept holds **44 rows**,
+# with the identical end/val/filed/form fields. SEC serves the two endpoints
+# inconsistently and only one of them is complete.
+#
+# It is a fallback rather than a replacement because the endpoints agree exactly
+# where both have data: AAPL 70/70, MSFT 68/68, NVDA 69/69. Nothing is gained by
+# changing the path for the thirty-five names that already work, and the
+# companyfacts payload is megabytes where a concept response is kilobytes.
+COMPANY_FACTS_BASE = "https://data.sec.gov/api/xbrl/companyfacts"
+
 SOURCE_EDGAR_XBRL = "edgar-xbrl"
 
 
@@ -83,6 +96,17 @@ def company_concept_url(
 
     digits = "".join(ch for ch in str(cik) if ch.isdigit()).lstrip("0")
     return f"{COMPANY_CONCEPT_BASE}/CIK{digits.zfill(10)}/{taxonomy}/{concept}.json"
+
+
+def company_facts_url(cik: str) -> str:
+    """Every XBRL fact SEC holds for one registrant, in one response.
+
+    Same ten-digit zero padding as :func:`company_concept_url`, for the same
+    reason.
+    """
+
+    digits = "".join(ch for ch in str(cik) if ch.isdigit()).lstrip("0")
+    return f"{COMPANY_FACTS_BASE}/CIK{digits.zfill(10)}.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +155,37 @@ def parse_company_concept(
     # Stable order: oldest filing first, so an upsert replays history forwards.
     rows.sort(key=lambda r: (r.filed_at, r.as_of))
     return rows
+
+
+def parse_company_facts(
+    payload: Mapping[str, object],
+    *,
+    ticker: str,
+    cik: str,
+    chain: tuple[tuple[str, str], ...] = CONCEPT_CHAIN,
+) -> list[SharesRow]:
+    """The same share counts, dug out of a ``companyfacts`` response.
+
+    The payload nests one concept response per concept —
+    ``{"facts": {"dei": {"EntityCommonStockSharesOutstanding": {"units": ...}}}}``
+    — so each node is exactly what :func:`parse_company_concept` already parses,
+    and the same ``chain`` is walked in the same order for the same reason.
+    """
+
+    facts = payload.get("facts")
+    if not isinstance(facts, Mapping):
+        return []
+    for taxonomy, concept in chain:
+        taxonomy_node = facts.get(taxonomy)
+        if not isinstance(taxonomy_node, Mapping):
+            continue
+        concept_node = taxonomy_node.get(concept)
+        if not isinstance(concept_node, Mapping):
+            continue
+        rows = parse_company_concept(concept_node, ticker=ticker, cik=cik)
+        if rows:
+            return rows
+    return []
 
 
 def _row_from_entry(
@@ -204,7 +259,9 @@ __all__ = [
     "SOURCE_EDGAR_XBRL",
     "SharesRow",
     "company_concept_url",
+    "company_facts_url",
     "market_cap",
     "parse_company_concept",
+    "parse_company_facts",
     "shares_as_of",
 ]
