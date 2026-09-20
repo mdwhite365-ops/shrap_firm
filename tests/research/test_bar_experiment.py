@@ -28,8 +28,10 @@ from shrap.research.bar_experiment import (
     CONTROL_ITEM_IDS,
     HARD_SOURCES,
     MAX_CONSECUTIVE_ERRORS,
+    QUOTA_CHECK_MAX,
     BarCall,
     ExperimentReport,
+    QuotaDecision,
     all_bars,
     bars_by_key,
     cross_bar_agreement,
@@ -465,15 +467,19 @@ class _ReplayConn:
         corpus: list[dict[str, Any]],
         replay_ids: list[str],
         error_ids: list[str] | None = None,
+        scored_ids: list[str] | None = None,
     ) -> None:
         self._corpus = corpus
         self._replay_ids = replay_ids
         self._error_ids = error_ids or []
+        self._scored_ids = scored_ids or []
         self.queries: list[str] = []
 
     async def fetch(self, sql: str, *args: object) -> list[dict[str, Any]]:
         self.queries.append(sql)
         if "bar_experiment_results" in sql:
+            if "error IS NULL" in sql:
+                return [{"item_id": i} for i in self._scored_ids]
             ids = self._error_ids if "error IS NOT NULL" in sql else self._replay_ids
             return [{"item_id": i} for i in ids]
         return self._corpus
@@ -719,8 +725,8 @@ async def test_a_long_bar_rechecks_the_allowance_mid_flight() -> None:
     bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
     items = [_item(f"i{n}") for n in range(30)]
 
-    async def spent_after_the_first_check() -> str | None:
-        return "session 100.0% used"
+    async def spent_after_the_first_check() -> QuotaDecision:
+        return QuotaDecision("session 100.0% used")
 
     calls = await run_bar(
         bar,
@@ -742,8 +748,8 @@ async def test_the_items_behind_a_quota_stop_are_unwritten() -> None:
     bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
     items = [_item(f"i{n}") for n in range(30)]
 
-    async def spent() -> str | None:
-        return "session 100.0% used"
+    async def spent() -> QuotaDecision:
+        return QuotaDecision("session 100.0% used")
 
     calls = await run_bar(
         bar, FakeClient(), items, "local-classification", quota_check=spent, quota_check_every=10
@@ -758,10 +764,10 @@ async def test_a_healthy_allowance_never_interrupts_a_bar() -> None:
     items = [_item(f"i{n}") for n in range(30)]
     checks = 0
 
-    async def healthy() -> str | None:
+    async def healthy() -> QuotaDecision:
         nonlocal checks
         checks += 1
-        return None
+        return QuotaDecision(None, next_check_after=10)
 
     calls = await run_bar(
         bar, FakeClient(), items, "local-classification", quota_check=healthy, quota_check_every=10
@@ -999,3 +1005,89 @@ async def test_a_genuinely_absent_replayed_item_still_warns() -> None:
         await load_corpus(pool, None, "01OLD", None, None)
 
     assert "1 of 2 replayed items are no longer in the corpus" in out.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Finishing a run the quota guard stopped cleanly
+# ---------------------------------------------------------------------------
+
+
+async def test_resume_plus_item_set_picks_up_items_that_were_never_attempted() -> None:
+    """The guard stops cleanly and writes nothing for the items behind it —
+    "never attempted" is not "failed" — so an errored-rows query cannot see them.
+    On 2026-09-20 that left 175 of 425 EDGAR items invisible to `--resume-run`."""
+
+    corpus = [_corpus_row(f"edgar:{n}", "sec-edgar", document_text="body") for n in range(5)]
+    pool = _ReplayPool(
+        _ReplayConn(
+            corpus,
+            replay_ids=[f"edgar:{n}" for n in range(5)],
+            scored_ids=["edgar:0", "edgar:1"],
+        )
+    )
+
+    items = await load_corpus(pool, None, "01SRC", "01PARTIAL")
+
+    assert sorted(i.item_id for i in items) == ["edgar:2", "edgar:3", "edgar:4"]
+
+
+async def test_a_run_that_already_covers_the_set_is_an_error_not_an_empty_run() -> None:
+    corpus = [_corpus_row("edgar:1", "sec-edgar")]
+    pool = _ReplayPool(_ReplayConn(corpus, replay_ids=["edgar:1"], scored_ids=["edgar:1"]))
+
+    with pytest.raises(SystemExit, match="already covers every item"):
+        await load_corpus(pool, None, "01SRC", "01DONE")
+
+
+# ---------------------------------------------------------------------------
+# The guard paces itself by what the run is observed to cost
+# ---------------------------------------------------------------------------
+
+
+async def test_a_costly_run_is_re_checked_often() -> None:
+    """A fixed stride crossed 89% -> 98.9% between two consecutive checks,
+    because 50 items was 9.5% of the window against a 10% reserve. The interval
+    must come from observed cost, not from a constant."""
+
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    asks = 0
+
+    async def expensive() -> QuotaDecision:
+        nonlocal asks
+        asks += 1
+        return QuotaDecision(None, next_check_after=5)
+
+    calls = await run_bar(
+        bar,
+        FakeClient(),
+        [_item(f"i{n}") for n in range(60)],
+        "local-classification",
+        quota_check=expensive,
+        quota_check_every=5,
+    )
+
+    assert len(calls) == 60
+    assert asks >= 10, f"only {asks} meter reads across a costly 60-item bar"
+
+
+async def test_a_cheap_run_is_not_re_checked_every_few_items() -> None:
+    """The meter read is an HTTP round trip; it must not dominate a cheap run."""
+
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    asks = 0
+
+    async def cheap() -> QuotaDecision:
+        nonlocal asks
+        asks += 1
+        return QuotaDecision(None, next_check_after=QUOTA_CHECK_MAX)
+
+    await run_bar(
+        bar,
+        FakeClient(),
+        [_item(f"i{n}") for n in range(300)],
+        "local-classification",
+        quota_check=cheap,
+        quota_check_every=QUOTA_CHECK_MAX,
+    )
+
+    assert asks <= 3, f"{asks} meter reads for 300 cheap items"

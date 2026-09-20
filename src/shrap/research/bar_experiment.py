@@ -93,11 +93,48 @@ MAX_CONSECUTIVE_ERRORS = 5
 # minutes at the measured rate — often enough that a bar cannot drain the window
 # between checks, rare enough that the check itself is noise against the
 # completions it guards.
-QUOTA_CHECK_EVERY = 50
+# **A fixed stride only works if you know the per-item price in advance, and on
+# 2026-09-20 that assumption was disproved twice in one night.** The same code
+# cost 0.089% of a session window per item scoring summaries and 0.188% scoring
+# filings — because the window is cost-weighted and the filing prompts were 2.5x
+# larger. At 0.188%, a stride of 50 items is ~9.5% of the window: the check
+# interval was the same size as the 10% reserve it existed to protect. The guard
+# duly checked at item 200 (~89%, just under the line), did not check again until
+# item 250, and stopped at **98.9%** — having eaten the entire reserve between two
+# consecutive checks.
+#
+# So the interval is now derived from what the run is observed to cost. These are
+# only the bounds: never fewer than MIN items between meter reads (the read is an
+# HTTP round trip and should not dominate), never more than MAX (so a run cannot
+# coast unchecked on a stale estimate).
+QUOTA_CHECK_MIN = 10
+QUOTA_CHECK_MAX = 100
 
-# Returns a reason to stop, or None to keep going. Async because the only
-# implementation asks a remote meter.
-QuotaCheck = Callable[[], Awaitable[str | None]]
+# Aim to check at least twice more before the reserve would be reached. Halving
+# the headroom-implied stride is what turns "we will notice when we cross" into
+# "we will notice before we cross".
+QUOTA_CHECK_SAFETY = 0.5
+
+
+@dataclass(frozen=True, slots=True)
+class QuotaDecision:
+    """Whether to keep going, and when to ask again.
+
+    ``next_check_after`` lets the caller pace the guard from the cost it has
+    actually observed, which is the only place that number is knowable — the
+    price of an item depends on the prompt, and the prompt depends on the source.
+    """
+
+    stop_reason: str | None
+    next_check_after: int = QUOTA_CHECK_MIN
+
+    @property
+    def should_stop(self) -> bool:
+        return self.stop_reason is not None
+
+
+# Returns a decision. Async because the only implementation asks a remote meter.
+QuotaCheck = Callable[[], Awaitable[QuotaDecision]]
 
 HARD_SOURCES: frozenset[str] = frozenset(
     {"sec-edgar", "usaspending", "federal-register", "doe-newsroom"}
@@ -429,7 +466,7 @@ async def run_bar(
     *,
     max_consecutive_errors: int = MAX_CONSECUTIVE_ERRORS,
     quota_check: QuotaCheck | None = None,
-    quota_check_every: int = QUOTA_CHECK_EVERY,
+    quota_check_every: int = QUOTA_CHECK_MIN,
 ) -> list[BarCall]:
     """Score every item under one bar. A failed call is recorded, not raised.
 
@@ -461,18 +498,21 @@ async def run_bar(
 
     calls: list[BarCall] = []
     consecutive_errors = 0
+    next_check_at = quota_check_every
     for index, item in enumerate(items):
-        if quota_check is not None and index and index % quota_check_every == 0:
-            stop_reason = await quota_check()
-            if stop_reason is not None:
+        if quota_check is not None and index >= next_check_at:
+            decision = await quota_check()
+            if decision.should_stop:
                 log.error(
                     "bar_experiment.bar_stopped_on_quota",
                     bar=bar.key,
                     scored=len(calls),
                     unattempted=len(items) - len(calls),
-                    reason=stop_reason,
+                    reason=decision.stop_reason,
                 )
                 break
+            # Paced by the caller from observed cost, never by a fixed stride.
+            next_check_at = index + max(1, decision.next_check_after)
         started = time.perf_counter()
         try:
             result = await client.complete(
@@ -779,13 +819,16 @@ __all__ = [
     "CONTROL_ITEM_IDS",
     "HARD_SOURCES",
     "MAX_CONSECUTIVE_ERRORS",
-    "QUOTA_CHECK_EVERY",
+    "QUOTA_CHECK_MAX",
+    "QUOTA_CHECK_MIN",
+    "QUOTA_CHECK_SAFETY",
     "Bar",
     "BarCall",
     "BarSummary",
     "BarVerdict",
     "ExperimentReport",
     "QuotaCheck",
+    "QuotaDecision",
     "SignalRef",
     "all_bars",
     "bars_by_key",
