@@ -61,9 +61,11 @@ class _FakeHTTP:
     def __init__(self, body: str) -> None:
         self.body = body
         self.params: dict[str, str] = {}
+        self.queries: list[str] = []
 
     async def get(self, url: str, *, params: dict[str, str], **kwargs: Any) -> _Response:
         self.params = params
+        self.queries.append(params["search_query"])
         return _Response(self.body)
 
 
@@ -185,9 +187,15 @@ async def test_the_two_sources_query_disjoint_categories() -> None:
 
     await ArxivSource(DEFAULT_QFIN_CATEGORIES, name=SOURCE_ARXIV_QFIN).fetch(http)  # type: ignore[arg-type]
 
-    assert http.params["search_query"] == (
-        "cat:q-fin.PM OR cat:q-fin.ST OR cat:q-fin.TR OR cat:q-fin.GN"
-    )
+    # One request per category since #251 — a single OR query meant one refused
+    # category took the healthy ones down with it.
+    assert http.queries == [
+        "cat:q-fin.PM",
+        "cat:q-fin.ST",
+        "cat:q-fin.TR",
+        "cat:q-fin.GN",
+    ]
+    assert not set(DEFAULT_QFIN_CATEGORIES) & {"cs.AI", "cs.LG", "cond-mat", "q-bio.NC"}
 
 
 # --- the two filters partition the pool ---------------------------------------

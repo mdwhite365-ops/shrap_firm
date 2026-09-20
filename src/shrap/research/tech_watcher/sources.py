@@ -6,7 +6,11 @@ Five source classes, none requiring credentials:
   requires a descriptive ``User-Agent`` with contact info; the value comes
   from settings. Item identity is the accession number.
 - **arXiv** API query over the spec's categories (cs.AI, cs.LG, cond-mat,
-  q-bio.NC), newest first. Item identity is the arXiv id (with version).
+  q-bio.NC), newest first, **one request per category**. Item identity is the
+  arXiv id (with version), deduped across categories. One query per category
+  because arXiv refuses some of them outright with HTTP 406 — measured
+  2026-09-19 — and a single OR query let two refused categories take the two
+  healthy ones down with them for 46 consecutive passes.
 - **USASpending** award search (POST JSON API) filtered to configured
   awarding agencies above a dollar threshold, over a lookback window.
   Item identity is the award's ``generated_internal_id``. This is the
@@ -38,6 +42,7 @@ import html
 import json
 import random
 import re
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -128,19 +133,23 @@ class SourceError(Exception):
 # a ban.
 RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
-# **arXiv answers 406 when it means 429, and this is measured, not assumed.**
-# On 2026-09-19 the identical request succeeded 8/8 in one window and failed
-# 6/6 twenty minutes later, from the same host and address, with an empty body
-# served by arXiv's Fastly edge (`via: varnish`, no `server: Google Frontend`
-# header — the origin is never reached). Ruled out by experiment: the URL, the
-# user-agent, container-vs-host, the public IP, HTTP/1.1-vs-2, sync-vs-async
-# and the query shape. It correlates with recent request volume and nothing
-# else I could find.
+# **arXiv answers 406 when it means "you are throttled", and it is the edge
+# talking, not the API.** Measured on 2026-09-19: empty body, served by arXiv's
+# Fastly edge (`via: varnish`, no `server: Google Frontend` header, so the
+# origin is never reached), and `x-cache: MISS` on every one.
+#
+# The behaviour that took longest to see: **a throttled host gets 406 on every
+# cache MISS while cache HITS keep returning 200.** That is why this looked
+# random for an hour — repeating one query appeared to "work" because Fastly was
+# answering it, while any fresh query failed. Ruled out along the way, all by
+# experiment: the URL, the user-agent, container-vs-host, the public IP,
+# HTTP/1.1-vs-2, sync-vs-async, the category set and the query shape.
 #
 # **A retry does not rescue a sustained one** — 10 attempts over 60 seconds all
-# returned 406 during the outage. This entry is for the brief version; the
-# sustained version is caught by the per-source freshness target in
-# `shrap.operations.staleness`, not here.
+# returned 406, and so did all four header combinations once the host was
+# throttled. 406 is listed here for the brief version only. The sustained
+# version is answered by not getting throttled (see ARXIV_MIN_INTERVAL_SECONDS)
+# and by the per-source freshness target in `shrap.operations.staleness`.
 ARXIV_RETRYABLE_STATUSES = RETRYABLE_STATUSES | {406}
 
 DEFAULT_RETRY_ATTEMPTS = 3
@@ -182,6 +191,77 @@ class RetryPolicy:
 
 DEFAULT_RETRY = RetryPolicy()
 ARXIV_RETRY = RetryPolicy(statuses=ARXIV_RETRYABLE_STATUSES)
+
+
+# **arXiv's terms of use, which this module was violating on every pass.**
+#
+#   "make no more than one request every three seconds, and limit requests to
+#   a single connection at a time"
+#   — https://info.arxiv.org/help/api/tou.html
+#
+# The ingest pass registers two ArxivSource instances (`arxiv` and
+# `arxiv-qfin`) and fetches them back to back in a loop with no delay: two
+# requests inside 100ms, twice an hour, for months. That is a documented
+# violation, and arXiv's answer to a throttled host is to serve **406 with an
+# empty body on every cache miss** — which is exactly the shape of the
+# 2026-09-17 outage, and why waiting inside a pass never cleared it.
+ARXIV_MIN_INTERVAL_SECONDS = 3.0
+
+# arXiv's edge is reported to refuse requests that do not name a format or a
+# client. Both are cheap, both are good practice, and neither can be verified
+# from a host that is already throttled — see the runbook.
+ARXIV_ACCEPT = "application/atom+xml"
+DEFAULT_ARXIV_USER_AGENT = "Shrap Research (mdwhite365@gmail.com)"
+
+
+class RequestThrottle:
+    """A minimum interval between requests, shared across source instances.
+
+    Per process and in-memory, which is the right scope: the Tech Watcher is a
+    single long-lived service and it is the only thing here that talks to
+    arXiv. A distributed limiter would be machinery for a problem the firm does
+    not have.
+
+    The clock is injectable so the tests can assert the wait without taking it.
+    """
+
+    def __init__(
+        self,
+        min_interval_seconds: float,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        self._min_interval = min_interval_seconds
+        self._clock = clock
+        self._sleep = sleep
+        self._last: float | None = None
+        # Serialises callers, which is the "single connection at a time" half
+        # of the terms. Without it two concurrent sources would both read the
+        # same `_last` and both decide they were clear to go.
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> float:
+        """Wait until the next request is allowed. Returns the seconds waited."""
+
+        async with self._lock:
+            now = self._clock()
+            waited = 0.0
+            if self._last is not None:
+                remaining = self._min_interval - (now - self._last)
+                if remaining > 0:
+                    await self._sleep(remaining)
+                    waited = remaining
+            self._last = self._clock()
+            return waited
+
+
+ARXIV_THROTTLE = RequestThrottle(ARXIV_MIN_INTERVAL_SECONDS)
+"""Shared by every :class:`ArxivSource`, because the limit is per *host*.
+
+Giving each source its own throttle would let two instances issue simultaneous
+requests and satisfy nothing — which is the bug as it stands.
+"""
 
 
 async def _send_with_retry(
@@ -373,40 +453,78 @@ class ArxivSource:
         max_results: int = 100,
         name: str = SOURCE_ARXIV,
         retry: RetryPolicy = ARXIV_RETRY,
+        throttle: RequestThrottle = ARXIV_THROTTLE,
+        user_agent: str = DEFAULT_ARXIV_USER_AGENT,
     ) -> None:
         self._categories = categories
         self._max_results = max_results
         self._name = name
         self._retry = retry
+        self._throttle = throttle
+        self._headers = {"User-Agent": user_agent, "Accept": ARXIV_ACCEPT}
 
     @property
     def name(self) -> str:
         return self._name
 
     async def fetch(self, http: HTTPClient, timeout: float = 30.0) -> list[RawSourceItem]:
-        query = " OR ".join(f"cat:{c}" for c in self._categories)
-        response = await _send_with_retry(
-            lambda: http.get(
+        items: list[RawSourceItem] = []
+        seen: set[str] = set()
+        failures: list[str] = []
+
+        for category in self._categories:
+            try:
+                response = await self._fetch_category(category, http, timeout)
+            except SourceError as e:
+                # **One refused category must not cost the whole feed.** Measured
+                # 2026-09-19, three clean rounds, 8s apart: `cs.AI` and `cs.LG`
+                # return 200 while `q-bio.NC`, `cond-mat` and
+                # `cond-mat.stat-mech` return 406 every time. This source asked
+                # for all four in one OR query, so two refused categories took
+                # `cs.AI` and `cs.LG` down with them — 46 consecutive passes
+                # ingesting nothing from a feed that was two-thirds healthy.
+                failures.append(f"{category}: {e}")
+                log.warning(
+                    "tech_watcher.arxiv_category_failed",
+                    source=self._name,
+                    category=category,
+                    error=str(e)[:200],
+                )
+                continue
+            for entry in _parse_feed(response.text, f"{self._name}[{category}]"):
+                item = self._entry_to_item(entry)
+                if item is not None and item.item_id not in seen:
+                    seen.add(item.item_id)
+                    items.append(item)
+
+        # Only a total failure is a source failure. A partial one is logged and
+        # the surviving categories are still ingested, because half a feed is
+        # worth strictly more than none of it.
+        if failures and not items:
+            raise SourceError(f"{self._name}: every category failed ({'; '.join(failures)})")
+        return items
+
+    async def _fetch_category(
+        self, category: str, http: HTTPClient, timeout: float
+    ) -> HTTPResponse:
+        async def send() -> HTTPResponse:
+            # Inside `send`, so it applies to retries too. A retry that ignored
+            # the limit would be the fastest way back into the throttle.
+            await self._throttle.acquire()
+            return await http.get(
                 ARXIV_QUERY_URL,
                 params={
-                    "search_query": query,
+                    "search_query": f"cat:{category}",
                     "sortBy": "submittedDate",
                     "sortOrder": "descending",
                     "start": "0",
                     "max_results": str(self._max_results),
                 },
-                headers={},
+                headers=self._headers,
                 timeout=timeout,
-            ),
-            context=self._name,
-            policy=self._retry,
-        )
-        items: list[RawSourceItem] = []
-        for entry in _parse_feed(response.text, "arxiv"):
-            item = self._entry_to_item(entry)
-            if item is not None:
-                items.append(item)
-        return items
+            )
+
+        return await _send_with_retry(send, context=f"{self._name}[{category}]", policy=self._retry)
 
     def _entry_to_item(self, entry: ET.Element) -> RawSourceItem | None:
         entry_id = _text(entry, "id")

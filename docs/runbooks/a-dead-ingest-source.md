@@ -78,29 +78,81 @@ ssh dell 'docker logs --since 6h shrap_tech_watcher 2>&1 | grep source_failed'
 
 ## About the arXiv 406 specifically
 
-**I could not determine the cause, and the fix does not depend on knowing it.**
+Two separate things were wrong, and they took a long time to tell apart because
+both present as the same empty-bodied 406 from arXiv's Fastly edge (`via:
+varnish`, no `server: Google Frontend`, `x-cache: MISS` — the origin is never
+reached).
 
-Ruled out by experiment on 2026-09-19: the URL, the user-agent, container
-vs. host, the public IP, HTTP/1.1 vs. HTTP/2, sync vs. async clients, and the
-query shape. The identical request succeeded 8/8 in one window and failed 6/6
-twenty minutes later from the same address. The 406 carries an empty body and is
-served by arXiv's Fastly edge (`via: varnish`, and no `server: Google Frontend`
-header), so the origin is never reached. It correlates with recent request
-volume and nothing else I could isolate.
+### 1. Two of the four categories are refused outright
 
-The sources now treat 406 as transient **for arXiv only** and retry it. Two
-honest caveats:
+This is the one that killed the `arxiv` feed, and it is **deterministic**.
+Measured three clean rounds, eight seconds apart, identical every time:
 
-- **Retry does not rescue a sustained outage.** Ten attempts over sixty seconds
-  all returned 406 during this one. Retry is for the brief version — EDGAR, the
-  DOE newsroom and the Federal Register each blipped at least once in the same
-  48 hours, and none of those needed to cost an hour.
-- **406 is retryable only for arXiv.** Everywhere else it is a genuine
-  content-negotiation failure and retrying it would turn one wrong request into
-  three. `403` is never retried anywhere: SEC bans clients that keep knocking.
+```
+cs.AI               200
+cs.LG               200
+q-bio.NC            406
+cond-mat            406
+cond-mat.stat-mech  406
+```
 
-So the real mitigation here is **detection, not prevention**. The firm cannot
-stop arXiv returning 406. It can stop losing two days to it.
+The source asked for `cat:cs.AI OR cat:cs.LG OR cat:cond-mat OR cat:q-bio.NC` in
+a **single query**, so two refused categories took the two healthy ones down with
+them. Forty-six consecutive passes ingested nothing from a feed that was half
+fine.
+
+**Fixed by querying one category at a time**, tolerating individual failures and
+failing the source only if *every* category fails. Verified against live arXiv:
+
+```
+tech_watcher.arxiv_category_failed  category=cond-mat   source=arxiv
+tech_watcher.arxiv_category_failed  category=q-bio.NC   source=arxiv
+RESULT: NEW arxiv source OK, items = 182
+```
+
+**182 items where the old code returned zero.** Cross-listed papers are deduped
+by `item_id` across categories.
+
+Why arXiv refuses those two is not established. `cond-mat` is an archive rather
+than a category, which would explain that one; `q-bio.NC` looks valid and is
+refused anyway. It does not matter much: the design now survives any category
+being refused, including ones that are fine today.
+
+### 2. Rate limiting, which is what hit `arxiv-qfin`
+
+arXiv's [terms of use](https://info.arxiv.org/help/api/tou.html):
+
+> make no more than one request every three seconds, and limit requests to a
+> single connection at a time
+
+The pass registers **two** `ArxivSource` instances and fetched them back to back
+with no delay. A throttled host gets 406 on every cache **miss** while cache
+**hits** keep returning 200 — which is why this looked random for an hour:
+repeating one query appeared to prove the client was fine, because Fastly was
+answering it.
+
+Fixed with a **shared** 3-second throttle across both arXiv sources — shared
+because the limit is per host, so a per-instance throttle would satisfy nothing.
+It applies inside the retry too. Plus an explicit `Accept: application/atom+xml`
+and a descriptive `User-Agent`, both widely reported as necessary and cheap
+either way.
+
+`arxiv-qfin` recovered on its own at 22:48 on 2026-09-19 and ingested 4 new
+papers — its first in two days — which is consistent with a throttle that
+expired.
+
+### What is not established
+
+- **Whether the throttle fix prevents recurrence.** It could not be tested
+  against a throttled host, and my own diagnostic probing on 2026-09-19 was
+  heavy enough to keep re-tripping the throttle, so live probing from this
+  address is contaminated evidence for a while. **Do not diagnose an external
+  API by hammering it from the production IP.**
+- **Why `cond-mat` and `q-bio.NC` are refused.** The feed no longer depends on
+  knowing.
+
+The per-source freshness check is what answers both over time: if
+`research.ingest_cursors[arxiv]` goes green and stays green, this worked.
 
 ## Adding a per-source check for something else
 

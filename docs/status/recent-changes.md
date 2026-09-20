@@ -1254,13 +1254,32 @@ items table, because `raw_source_items` upserts `ON CONFLICT DO NOTHING` — its
 `fetched_at` moves only on genuinely new items, and USASpending has legitimately
 inserted nothing since 2026-08-27 while working perfectly.
 
-**The arXiv 406 itself is not understood and the fix does not depend on it.**
-Ruled out by experiment: URL, user-agent, container-vs-host, public IP,
-HTTP/1.1-vs-2, sync-vs-async, query shape. The identical request succeeded 8/8
-in one window and failed 6/6 twenty minutes later. Sources now retry transient
-statuses (406 for arXiv only; never 403, which is how a client earns an SEC
-ban), but **retry does not rescue a sustained outage** — ten attempts over sixty
-seconds all returned 406. The mitigation is detection, not prevention.
+**Two separate faults, both presenting as the same empty-bodied 406 from arXiv's
+Fastly edge.**
+
+**Two of the four categories are refused outright**, deterministically —
+measured three clean rounds, eight seconds apart, identical every time:
+`cs.AI` 200, `cs.LG` 200, `q-bio.NC` 406, `cond-mat` 406, `cond-mat.stat-mech`
+406. The source asked for all four in **one OR query**, so two refused
+categories took the two healthy ones down with them. Now one request per
+category, tolerating individual failures and failing the source only if every
+category fails. **Verified against live arXiv: 182 items where the old code
+returned zero.**
+
+**And we were violating arXiv's published rate limit on every pass.** Their
+terms ask for "no more than one request every three seconds, and… a single
+connection at a time"; the pass registers two `ArxivSource` instances and
+fetched them back to back with no delay. A throttled host gets 406 on every
+cache *miss* while cache *hits* keep returning 200 — which is why this looked
+random for an hour. Now a shared 3-second throttle (the limit is per host, so a
+per-instance one would satisfy nothing), applied inside the retry too, plus an
+explicit `Accept` and a descriptive `User-Agent`. `arxiv-qfin` recovered on its
+own at 22:48 and took 4 new papers, consistent with a throttle expiring.
+
+**Not established:** whether the throttle fix prevents recurrence — it could not
+be tested against a throttled host, and the diagnostic probing was itself heavy
+enough to keep re-tripping it. **Do not diagnose an external API by hammering it
+from the production IP.**
 
 See `docs/runbooks/a-dead-ingest-source.md`.
 
