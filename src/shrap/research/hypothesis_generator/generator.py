@@ -64,6 +64,7 @@ from shrap.research.hypothesis_generator.proposer import (
     propose,
 )
 from shrap.research.hypothesis_generator.record import build_record
+from shrap.research.hypothesis_generator.retrieval import CorpusRetriever, related_or_nothing
 from shrap.research.hypothesis_generator.store import GapStore, render_queue
 from shrap.research.hypothesis_generator.validate import (
     REASON_UNPARSEABLE,
@@ -215,6 +216,7 @@ class HypothesisGenerator:
         gaps: GapStore,
         tier: str = TIER_LOCAL_HEAVY,
         dry_run: bool = False,
+        retriever: CorpusRetriever | None = None,
     ) -> None:
         self._llm = llm
         self._registry = registry
@@ -222,6 +224,9 @@ class HypothesisGenerator:
         self._gaps = gaps
         self._tier = tier
         self._dry_run = dry_run
+        self._retriever = retriever
+        """Optional. ``None`` is the behaviour this agent had before #259 —
+        one abstract, no context — and every retrieval failure degrades to it."""
 
     async def run(self, items: Sequence[LiteratureItem]) -> GenerationReport:
         existing = await self._registry.list_all()
@@ -248,7 +253,10 @@ class HypothesisGenerator:
         return GenerationReport(outcomes=tuple(outcomes), queue=queue, dry_run=self._dry_run)
 
     async def _one(self, item: LiteratureItem, corpus: _Corpus) -> ItemOutcome:
-        raw = await propose(self._llm, item, self._tier)
+        # Queried on title + abstract rather than title alone: the index is
+        # chunked prose and a five-word title is a thin query against it.
+        related = await related_or_nothing(self._retriever, f"{item.title}\n{item.abstract}")
+        raw = await propose(self._llm, item, self._tier, related=related)
         if raw is None:
             return self._refused(item, Refusal(REASON_UNPARSEABLE, "model response unusable"))
 
