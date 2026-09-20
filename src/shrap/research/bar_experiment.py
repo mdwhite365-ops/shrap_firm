@@ -133,8 +133,16 @@ class QuotaDecision:
         return self.stop_reason is not None
 
 
-# Returns a decision. Async because the only implementation asks a remote meter.
-QuotaCheck = Callable[[], Awaitable[QuotaDecision]]
+# Takes the number of items scored so far, returns a decision.
+#
+# **The count is a parameter because the caller cannot see it.** #267 had the
+# CLI read `len(calls)` from the enclosing scope, but `calls` is only extended
+# after `run_bar` returns — so during a bar it never moved, every interval
+# measured zero items, and the "paced" guard silently fell back to its maximum
+# stride on every check. It was a fixed 100-item interval wearing the costume of
+# an adaptive one, which at 0.19% per item is 19% of a window against a 10%
+# reserve. Passing the count makes the measurement impossible to get wrong.
+QuotaCheck = Callable[[int], Awaitable[QuotaDecision]]
 
 HARD_SOURCES: frozenset[str] = frozenset(
     {"sec-edgar", "usaspending", "federal-register", "doe-newsroom"}
@@ -501,7 +509,7 @@ async def run_bar(
     next_check_at = quota_check_every
     for index, item in enumerate(items):
         if quota_check is not None and index >= next_check_at:
-            decision = await quota_check()
+            decision = await quota_check(len(calls))
             if decision.should_stop:
                 log.error(
                     "bar_experiment.bar_stopped_on_quota",
