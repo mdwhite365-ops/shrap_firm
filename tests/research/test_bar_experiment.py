@@ -37,6 +37,7 @@ from shrap.research.bar_experiment import (
     stratified_limit,
     summarize,
 )
+from shrap.research.bar_experiment_cli import load_corpus
 from shrap.research.tech_watcher.archetypes import ARCHETYPES
 from shrap.research.tech_watcher.filter import FILTER_SYSTEM_PROMPT, UnfilteredItem
 
@@ -434,3 +435,96 @@ def test_a_scored_and_rejected_control_reads_differently_from_an_unseen_one() ->
     unseen = summarize(bar, [_call(bar.key, "unrelated", "arxiv", False, None)])
     assert unseen.controls_unseen == CONTROL_ITEM_IDS
     assert unseen.control_rejected == ()
+
+
+# ---------------------------------------------------------------------------
+# Replaying an earlier run's item set
+#
+# The 2026-07-31 control scored 599 items on `qwen3.5:397b`. The corpus is now
+# 21,231, so a fresh sample compared against that run varies the model AND the
+# corpus at once — the confound #247 exists to warn about. Replaying holds the
+# corpus fixed and leaves the model as the only difference.
+# ---------------------------------------------------------------------------
+
+
+class _ReplayConn:
+    def __init__(self, corpus: list[dict[str, Any]], replay_ids: list[str]) -> None:
+        self._corpus = corpus
+        self._replay_ids = replay_ids
+        self.queries: list[str] = []
+
+    async def fetch(self, sql: str, *args: object) -> list[dict[str, Any]]:
+        self.queries.append(sql)
+        if "bar_experiment_results" in sql:
+            return [{"item_id": i} for i in self._replay_ids]
+        return self._corpus
+
+
+class _ReplayPool:
+    def __init__(self, conn: _ReplayConn) -> None:
+        self.conn = conn
+
+    def acquire(self) -> Any:
+        conn = self.conn
+
+        class _Ctx:
+            async def __aenter__(self) -> _ReplayConn:
+                return conn
+
+            async def __aexit__(self, *exc: object) -> None:
+                return None
+
+        return _Ctx()
+
+
+def _corpus_row(item_id: str, source: str) -> dict[str, Any]:
+    return {
+        "item_id": item_id,
+        "source": source,
+        "kind": None,
+        "title": f"title for {item_id}",
+        "summary": "a summary",
+    }
+
+
+async def test_replay_selects_exactly_the_earlier_run_s_items() -> None:
+    corpus = [
+        _corpus_row("arxiv:1", "arxiv"),
+        _corpus_row("edgar:1", "sec-edgar"),
+        _corpus_row("edgar:2", "sec-edgar"),
+        _corpus_row("doe:1", "doe-newsroom"),
+    ]
+    pool = _ReplayPool(_ReplayConn(corpus, ["edgar:1", "doe:1"]))
+
+    items = await load_corpus(pool, None, "01OLDRUN")
+
+    assert sorted(i.item_id for i in items) == ["doe:1", "edgar:1"]
+
+
+async def test_replay_ignores_the_limit_rather_than_resampling() -> None:
+    """A stratified sample of a replayed set is not the replayed set."""
+
+    corpus = [_corpus_row(f"edgar:{n}", "sec-edgar") for n in range(10)]
+    pool = _ReplayPool(_ReplayConn(corpus, [f"edgar:{n}" for n in range(6)]))
+
+    items = await load_corpus(pool, 2, "01OLDRUN")
+
+    assert len(items) == 6
+
+
+async def test_replaying_a_run_with_no_results_is_an_error_not_an_empty_run() -> None:
+    """An empty corpus would otherwise produce a confident report over nothing."""
+
+    pool = _ReplayPool(_ReplayConn([_corpus_row("arxiv:1", "arxiv")], []))
+
+    with pytest.raises(SystemExit, match="no recorded results"):
+        await load_corpus(pool, None, "01MISSING")
+
+
+async def test_without_replay_the_corpus_is_unchanged() -> None:
+    corpus = [_corpus_row(f"edgar:{n}", "sec-edgar") for n in range(4)]
+    pool = _ReplayPool(_ReplayConn(corpus, []))
+
+    items = await load_corpus(pool, None, None)
+
+    assert len(items) == 4
