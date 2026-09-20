@@ -1,4 +1,4 @@
-.PHONY: install test lint fmt typecheck all deploy-drift doc-drift
+.PHONY: install test lint fmt typecheck all deploy-drift doc-drift changelog
 
 # `.[dev]` is tooling only and cannot collect the test suite: tests import agent
 # modules directly, so 13 files failed on a clean environment while a stale
@@ -33,3 +33,9 @@ deploy-drift:
 # #92-101, #129-175); this is the check that should catch the fourth.
 doc-drift:
 	./scripts/check-doc-drift.sh
+
+# Read this week's change entries in order. They live one-per-card in
+# docs/status/changes/ rather than appended to a shared file, because a shared
+# anchor made every pair of open PRs conflict (see that directory's README).
+changelog:
+	@./scripts/changelog.sh

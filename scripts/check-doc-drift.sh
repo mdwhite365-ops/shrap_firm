@@ -19,8 +19,12 @@ set -uo pipefail
 
 MAX_LAG="${DOC_DRIFT_MAX:-5}"
 
+# `docs/status/changes` is a DIRECTORY of one-file-per-card entries (#263). It
+# replaced `recent-changes.md`, which was frozen because appending to one shared
+# file made every pair of open PRs conflict. Listing the frozen file here would
+# fail this check forever, since its newest PR number can no longer move.
 DOCS=(
-  "docs/status/recent-changes.md"
+  "docs/status/changes"
   "docs/status/session-handoff.md"
   "docs/roadmap/implementation-timeline.md"
   "CLAUDE.md"
@@ -39,10 +43,12 @@ echo
 
 status=0
 for doc in "${DOCS[@]}"; do
-  [[ -f "${doc}" ]] || { printf '  %-46s MISSING\n' "${doc}"; status=1; continue; }
+  [[ -e "${doc}" ]] || { printf '  %-46s MISSING\n' "${doc}"; status=1; continue; }
 
-  # Highest PR number mentioned anywhere in the document.
-  doc_pr="$(grep -oE '#[0-9]{1,4}' "${doc}" | tr -d '#' | sort -n | tail -1)"
+  # Highest PR number mentioned anywhere in the document — or, for a directory,
+  # across every entry in it. `-r` reads both; `-h` suppresses filename prefixes
+  # so the numbers parse the same either way.
+  doc_pr="$(grep -rhoE '#[0-9]{1,4}' "${doc}" | tr -d '#' | sort -n | tail -1)"
   [[ -z "${doc_pr}" ]] && doc_pr=0
 
   lag=$(( head_pr - doc_pr ))

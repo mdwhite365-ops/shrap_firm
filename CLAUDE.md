@@ -125,6 +125,14 @@ dominant fold leaves a mean delta of **+0.0011** (#247,
 feeds *clears the promote floor* and is confounded by window — a live example
 of the error KI-036 exists to refuse.
 
+**Changelog entries are one file per card (#263).** Write yours as
+`docs/status/changes/<pr>-<slug>.md`; **never append to
+`docs/status/recent-changes.md`, which is frozen.** That file ended in a
+`## Security notes` section, so every card landed at the same anchor and any two
+open PRs conflicted — four resolution passes across #258, #260, #261 and #262 in
+one evening, each a merge whose only content was keeping both sections. Separate
+files cannot conflict. `make changelog` reads them in order.
+
 **Write the docs with the card, not at session end (Mike's ruling,
 2026-09-18).** This set went 16 PRs stale again during that session — the
 fourth occurrence after #72–80, #92–101 and #129–175.
