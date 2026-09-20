@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -39,7 +40,13 @@ from shrap.research.bar_experiment import (
     stratified_limit,
     summarize,
 )
-from shrap.research.bar_experiment_cli import INSERT_RESULT_SQL, load_corpus, render_plan
+from shrap.research.bar_experiment_cli import (
+    INSERT_RESULT_SQL,
+    INSERT_RUN_SQL,
+    build_report,
+    load_corpus,
+    render_plan,
+)
 from shrap.research.tech_watcher.archetypes import ARCHETYPES
 from shrap.research.tech_watcher.filter import FILTER_SYSTEM_PROMPT, UnfilteredItem
 
@@ -758,3 +765,91 @@ async def test_a_healthy_allowance_never_interrupts_a_bar() -> None:
 
     assert len(calls) == 30
     assert checks == 2, "polled at items 10 and 20, not before the first item"
+
+
+# ---------------------------------------------------------------------------
+# The run row must agree with the rows it summarises
+#
+# 2026-09-20: a resumed run scored all 407 outstanding items, persisted every
+# one, then died on a primary-key violation writing the run row — leaving the
+# results table correct and the summary claiming `1 admit, 407 errors`. #261
+# made the results insert upsert-safe and left this one a plain INSERT.
+# ---------------------------------------------------------------------------
+
+
+def test_a_resume_refreshes_the_run_row_rather_than_colliding_with_it() -> None:
+    assert "ON CONFLICT (run_id) DO UPDATE" in INSERT_RUN_SQL
+    assert "report_markdown = EXCLUDED.report_markdown" in INSERT_RUN_SQL
+
+
+def test_a_repair_never_moves_when_the_run_started() -> None:
+    """`finished_at` moves because the run really did finish later. `started_at`
+    is when it started and rewriting it would falsify the record."""
+
+    assert "started_at = EXCLUDED" not in INSERT_RUN_SQL
+    assert "finished_at = EXCLUDED.finished_at" in INSERT_RUN_SQL
+
+
+class _RunResultsConn:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+
+    async def fetch(self, sql: str, *args: object) -> list[dict[str, Any]]:
+        return self._rows
+
+
+def _result_row(
+    item_id: str, source: str, admitted: bool | None, error: str | None = None
+) -> dict[str, Any]:
+    return {
+        "bar": BAR_INCUMBENT,
+        "item_id": item_id,
+        "source": source,
+        "title": f"title {item_id}",
+        "admitted": admitted,
+        "label": "cost-curve" if admitted else None,
+        "reason": "because",
+        "parsed_ok": True,
+        "latency_ms": 12.0,
+        "error": error,
+    }
+
+
+async def test_the_summary_is_built_from_every_stored_row_not_the_resumed_slice() -> None:
+    """A resume holds only the re-scored items in memory. Summarising those
+    would describe 407 of 599 — a summary disagreeing with its own detail table,
+    which is the error that produced two wrong write-ups in one day."""
+
+    stored = [_result_row(f"i{n}", "sec-edgar", n == 0) for n in range(599)]
+    pool = _ReplayPool(cast(Any, _RunResultsConn(stored)))
+
+    report = await build_report(
+        pool,
+        "01RUN",
+        bars_by_key([BAR_INCUMBENT]),
+        tier="local-classification",
+        model="kimi-k3",
+        started_at=datetime(2026, 9, 20, tzinfo=UTC),
+    )
+
+    assert report.corpus_size == 599, "not the 407 a resume would hold in memory"
+    assert report.summaries[0].scored == 599
+    assert report.summaries[0].errors == 0
+
+
+async def test_a_rebuilt_summary_counts_errors_that_are_still_stored() -> None:
+    stored = [_result_row(f"i{n}", "sec-edgar", None, "429") for n in range(5)]
+    stored += [_result_row(f"j{n}", "usaspending", False) for n in range(3)]
+    pool = _ReplayPool(cast(Any, _RunResultsConn(stored)))
+
+    report = await build_report(
+        pool,
+        "01RUN",
+        bars_by_key([BAR_INCUMBENT]),
+        tier="local-classification",
+        model="kimi-k3",
+        started_at=datetime(2026, 9, 20, tzinfo=UTC),
+    )
+
+    assert report.summaries[0].scored == 8
+    assert report.summaries[0].errors == 5

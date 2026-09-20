@@ -59,6 +59,7 @@ from shrap.llm.ollama_usage import (
 from shrap.research.bar_experiment import (
     Bar,
     BarCall,
+    BarVerdict,
     ExperimentReport,
     bars_by_key,
     cross_bar_agreement,
@@ -107,6 +108,28 @@ FROM research.bar_experiment_results
 WHERE run_id = $1 AND error IS NOT NULL
 """.strip()
 
+# Every row a run recorded, so the run's summary can be built from what is
+# stored rather than from what this process happens to hold in memory.
+#
+# **Why this exists.** A resumed run only re-scores the items that errored, so
+# `calls` holds 407 of 599 and a summary built from it would describe 407 — while
+# the results table holds all 599. That is a summary disagreeing with its own
+# detail table, which is the error that made #255 claim bars B and C had never
+# run and then made #260 blame the wrong cause for it. The summary now reads the
+# rows.
+SELECT_RUN_SQL = """
+SELECT run_id, tier, model, bars::text AS bars, corpus_size, started_at
+FROM research.bar_experiment_runs
+WHERE run_id = $1
+""".strip()
+
+SELECT_RUN_RESULTS_SQL = """
+SELECT bar, item_id, source, title, admitted, label, reason, parsed_ok, latency_ms, error
+FROM research.bar_experiment_results
+WHERE run_id = $1
+ORDER BY bar, item_id
+""".strip()
+
 CREATE_RUNS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS research.bar_experiment_runs (
     run_id TEXT PRIMARY KEY,
@@ -138,11 +161,25 @@ CREATE TABLE IF NOT EXISTS research.bar_experiment_results (
 )
 """.strip()
 
+# **A resume must refresh this row, not collide with it.** #261 made the results
+# insert upsert-safe and left this one a plain INSERT, so the first resumed run
+# scored all 407 outstanding items, persisted every one of them, and then died on
+# a primary-key violation here — leaving the results table correct and the
+# summary row still claiming `1 admit, 407 errors`. The summary said one thing
+# and its own rows said another, which is the exact confusion that cost this
+# project two wrong write-ups in a day.
 INSERT_RUN_SQL = """
 INSERT INTO research.bar_experiment_runs (
     run_id, tier, model, bars, corpus_size, started_at, finished_at, report_markdown
 )
 VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
+ON CONFLICT (run_id) DO UPDATE SET
+    tier = EXCLUDED.tier,
+    model = EXCLUDED.model,
+    bars = EXCLUDED.bars,
+    corpus_size = EXCLUDED.corpus_size,
+    finished_at = EXCLUDED.finished_at,
+    report_markdown = EXCLUDED.report_markdown
 """.strip()
 
 # **The conflict clause heals, it never overwrites.** A resumed run re-scores the
@@ -287,6 +324,75 @@ async def persist_run(
         )
 
 
+async def calls_from_run(pool: Any, run_id: str) -> list[BarCall]:
+    """Rebuild this run's calls from what was stored.
+
+    ``latency_ms`` and ``raw`` round-trip only as far as the summary needs them;
+    nothing downstream of :func:`summarize` reads ``raw``.
+    """
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(SELECT_RUN_RESULTS_SQL, run_id)
+    out: list[BarCall] = []
+    for row in rows:
+        admitted = row["admitted"]
+        verdict = (
+            None
+            if admitted is None
+            else BarVerdict(
+                item_id=str(row["item_id"]),
+                admitted=bool(admitted),
+                label=None if row["label"] is None else str(row["label"]),
+                reason="" if row["reason"] is None else str(row["reason"]),
+                parsed_ok=bool(row["parsed_ok"]),
+            )
+        )
+        out.append(
+            BarCall(
+                bar=str(row["bar"]),
+                item=UnfilteredItem(
+                    item_id=str(row["item_id"]),
+                    source=str(row["source"]),
+                    kind=None,
+                    title=str(row["title"]),
+                    summary=None,
+                ),
+                verdict=verdict,
+                latency_ms=float(row["latency_ms"]),
+                error=None if row["error"] is None else str(row["error"]),
+            )
+        )
+    return out
+
+
+async def build_report(
+    pool: Any,
+    run_id: str,
+    bars: Sequence[Bar],
+    *,
+    tier: str,
+    model: str,
+    started_at: datetime,
+) -> ExperimentReport:
+    """The run's summary, derived from its stored rows."""
+
+    stored = await calls_from_run(pool, run_id)
+    summaries = tuple(summarize(bar, [c for c in stored if c.bar == bar.key]) for bar in bars)
+    # The largest bar's row count is the corpus this run covered. Bars share an
+    # item set, so they agree; taking the max rather than a single bar's count
+    # keeps this honest if one bar stopped early on a wall or a spent quota.
+    corpus_size = max((s.scored for s in summaries), default=0)
+    return ExperimentReport(
+        corpus_size=corpus_size,
+        tier=tier,
+        model=model,
+        summaries=summaries,
+        started_at=started_at.isoformat(),
+        finished_at=datetime.now(UTC).isoformat(),
+        _agreement=cross_bar_agreement(summaries),
+    )
+
+
 def render_plan(
     items: Sequence[UnfilteredItem],
     bars: Sequence[Bar],
@@ -402,18 +508,51 @@ async def run(
                     rows=len(bar_calls),
                 )
 
-        summaries = tuple(summarize(bar, [c for c in calls if c.bar == bar.key]) for bar in bars)
-        report = ExperimentReport(
-            corpus_size=len(items),
-            tier=tier,
-            model=model,
-            summaries=summaries,
-            started_at=started_at.isoformat(),
-            finished_at=datetime.now(UTC).isoformat(),
-            _agreement=cross_bar_agreement(summaries),
+        # **Summarise the stored rows, not this process's memory.** For a resume
+        # `calls` holds only the items re-scored now — 407 of 599 on 2026-09-20 —
+        # so a summary built from it would describe a smaller run than the table
+        # it sits beside. Reading the rows back makes the run row and the results
+        # rows the same fact by construction.
+        report = await build_report(
+            pool, run_id, bars, tier=tier, model=model, started_at=started_at
         )
         await persist_run(pool, run_id, report, bars)
         return run_id, report, calls, bars
+    finally:
+        await pool.close()
+
+
+async def rebuild_report(
+    dsn: str, run_id: str, *, bar_keys: Sequence[str] | None, tier: str
+) -> ExperimentReport:
+    """Re-derive a run's summary from its stored rows and rewrite the run row.
+
+    Costs nothing — it reads the results table and writes one row. The model is
+    taken from the existing run row so a repair cannot relabel which model
+    produced the verdicts.
+    """
+
+    pool = await create_asyncpg_pool(dsn)
+    try:
+        await ensure_schema(pool)
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_RUN_SQL, run_id)
+        if not rows:
+            raise SystemExit(f"no run row for {run_id!r}")
+        existing = rows[0]
+        bars = (
+            bars_by_key(bar_keys) if bar_keys else bars_by_key(list(json.loads(existing["bars"])))
+        )
+        report = await build_report(
+            pool,
+            run_id,
+            bars,
+            tier=str(existing["tier"]) or tier,
+            model=str(existing["model"]),
+            started_at=existing["started_at"],
+        )
+        await persist_run(pool, run_id, report, bars)
+        return report
     finally:
         await pool.close()
 
@@ -458,6 +597,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--report-only",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Rebuild that run's summary row from its stored results and exit. "
+            "Makes no completions and spends no allowance. For repairing a run "
+            "row that disagrees with its own rows."
+        ),
+    )
+    parser.add_argument(
         "--reserve",
         type=float,
         default=PRODUCTION_RESERVE,
@@ -494,12 +643,25 @@ def main() -> None:
 
     if args.items_from_run and args.resume_run:
         parser.error("--items-from-run and --resume-run select different item sets; pass one")
+    if args.report_only and (args.items_from_run or args.resume_run or args.limit):
+        parser.error("--report-only scores nothing; it takes no item selector")
 
     bar_keys = [b.strip() for b in args.bars.split(",")] if args.bars else None
     configure_logging("bar-experiment", os.environ.get("TECH_WATCHER_LOG_LEVEL", "INFO"))
     dsn = os.environ.get("TECH_WATCHER_POSTGRES_DSN")
     if not dsn:
         parser.error("TECH_WATCHER_POSTGRES_DSN is not set")
+
+    if args.report_only:
+        repaired = asyncio.run(
+            rebuild_report(dsn, args.report_only, bar_keys=bar_keys, tier=args.tier)
+        )
+        print("\n" + render_markdown(repaired))
+        print(
+            f"\nrewrote the run row for {args.report_only} from its stored results",
+            file=sys.stderr,
+        )
+        return
 
     run_id, report, _calls, _bars = asyncio.run(
         run(
