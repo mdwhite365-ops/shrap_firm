@@ -5,15 +5,40 @@
 > **The first version of this page said "bars B and C have never been run." That
 > was wrong**, and the mistake is worth more than the claim was.
 >
-> `research.bar_experiment_runs` holds **one** row for 2026-07-31.
-> `research.bar_experiment_results` holds **four separate runs** from that day. I
-> read the summary table, found one row, and inferred about the detail table
-> without querying it — the same shape of error as reading
-> `filter_verdict_history` and concluding the literature filter kept no
-> rejections. *Check the table that holds the rows, not the table that summarises
-> them.*
+> **Second correction, same page:** the first version of this correction blamed
+> the wrong thing. It said `bar_experiment_runs` held one row while
+> `bar_experiment_results` held four, and drew a lesson about reading a summary
+> table instead of a detail table. Both tables were right. `bar_experiment_runs`
+> has always held **four** rows for 2026-07-31, one per invocation, and the
+> `bars` column of each names the bar it ran.
 >
-> The four runs, with the hard-leg column KI-009 actually needs:
+> The actual query was:
+>
+> ```
+> psql -c "select * from research.bar_experiment_runs order by 1 desc limit 5" | head -14
+> ```
+>
+> `report_markdown` is a multi-line `TEXT` column holding the whole run report.
+> In psql's aligned output one row therefore spans **dozens** of lines, so
+> `head -14` cut the result off inside the first row. Four rows came back; I was
+> shown one. **I read my own truncation as a finding.**
+>
+> Two things follow, and the second is the useful one:
+>
+> - `SELECT *` on a table with a wide text column is not a listing. Select the
+>   columns the question needs — here `run_id, bars, started_at` would have
+>   printed four clean lines — or use `\pset expanded`, or `count(*)`.
+> - **A pipe is part of the query.** `head`, `tail` and `| head -n` truncate
+>   without saying so, and the truncation looks exactly like a short result. When
+>   a count is the finding, ask the database for the count.
+>
+> This is a near relative of the `filter_verdict_history` error earlier the same
+> day — both were confident claims about what the firm had recorded, made from
+> evidence that did not support them — but the mechanism is different and the
+> earlier diagnosis was a guess dressed as a root cause.
+>
+> The four runs, with the hard-leg column KI-009 actually needs (recomputed
+> against the database on 2026-09-20, not carried over from the earlier text):
 >
 > | run | bar | scored | admits | hard scored | hard admits |
 > |---|---|---|---|---|---|
@@ -62,9 +87,18 @@
 > Only the **model** question, and that is the one the 2026-09-20 pilot raised:
 > DQ-006's named exemplar flips between `qwen3.5:397b` and `kimi-k3` on the
 > unmodified prompt v4. A replay of the July item set under `kimi-k3` was started
-> and **stopped at 192 of 599 on Ollama's per-session request cap** (weekly was
-> only 27.7% used; the session window is the binding one). It can be resumed when
-> that window resets.
+> and **stopped at 192 of 599 on Ollama's per-session request cap**. That run is
+> `01M2YHEGZ5KSBAADGHYK96QGAY`: 599 result rows, of which **407 carry an error**
+> and every one of the 407 is the same HTTP 429, *"you have reached your session
+> usage limit."* Not a partial write — a complete run in which two thirds of the
+> calls were refused.
+>
+> `https://ollama.com/api/usage`, read with the firm's own key, reports
+> `limits.session.usage = 1.0` (974 `kimi-k3` requests) against
+> `limits.weekly.usage = 0.277`. **The session window is the binding one and the
+> weekly figure this project has been budgeting against is the wrong number.**
+> The payload does not say how long the session window is, and it had not reset
+> an hour after the run stopped.
 >
 > **The expensive full-corpus three-bar run is probably not worth funding.** The
 > three-bar comparison exists. What does not exist is the same comparison under
