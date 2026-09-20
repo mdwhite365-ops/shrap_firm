@@ -57,10 +57,14 @@ from shrap.llm.ollama_usage import (
     fetch_usage,
 )
 from shrap.research.bar_experiment import (
+    QUOTA_CHECK_MAX,
+    QUOTA_CHECK_MIN,
+    QUOTA_CHECK_SAFETY,
     Bar,
     BarCall,
     BarVerdict,
     ExperimentReport,
+    QuotaDecision,
     bars_by_key,
     cross_bar_agreement,
     render_markdown,
@@ -138,6 +142,21 @@ SELECT bar, item_id, source, title, admitted, label, reason, parsed_ok, latency_
 FROM research.bar_experiment_results
 WHERE run_id = $1
 ORDER BY bar, item_id
+""".strip()
+
+# Items a run scored SUCCESSFULLY, so a run stopped cleanly can be finished.
+#
+# **A clean stop and a failure leave different evidence, and resume needs both
+# paths.** `--resume-run` alone re-scores errored rows, which is right for a run
+# that hit a wall of 429s. But the quota guard stops *cleanly* and deliberately
+# writes nothing for the items behind it — "never attempted" is not "failed" —
+# so those items have no row at all and an errored-rows query cannot see them.
+# Combining `--items-from-run` (what the run was meant to cover) with
+# `--resume-run` (what it has actually got) subtracts one from the other.
+SELECT_RUN_SCORED_ITEM_IDS_SQL = """
+SELECT DISTINCT item_id
+FROM research.bar_experiment_results
+WHERE run_id = $1 AND error IS NULL
 """.strip()
 
 CREATE_RUNS_TABLE_SQL = """
@@ -268,6 +287,18 @@ async def load_corpus(
                     f"run {resume_run!r} has no errored results to resume — "
                     "either it finished cleanly or the run id is wrong"
                 )
+        if items_from_run and resume_run:
+            # The target set minus what the run already holds a verdict for.
+            already = {
+                str(r["item_id"])
+                for r in await conn.fetch(SELECT_RUN_SCORED_ITEM_IDS_SQL, resume_run)
+            }
+            outstanding = (replay or set()) - already
+            if not outstanding:
+                raise SystemExit(
+                    f"run {resume_run!r} already covers every item in {items_from_run!r}"
+                )
+            replay = outstanding
     items = [
         UnfilteredItem(
             item_id=str(row["item_id"]),
@@ -504,20 +535,48 @@ async def run(
                 registry, cast(Any, http), tracer=tracer_from_env(env, cast(Any, http))
             )
 
-            async def still_within_budget() -> str | None:
-                """Re-read the shared allowance mid-bar. ``None`` means carry on.
+            # Pacing state for the guard: what the meter read at the previous
+            # check, and how many items had been scored by then. The difference
+            # between two checks is the only honest measure of what an item
+            # costs — it depends on the prompt, the prompt depends on the source,
+            # and the window is cost-weighted rather than per-request.
+            paced = {"usage": 0.0, "items": 0, "seen": False}
+
+            async def still_within_budget() -> QuotaDecision:
+                """Re-read the shared allowance mid-bar and say when to ask again.
 
                 Checking only before the first item proves there was room to
-                start, which is the moment the check matters least — a long bar
-                can spend the whole window mid-flight and starve the agents that
-                share the account.
+                *start*, which is the moment the check matters least. Checking on
+                a fixed stride is barely better: on 2026-09-20 a 50-item stride
+                was 9.5% of the window against a 10% reserve, so the guard
+                crossed from 89% to 98.9% between two consecutive checks.
                 """
 
                 if ignore_quota:
-                    return None
+                    return QuotaDecision(None, QUOTA_CHECK_MAX)
+
                 live = await fetch_usage(cast(Any, http), binding.api_key)
                 mid = check_budget(live, reserve=reserve)
-                return None if mid.ok else mid.reason
+                if not mid.ok:
+                    return QuotaDecision(mid.reason)
+
+                binding_window = None if live is None else live.binding
+                if binding_window is None:
+                    # No meter, no basis to pace. Ask again soon rather than
+                    # coasting on an estimate that does not exist.
+                    return QuotaDecision(None, QUOTA_CHECK_MIN)
+
+                scored_now = len(calls)
+                headroom = binding_window.headroom(reserve)
+                stride = QUOTA_CHECK_MAX
+                if paced["seen"]:
+                    items_since = scored_now - int(paced["items"])
+                    spent_since = binding_window.usage - float(paced["usage"])
+                    if items_since > 0 and spent_since > 0:
+                        per_item = spent_since / items_since
+                        stride = int(headroom / per_item * QUOTA_CHECK_SAFETY)
+                paced.update(usage=binding_window.usage, items=scored_now, seen=True)
+                return QuotaDecision(None, max(QUOTA_CHECK_MIN, min(QUOTA_CHECK_MAX, stride)))
 
             for bar in bars:
                 log.info("bar_experiment.bar_started", bar=bar.key, items=len(items))
@@ -683,8 +742,9 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    if args.items_from_run and args.resume_run:
-        parser.error("--items-from-run and --resume-run select different item sets; pass one")
+    # Together they mean "finish this run against that item set", which is how a
+    # cleanly stopped run is completed: the guard leaves its remaining items
+    # unwritten, so there are no errored rows to find.
     if args.report_only and (args.items_from_run or args.resume_run or args.limit):
         parser.error("--report-only scores nothing; it takes no item selector")
 

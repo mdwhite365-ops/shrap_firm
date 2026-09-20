@@ -1,4 +1,4 @@
-### Retraction: #264's verdict on the corpus was an artifact of my own query (#267)
+### Retraction: #264's verdict on the corpus was an artifact of my own query (#266)
 
 **#264 said the corpus was the constraint. That conclusion is withdrawn.**
 

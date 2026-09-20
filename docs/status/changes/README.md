@@ -11,6 +11,13 @@ docs/status/changes/<pr-number>-<short-slug>.md
 update, no shared anchor — the filename carries the PR number and the directory
 listing carries the order.
 
+**One PR may ship more than one entry** when a card carries two distinct things
+worth finding separately — `266-the-experiment-never-read-the-filings.md` and
+`266-retracting-the-corpus-verdict.md` are the fix and what it invalidated.
+Number the file for the PR it actually merges in, not the PR number you expect
+to get: `gh pr create` assigns it, and a file named for the wrong PR is a small
+lie that costs someone an hour later.
+
 ## Why this exists
 
 `recent-changes.md` had a trailing `## Security notes` section, so every card

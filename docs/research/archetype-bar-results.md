@@ -120,7 +120,7 @@
 >
 > So "the volume is in the sources that admit nothing" is **backwards**, and
 > "feed the funnel cannot mean more throughput" is withdrawn. See
-> `docs/status/changes/267-retracting-the-corpus-verdict.md`.
+> `docs/status/changes/266-retracting-the-corpus-verdict.md`.
 >
 > What survives: the model comparison (3 vs 2, indistinguishable), DQ-006's
 > exemplar flipping, and the cost figures. The July three-bar comparison is void
