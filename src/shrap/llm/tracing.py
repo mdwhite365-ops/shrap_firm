@@ -38,26 +38,41 @@ wrong, both confirmed against Langfuse's published OpenAPI spec:
   input/output and a silently shortened sample would satisfy the letter of that
   while quietly corrupting the migration evaluation.
 
-**Why this is hand-rolled rather than the Langfuse SDK.** The deployed image is
-``langfuse/langfuse:2``, and Langfuse's own compatibility matrix rules out every
-current client against it:
+**Why this is hand-rolled rather than the Langfuse SDK.** It *was* because the
+server could not accept anything else. That reason expired on 2026-09-19.
+
+The original argument: the deployed image was ``langfuse/langfuse:2``, and
+Langfuse's compatibility matrix ruled out every current client against OSS v2 —
+Python SDK v3 and v4 unsupported, OTel unsupported (needs server >= 3.22.0),
+leaving ``/api/public/ingestion`` as the only path that worked. **#254 retired
+that container.** Every agent has pointed at Langfuse Cloud for months, and Cloud
+supports all three. Verified against Langfuse's docs on 2026-09-20:
 
 ===========================  ==========================================
-Client                       OSS v2 (this deployment)
+Client                       Langfuse Cloud (what the firm actually uses)
 ===========================  ==========================================
-Python SDK v4 (current)      Unsupported
-Python SDK v3                Unsupported
-Python SDK v2                Full — but deprecated
-OTel ``/api/public/otel/*``  Unsupported (needs server >= 3.22.0)
-``/api/public/ingestion``    **Full**
+Python SDK v4 (current)      Supported
+Python SDK v3                Supported, now legacy
+OTel ``/api/public/otel``    Supported — OTLP over HTTP/JSON and
+                             HTTP/protobuf, Basic auth, no gRPC
+``/api/public/ingestion``    Supported — what this module uses
 ===========================  ==========================================
 
-So the legacy ingestion endpoint is not a shortcut around the SDK; on this server
-it is the only supported path, and the SDK the docs recommend cannot talk to it
-at all. **OSS v2 is also marked end of life**, which is a real finding rather
-than a footnote — see KI-032. Upgrading to v3+ adds a worker container,
-ClickHouse, a blob store and Redis, so it is an infrastructure card and the
-decision is Mike's.
+**So the constraint is gone and the choice is now a real one. This module keeps
+the hand-rolled client anyway, for the reason two paragraphs up rather than the
+one above:** it records **inline**, and both the SDK and any OTel exporter batch
+in a background processor by default. For this firm the queue is the problem, not
+the throughput — the entire purpose of the card was sample that cannot be
+recovered afterwards, and spans still sitting in a batch queue when a container
+restarts are exactly that. The cost of recording inline was measured on
+2026-09-20 at **48-165 ms** per call against completions that take seconds.
+
+What would reopen it: wanting to export the same traces to a second OTel backend,
+wanting the SDK's automatic instrumentation of libraries this firm does not
+currently call, or this module growing past the point where maintaining it costs
+more than the durability is worth. None of those is true today. The client is
+carrying production traffic with **zero** ``llm.trace_failed`` events across 37
+containers in 24 hours.
 
 **On masking, which the baseline asks about.** Nothing is masked, and that is an
 assessment rather than an omission. What reaches this layer is public-source
@@ -100,9 +115,16 @@ destination.
 """
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
-"""Short on purpose. This is a same-host POST, and a slow tracer must never
-become a slow agent — the timeout is the ceiling on what observability can cost
-a completion that already succeeded."""
+"""Short on purpose: the ceiling on what observability can cost a completion that
+already succeeded.
+
+This docstring used to say "a same-host POST", which stopped being true when #254
+retired the local container and left every agent on Langfuse Cloud. The number
+survived the move on merit rather than by luck — measured from the tech-watcher
+container on 2026-09-20, five POSTs to ``us.cloud.langfuse.com`` returned in
+**48-165 ms**, two orders of magnitude inside this ceiling. Worth re-measuring if
+the region ever changes, because a timeout here drops the trace silently and
+fails open by design."""
 
 DEFAULT_MAX_FIELD_CHARS = 250_000
 """Per input/output field, well inside the 3.5 MB batch cap even when a prompt
