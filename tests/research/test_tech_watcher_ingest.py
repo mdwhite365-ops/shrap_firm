@@ -185,13 +185,14 @@ async def test_edgar_non_200_raises_source_error() -> None:
 
 
 async def test_arxiv_parses_entry_with_category_and_whitespace_normalized() -> None:
-    http = FakeHTTP([FakeResponse(200, ARXIV_FEED), FakeResponse(200, ARXIV_FEED)])
+    http = FakeHTTP([FakeResponse(200, ARXIV_FEED)])
     source = ArxivSource(categories=("cs.AI", "cs.LG"))
 
     items = await source.fetch(http)
 
-    # One request per category, and the same paper from both is one item.
-    assert [p["search_query"] for _u, p in http.requests] == ["cat:cs.AI", "cat:cs.LG"]
+    # A healthy source costs ONE request, not one per category. Splitting
+    # unconditionally made 24 arXiv requests in a pass where the old code made 2.
+    assert [p["search_query"] for _u, p in http.requests] == ["cat:cs.AI OR cat:cs.LG"]
     assert len(items) == 1
     item = items[0]
     assert item.item_id == "arxiv:2607.01234v1"
@@ -601,18 +602,16 @@ async def test_usaspending_still_scopes_by_window_agency_and_floor() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_arxiv_retries_a_406_and_succeeds() -> None:
-    """The measured arXiv failure, and the case this card exists for.
+async def test_a_406_on_the_combined_query_falls_back_without_retrying_it() -> None:
+    """406 buys a split, not a second knock.
 
-    arXiv's edge answers 406 where it means 429 — verified 2026-09-19, when the
-    identical request succeeded 8/8 in one window and failed 6/6 twenty minutes
-    later from the same address.
+    The combined query is refused and the per-category pass succeeds — one extra
+    request, not three. Retrying the 406 first would have made it four.
     """
 
     http = FakeHTTP([FakeResponse(406, ""), FakeResponse(200, ARXIV_FEED)])
     source = ArxivSource(
         categories=("q-fin.PM",),
-        # Keep arXiv's own status set; only the sleep is removed.
         retry=RetryPolicy(attempts=3, backoff_seconds=0, statuses=ARXIV_RETRY.statuses),
     )
 
@@ -665,18 +664,29 @@ async def test_a_403_is_never_retried() -> None:
 
 
 async def test_retry_gives_up_rather_than_looping_forever() -> None:
-    http = FakeHTTP([FakeResponse(503, "")] * 5)
+    """Bounded overall: attempts on the combined query, then on each category."""
+
+    http = FakeHTTP([FakeResponse(503, "")] * 9)
     source = ArxivSource(categories=("q-fin.PM",), retry=RetryPolicy(attempts=2, backoff_seconds=0))
 
-    with pytest.raises(SourceError, match="after 2 attempts"):
+    with pytest.raises(SourceError, match="every category failed"):
         await source.fetch(http)
-    assert len(http.requests) == 2
+    # 2 on the combined query + 2 on the single category. Never unbounded.
+    assert len(http.requests) == 4
 
 
-def test_arxiv_policy_treats_406_as_transient_and_the_default_does_not() -> None:
-    assert 406 in ARXIV_RETRY.statuses
+def test_406_is_never_retried_because_it_means_slow_down() -> None:
+    """The first version of this card retried it, and that was backwards.
+
+    406 is arXiv's edge saying the host is throttled. Retrying turned each pass
+    into 24 arXiv requests against the old code's 2 — amplifying the exact
+    signal that asks for less traffic. Measured: 10 attempts over 60 seconds all
+    returned 406, so the retries bought nothing either.
+    """
+
+    assert 406 not in ARXIV_RETRY.statuses
     assert 406 not in DEFAULT_RETRY.statuses
-    # Both agree on the genuinely transient ones.
+    # The genuinely transient ones are still worth another attempt.
     for status in (429, 500, 502, 503, 504):
         assert status in DEFAULT_RETRY.statuses
         assert status in ARXIV_RETRY.statuses
@@ -827,6 +837,7 @@ async def test_a_refused_category_does_not_lose_the_healthy_ones() -> None:
 
     http = FakeHTTP(
         [
+            FakeResponse(406, ""),  # the combined query, poisoned by the bad two
             FakeResponse(200, ARXIV_FEED),  # cs.AI
             FakeResponse(200, ARXIV_FEED),  # cs.LG
             FakeResponse(406, ""),  # cond-mat
@@ -840,14 +851,15 @@ async def test_a_refused_category_does_not_lose_the_healthy_ones() -> None:
 
     items = await source.fetch(http)
 
-    assert len(http.requests) == 4
+    # 1 combined attempt, then the four-way split it falls back to.
+    assert len(http.requests) == 5
     assert len(items) == 1  # the healthy categories still produced their paper
 
 
 async def test_every_category_failing_is_still_a_source_failure() -> None:
     """A wholly dead feed must still raise, or the cursor advances over nothing."""
 
-    http = FakeHTTP([FakeResponse(406, "")] * 2)
+    http = FakeHTTP([FakeResponse(406, "")] * 3)
     source = ArxivSource(
         categories=("cond-mat", "q-bio.NC"),
         retry=RetryPolicy(attempts=1, backoff_seconds=0, statuses=ARXIV_RETRY.statuses),
@@ -860,10 +872,14 @@ async def test_every_category_failing_is_still_a_source_failure() -> None:
 async def test_items_are_deduped_across_categories() -> None:
     """A paper cross-listed in cs.AI and cs.LG is one row, not two."""
 
-    http = FakeHTTP([FakeResponse(200, ARXIV_FEED)] * 3)
-    source = ArxivSource(categories=("cs.AI", "cs.LG", "q-bio.NC"))
+    http = FakeHTTP([FakeResponse(503, "")] * 3 + [FakeResponse(200, ARXIV_FEED)] * 3)
+    source = ArxivSource(
+        categories=("cs.AI", "cs.LG", "q-bio.NC"),
+        retry=RetryPolicy(attempts=3, backoff_seconds=0),
+    )
 
     items = await source.fetch(http)
 
-    assert len(http.requests) == 3
+    # 3 failed attempts at the combined query, then one per category.
+    assert len(http.requests) == 6
     assert len(items) == 1
