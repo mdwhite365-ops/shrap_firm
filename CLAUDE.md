@@ -220,6 +220,17 @@ the legacy `/api/public/ingestion` endpoint **because** OSS v2 cannot talk to
 Python SDK v3/v4 or OTel — Cloud supports both, so that constraint is now
 obsolete and dropping the hand-rolled client is an available card.
 
+**The strategy engine can read market cap as of 2026-09-20 (#258).**
+`AVAILABLE_SERIES` was `{close, volume}` for the firm's whole life and is now
+`{close, volume, market cap}` — the first addition ever made to it. That moves
+`volatility-rank-forecast`, the cheapest of KI-035's seven capability gaps, from
+`missing-data` ("an ingestion pipeline, often a paid feed") to `missing-scorer`
+("cost: an afternoon"). Market cap is `close x shares` computed **in the panel
+from the panel's own closes**, never from `SELECT_MARKET_CAP_SQL`, which would
+re-read `daily_bars` with its own `adjustment`/`source` and could silently
+describe a different feed than the strategy sees. Coverage is 36 of 50 names;
+the rest are ETFs and four multi-class issuers, carrying `nan` rather than zero.
+
 **Planned / gated:** NautilusTrader (gate: live capital or execution needs beyond market/day orders, per ADR-0003), LangGraph (when an agent actually needs multi-node orchestration), OpenHands SDK (Development Department), VectorBT PRO (Strategy Evaluator), Mem0 (agent memory).
 
 ## Operating principles (from vision)
