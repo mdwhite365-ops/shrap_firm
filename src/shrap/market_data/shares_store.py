@@ -75,6 +75,27 @@ FROM market_data.shares_outstanding
 GROUP BY ticker
 """.strip()
 
+# Every filed count for a set of tickers, oldest filing first — the whole
+# history in one round trip, for a caller that will apply the point-in-time rule
+# itself against its own date grid.
+#
+# **Deliberately not `SELECT_MARKET_CAP_SQL`.** That one joins shares onto
+# `daily_bars` and hands back a finished market cap, which means the price in it
+# came from a second, independent read with its own `adjustment` and `source`.
+# Since #247 the evaluator can run on either feed, so a panel built on
+# `alpaca-sip` could be handed market caps computed from `alpaca-iex` closes and
+# nothing would say so. The strategy layer takes the raw counts and multiplies by
+# the closes it already holds.
+#
+# One query for the whole universe rather than fifty: the table is ~1,600 rows
+# for fifty names and a per-ticker loop would be fifty round trips to read it.
+SELECT_SHARES_HISTORY_SQL = """
+SELECT ticker, filed_at, shares
+FROM market_data.shares_outstanding
+WHERE ticker = ANY($1::text[])
+ORDER BY ticker, filed_at, as_of
+""".strip()
+
 # Market cap on a date, joined against the price the firm already stores. The
 # LATERAL is what applies the point-in-time rule per row rather than once.
 SELECT_MARKET_CAP_SQL = """
@@ -155,6 +176,28 @@ class PostgresSharesStore:
             return None
         return float(rows[0]["shares"])
 
+    async def shares_history(self, tickers: Sequence[str]) -> dict[str, list[tuple[date, float]]]:
+        """``{ticker: [(filed_at, shares), ...]}``, oldest filing first.
+
+        The raw record, not an as-of answer: the caller applies the
+        point-in-time rule against its own date grid. That is what lets the
+        strategy panel multiply these by **its own** closes rather than by a
+        price from a second read — see :data:`SELECT_SHARES_HISTORY_SQL`.
+
+        Tickers with nothing filed are simply absent from the mapping. A caller
+        must read that as "unknown", never as zero.
+        """
+
+        wanted = [t.strip().upper() for t in tickers if t and t.strip()]
+        if not wanted:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_SHARES_HISTORY_SQL, wanted)
+        out: dict[str, list[tuple[date, float]]] = {}
+        for row in rows:
+            out.setdefault(str(row["ticker"]), []).append((row["filed_at"], float(row["shares"])))
+        return out
+
     async def latest_filed_by_ticker(self) -> dict[str, date]:
         """Newest filing date per ticker, so a backfill can resume."""
 
@@ -170,6 +213,7 @@ __all__ = [
     "SELECT_LATEST_FILED_BY_TICKER_SQL",
     "SELECT_MARKET_CAP_SQL",
     "SELECT_SHARES_AS_OF_SQL",
+    "SELECT_SHARES_HISTORY_SQL",
     "UPSERT_SHARES_SQL",
     "PostgresSharesStore",
 ]
