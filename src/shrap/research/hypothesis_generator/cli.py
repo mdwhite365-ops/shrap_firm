@@ -25,18 +25,24 @@ import argparse
 import asyncio
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from shrap.common.qdrant_client import QdrantClient
+from shrap.intelligence.corpus_index.embedder import DEFAULT_OLLAMA_URL, OllamaEmbedder
 from shrap.llm.registry import TIER_LOCAL_HEAVY
 from shrap.research.hypothesis_generator.generator import HypothesisGenerator
 from shrap.research.hypothesis_generator.literature import (
     LiteratureItem,
     PostgresLiteratureStore,
+)
+from shrap.research.hypothesis_generator.retrieval import (
+    CorpusRetriever,
+    QdrantCorpusRetriever,
 )
 from shrap.research.hypothesis_generator.store import PostgresGapStore, render_queue
 
@@ -90,6 +96,32 @@ def items_from_file(path: Path) -> list[LiteratureItem]:
     return items
 
 
+def _retriever(env: Mapping[str, str]) -> CorpusRetriever | None:
+    """The corpus index, if this deployment has one.
+
+    Off unless ``HYPOTHESIS_GENERATOR_RETRIEVAL`` is truthy. Opt-in because it
+    adds a Qdrant and an Ollama dependency to an agent that had neither, and a
+    deployment without the corpus index should keep working exactly as before
+    rather than logging a retrieval failure on every item.
+
+    The embedding model is not configurable here on purpose: a collection can
+    only be searched by the model that filled it, so the right way to change it
+    is to rebuild the index (see `docs/runbooks/corpus-index.md`).
+    """
+
+    if env.get("HYPOTHESIS_GENERATOR_RETRIEVAL", "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return None
+    return QdrantCorpusRetriever(
+        OllamaEmbedder(env.get("CORPUS_INDEX_OLLAMA_URL", DEFAULT_OLLAMA_URL)),
+        QdrantClient(env.get("CORPUS_INDEX_QDRANT_URL", "http://qdrant:6333")),
+    )
+
+
 async def _run(args: argparse.Namespace) -> str:
     from shrap.common.db import create_asyncpg_pool
     from shrap.llm import TierLLMClient, TierRegistry, tracer_from_env
@@ -121,6 +153,7 @@ async def _run(args: argparse.Namespace) -> str:
                 gaps=gaps,
                 tier=args.tier,
                 dry_run=args.dry_run,
+                retriever=_retriever(env),
             )
             report = await generator.run(items[: args.limit])
         return report.render()

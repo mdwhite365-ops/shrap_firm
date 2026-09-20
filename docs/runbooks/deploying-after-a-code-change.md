@@ -225,6 +225,23 @@ back to a hardcoded `shrap:shrap`. `strategy-runner` sets neither, so it lands
 on the fallback and connects with credentials that may not be this deployment's.
 A container has to satisfy **both** constraints: the imports and the env.
 
+**And `--dry-run` will not tell you that you got it wrong.** Added 2026-09-19
+after running `shrap-market-data-shares-backfill` in `tech-watcher`: the dry run
+printed a clean per-ticker report, because a dry run never opens a database
+connection. The real run then died on
+`InvalidPasswordError: password authentication failed for user "shrap"` — the
+hardcoded `shrap:shrap` fallback, because `tech-watcher` does not set
+`MARKET_DATA_POSTGRES_DSN`. **A passing dry run is evidence about the fetch path
+and nothing else.** Check the table below before the first real run, not after.
+
+The same session then hit the *other* half of this page: `market-data` is a
+tools-profile image, `docker compose run` does not build, and the run therefore
+used an image predating the fix — reporting `no_data=[... PYPL ...]` for the one
+ticker the change existed to recover. `--profile tools build market-data` first,
+then run. Both traps are documented above and both were walked into anyway, in
+one sitting, which is the argument for reading this file rather than
+remembering it.
+
 Measured 2026-08-01 with the 1d check:
 
 | CLI | heavy deps | run it in |

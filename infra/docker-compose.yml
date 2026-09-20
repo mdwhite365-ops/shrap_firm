@@ -1460,6 +1460,14 @@ services:
       - .env
     environment:
       HYPOTHESIS_GENERATOR_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      # Retrieval over the corpus index (#250), off unless set. Opt-in because
+      # it adds a Qdrant and an Ollama dependency to an agent that had neither.
+      HYPOTHESIS_GENERATOR_RETRIEVAL: "${HYPOTHESIS_GENERATOR_RETRIEVAL:-true}"
+      CORPUS_INDEX_QDRANT_URL: "http://qdrant:6333"
+      # The Dell's own Ollama, not the cloud host: a collection can only be
+      # searched by the model that filled it, and this one was filled by local
+      # `nomic-embed-text`.
+      CORPUS_INDEX_OLLAMA_URL: "http://ollama:11434"
       # Same routing as tech-watcher: ollama.com directly, bearer token from
       # .env. The local daemon's cloud path authenticates with a host Ed25519
       # key that dies with the container volume; a token is config.

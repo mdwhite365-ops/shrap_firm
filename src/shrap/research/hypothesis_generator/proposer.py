@@ -40,6 +40,7 @@ from shrap.research.hypothesis_generator.expressible import (
     FACTOR_DESCRIPTIONS,
 )
 from shrap.research.hypothesis_generator.literature import LiteratureItem
+from shrap.research.hypothesis_generator.retrieval import RelatedPassage, render_related
 from shrap.research.strategy_runner.cadence import (
     MAX_INTERVAL_MINUTES,
     MIN_INTERVAL_MINUTES,
@@ -53,6 +54,19 @@ PROPOSER_PROMPT_VERSION = 3
 # How much of an abstract the model sees. arXiv abstracts run ~1500 characters;
 # the cap is a guard against a pathological item, not a summarisation step.
 MAX_ABSTRACT_CHARS = 4000
+
+
+def _series_block() -> str:
+    """The engine's readable series, rendered from the set that decides them.
+
+    Hard-coding this sentence is how it went stale: `market cap` joined
+    ``AVAILABLE_SERIES`` in #258 while the prompt still told the model there were
+    exactly two series, so the proposer would have called an expressible effect
+    unexpressible. The prompt and the classifier now read the same set.
+    """
+
+    names = sorted(AVAILABLE_SERIES)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def _rules_block() -> str:
@@ -119,7 +133,8 @@ PROPOSER_SYSTEM_PROMPT = (
     "QUESTION TWO, and only if question one is true: can this effect be expressed "
     "as one of the rules below?\n"
     "\n"
-    "The engine reads exactly two series per stock: close and volume. It reads "
+    f"The engine reads {len(AVAILABLE_SERIES)} series per stock: {_series_block()}. "
+    "It reads "
     "them at a DAILY grain by default, and at an intraday grain (1 minute or "
     "coarser) when you say so — see `cadence_minutes` below.\n"
     f"{_rules_block()}\n"
@@ -131,7 +146,24 @@ PROPOSER_SYSTEM_PROMPT = (
     "implemented factor is the worst outcome available: the firm would then hold "
     "a strategy citing a paper it does not implement.\n"
     "\n"
+    "CONTEXT FROM THE FIRM'S OWN CORPUS. The item may be followed by other "
+    "items the firm already holds, retrieved by meaning. Use them to judge "
+    "whether this effect stands alone or is corroborated, and say which in "
+    "`corroboration`.\n"
+    "\n"
+    "**They are never the reference.** `prior` must name the authors of the item "
+    "at the top, and nobody else. Attributing this paper's claim to a retrieved "
+    "passage produces a citation that looks correct and is false, which is worse "
+    "than no citation at all. Retrieved items are also a small and uneven sample "
+    "of a 50-stock firm's reading — their absence is not evidence an effect is "
+    "novel, and their presence is not peer review.\n"
+    "\n"
     "REQUIRED FIELDS.\n"
+    "- `corroboration` (optional, omit when no context was supplied): one "
+    "sentence on whether the retrieved items support, contradict or say nothing "
+    'about this effect. Name the ones you relied on. An honest "none of the '
+    'retrieved items is about this effect" is a useful answer and the common '
+    "one.\n"
     "- `prior`: the authors (given to you in the item metadata), the year, and "
     "the claim in one sentence. The claim is yours to read from the abstract.\n"
     "- `required_inputs`: every data series the effect needs, using the words "
@@ -155,7 +187,7 @@ PROPOSER_SYSTEM_PROMPT = (
     "null. Must be 1-390 (one session). REQUIRED if `required_inputs` names an "
     "intraday series: without it the firm would build a within-day effect over "
     "months and cite your paper for it.\n"
-    "- `deviation`: how an implementation on close and volume alone would differ "
+    f"- `deviation`: how an implementation on {_series_block()} alone would differ "
     "from the paper's construction, or the literal string `none`. Be specific: a "
     "dropped short leg, a close used where the paper used an intraday high, 50 "
     "large caps where the paper used all of CRSP.\n"
@@ -173,6 +205,7 @@ PROPOSER_SYSTEM_PROMPT = (
     '"required_inputs": ["<series>", ...], '
     '"scorer_sketch": "<1-2 sentences>", '
     '"deviation": "<text or none>", "kill_criteria": ["<...>"], '
+    '"corroboration": "<one sentence or omit>", '
     '"thesis": "<one paragraph: the claim, the mechanism, and why it should '
     'persist>"}'
 )
@@ -218,14 +251,32 @@ class RawProposal:
     model: str
     """Which model said it. Part of a verdict's identity (KI-007)."""
 
+    corroboration: str = ""
+    """What the retrieved corpus context said about this effect, in the model's
+    own words. Empty when nothing was retrieved or the model declined to answer.
 
-def build_prompt(item: LiteratureItem) -> str:
+    Recorded rather than acted on. It is the audit trail for a retrieval step
+    that would otherwise change proposals invisibly — with it, a reviewer can
+    ask whether the context helped or whether the model simply agreed with
+    whatever it was shown."""
+
+
+def build_prompt(item: LiteratureItem, related: Sequence[RelatedPassage] = ()) -> str:
+    """The item, and optionally what else the firm holds that is near it.
+
+    ``related`` is appended *after* the item and explicitly labelled as context,
+    so the model reads it as corroboration to weigh rather than as the reference
+    to cite. With nothing retrieved the prompt is byte-identical to the one this
+    agent has always sent.
+    """
+
     abstract = item.abstract[:MAX_ABSTRACT_CHARS] or "(no abstract)"
     return (
         f"Item (source={item.source}, category={item.category or 'unknown'}):\n"
         f"Reference: {item.citation_hint}\n"
         f"Title: {item.title}\n"
         f"Abstract: {abstract}"
+        f"{render_related(related)}"
     )
 
 
@@ -317,6 +368,7 @@ def parse_proposal(item: LiteratureItem, content: str, model: str) -> RawProposa
         kill_criteria=_parse_strings(data.get("kill_criteria"), 400, 6),
         thesis=_clean(data.get("thesis"), 3000),
         model=model,
+        corroboration=_clean(data.get("corroboration"), 600),
     )
 
 
@@ -325,18 +377,19 @@ async def propose(
     item: LiteratureItem,
     tier: str,
     temperature: float = 0.2,
+    related: Sequence[RelatedPassage] = (),
 ) -> RawProposal | None:
     """One model call for one item."""
 
     result = await llm.complete(
         tier=tier,
-        prompt=build_prompt(item),
+        prompt=build_prompt(item, related),
         system=PROPOSER_SYSTEM_PROMPT,
         json_mode=True,
         temperature=temperature,
         think=True,
         task="propose-hypothesis",
-        metadata={"item_id": item.item_id},
+        metadata={"item_id": item.item_id, "related_passages": len(related)},
     )
     return parse_proposal(item, result.content, result.model)
 

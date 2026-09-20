@@ -1378,6 +1378,45 @@ weekly allowances**. The spec's "~3% of a week" was computed in July against a
 corpus eight times smaller. Both the corpus size and the cheaper alternative are
 now recorded in the spec itself so nobody quotes the stale figure.
 
+### The corpus index has its first consumer (#259)
+
+#250 built ~107,000 chunks of the firm's own filing and paper text at a measured
+86.7% precision@5, and **nothing read it**. The CLI queried it; no agent did.
+
+The Hypothesis Generator's proposer has always seen exactly one abstract. It now
+also sees the passages from the firm's corpus nearest that abstract, and reports
+in a new `corroboration` field whether they support, contradict or say nothing
+about the effect. Verified against the live index — querying *"Illiquidity and
+the cross-section of expected returns"* returns *"Liquidity Premium and
+Investment Horizons"* at 0.71, a paper about Kyle's lambda and order flow
+predicting cross-sectional returns.
+
+**The hazard this is built around is attribution.** A proposal must name an
+author and a year and refuses without one. If retrieved passages could reach that
+field the model would have a pile of other people's papers to attribute this
+paper's claim to, and the citation would look exactly as well-formed as a true
+one. So the context is labelled as context, appended *after* the item, the prompt
+says in terms that `prior` must name the authors of the item above, and
+`parse_proposal` still reads `prior` from the item's own metadata. A test pins
+each of those.
+
+Retrieved hits carry `body_kind` from the index, so an `abstract only` hit is not
+presented as a hit on the paper.
+
+**This does not touch the binding constraint, and the module docstring says so.**
+The generator is starved because `research.literature_items` holds nine rows
+(KI-009, KI-035). Retrieval makes each of those nine better grounded without
+producing a tenth.
+
+Off unless `HYPOTHESIS_GENERATOR_RETRIEVAL` is set — opt-in because it adds a
+Qdrant and an Ollama dependency to an agent that had neither, and every failure
+mode (no retriever, Qdrant down, embedder gone) degrades to the exact prompt the
+agent sent before.
+
+**Deploy note:** the `hypothesis-generator` tools image predated #250 and had no
+`shrap.common.qdrant_client` at all. `--profile tools build hypothesis-generator`
+is required, per `docs/runbooks/deploying-after-a-code-change.md`.
+
 ### Market cap became something a strategy can read (#258)
 
 #253 made the data correct. This makes it *reachable*: `PanelWindow` gains
