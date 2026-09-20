@@ -47,8 +47,16 @@ from shrap.research.strategy_evaluator.pipeline import (
 )
 
 # The only series a strategy can read. Read off `PanelWindow`, which exposes
-# `closes()` and `volumes()` and nothing else.
-AVAILABLE_SERIES: frozenset[str] = frozenset({"close", "volume"})
+# `closes()`, `volumes()` and `market_caps()` and nothing else.
+#
+# **`market cap` joined on 2026-09-20 and it is the first addition here.** It is
+# the cheapest of KI-035's seven `missing-data` gaps — `volatility-rank-forecast`
+# asks only for market capitalisation — and it is now `close x shares
+# outstanding`, computed on the panel's own closes against share counts filed on
+# or before each date. Coverage is 36 of the 40 non-ETF names; the four absent
+# ones are multi-class issuers SEC publishes no point-in-time count for (#253),
+# and they carry `nan` rather than a guess.
+AVAILABLE_SERIES: frozenset[str] = frozenset({"close", "volume", "market cap"})
 
 # Rules the proposer may name. Deliberately narrower than the engine's full set:
 # `reference-trend` trades a single ticker (it is the fixture's rule, not a
@@ -146,6 +154,25 @@ _SERIES_SYNONYMS: Mapping[str, str] = {
     "trading volume": "volume",
     "share volume": "volume",
     "turnover in shares": "volume",
+    # Market capitalisation. Every entry is a wording for the same quantity —
+    # price times shares outstanding — and nothing here is a construction.
+    #
+    # Deliberately absent, and each for a reason: `float` and `free float market
+    # cap` exclude insider and restricted holdings, which the firm does not
+    # store; `enterprise value` adds debt and subtracts cash, which are
+    # fundamentals; `book value` and `book-to-market` are accounting figures, not
+    # price times a share count. All four are genuinely `missing-data` and must
+    # stay that way rather than be quietly served a market cap that means
+    # something else.
+    "market cap": "market cap",
+    "market caps": "market cap",
+    "market capitalization": "market cap",
+    "market capitalisation": "market cap",
+    "market value": "market cap",
+    "market value of equity": "market cap",
+    "size": "market cap",
+    "firm size": "market cap",
+    "company size": "market cap",
 }
 
 # What the proposer is asked to do about each outcome.

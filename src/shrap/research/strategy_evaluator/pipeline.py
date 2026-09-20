@@ -307,6 +307,8 @@ class ReaderPort(Protocol):
         self, ticker: str, start: date, end: date, adjustment: str
     ) -> list[BarSample]: ...
 
+    async def read_shares(self, tickers: Sequence[str]) -> dict[str, list[tuple[date, float]]]: ...
+
     async def latest_information_ratio(
         self, strategy_id: str, protocol_version: str
     ) -> float | None: ...
@@ -935,9 +937,36 @@ class EvaluationPipeline:
         for ticker in tickers:
             bars = await self._reader.read_bars(ticker, start, today, self._config.adjustment)
             bars_by_ticker[ticker] = bars
+        shares = await self._read_shares(tickers)
         # Measured from the same dict the panel aligns, so coverage can never
         # describe a different fetch than the one that produced the verdict.
-        return PricePanel.from_bars(bars_by_ticker), PanelCoverage.from_bars(bars_by_ticker)
+        return (
+            PricePanel.from_bars(bars_by_ticker, shares),
+            PanelCoverage.from_bars(bars_by_ticker),
+        )
+
+    async def _read_shares(self, tickers: Sequence[str]) -> dict[str, list[tuple[date, float]]]:
+        """Share counts for the panel's market-cap series, or nothing.
+
+        **A reader without ``read_shares`` yields a panel with no market caps
+        rather than an error.** The method is on ``ReaderPort`` because the real
+        reader has it, but the intraday reader and every strategy that does not
+        rank on size are unaffected by its absence, and a missing optional series
+        must not take down an evaluation that never asked for it.
+
+        A failure to read is likewise degraded, not fatal — logged, because a
+        market-cap strategy silently scoring on an all-``nan`` series is the kind
+        of quiet wrong answer this project keeps finding.
+        """
+
+        read = getattr(self._reader, "read_shares", None)
+        if read is None:
+            return {}
+        try:
+            return dict(await read(tickers))
+        except Exception:
+            log.exception("strategy_evaluator.shares_read_failed", tickers=len(tickers))
+            return {}
 
     def _build_outcome(
         self,
