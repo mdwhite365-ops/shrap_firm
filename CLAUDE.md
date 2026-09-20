@@ -151,7 +151,7 @@ lack edge. The seven `capability-gap` rows are a prioritised build list; market
 capitalisation is the cheapest and is absent from every table. **Prefer feeding the
 funnel over building another thing that measures it.**
 
-**Always-on services (verified 2026-09-18, 39 containers):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger, Market Data Trigger, **Market Data Intraday Trigger** (#236), plus the substrate: Postgres/TimescaleDB, Redis, Qdrant, Ollama, Prometheus, Grafana, Langfuse (+ its DB), cAdvisor, node-exporter, postgres-exporter, redis-exporter and **docker-state-exporter** (#239). **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker. **`ib-gateway` was stopped and removed 2026-09-18**; its compose project lives at `infra/ibgateway/` (#243) and needs a gitignored `.env` to revive — ADR-0003 gates IBKR on live capital.
+**Always-on services (verified 2026-09-18, 39 containers):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger, Market Data Trigger, **Market Data Intraday Trigger** (#236), plus the substrate: Postgres/TimescaleDB, Redis, Qdrant, Ollama, Prometheus, Grafana, cAdvisor, node-exporter, postgres-exporter, redis-exporter and **docker-state-exporter** (#239). **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker. **`ib-gateway` was stopped and removed 2026-09-18**; its compose project lives at `infra/ibgateway/` (#243) and needs a gitignored `.env` to revive — ADR-0003 gates IBKR on live capital.
 
 Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike reviews and merges; never stack PRs — see KI-001).
 
@@ -202,9 +202,23 @@ All ten foundational docs are drafted: vision, architecture (all open questions 
 - Hardware: Dell 5820 (TrueNAS, prod), Ryzen 7800X + 4070 Super (heavy inference), MacBook M4 24GB (dev/mobile)
 
 ## Tooling stack
-**In production now:** Redis Streams (ADR-0001/0006 event bus), PostgreSQL + TimescaleDB, Prometheus + Grafana (ADR-0004), Langfuse, Qdrant, Ollama, Docker Compose on TrueNAS SCALE, direct Alpaca paper client (ADR-0003 — paper phase). Agents are plain asyncio service loops, not LangGraph, so far.
+**In production now:** Redis Streams (ADR-0001/0006 event bus), PostgreSQL + TimescaleDB, Prometheus + Grafana (ADR-0004), **Langfuse Cloud**, Qdrant, Ollama, Docker Compose on TrueNAS SCALE, direct Alpaca paper client (ADR-0003 — paper phase). Agents are plain asyncio service loops, not LangGraph, so far.
 
 **Qdrant became true on 2026-09-19, having been listed here since July.** It was deployed 2026-07-02 and held **zero collections for two and a half months** while 164 MB of filing and paper text sat in Postgres, searchable only by exact string match. `docs/02-architecture.md` specified "full text to Qdrant" for Intelligence and Structural Analysis; nothing implemented it. The corpus index now does: `shrap-corpus-index` chunks, embeds with **local `nomic-embed-text`** (768-dim, on the Dell's own Ollama — not the cloud host, per vision principle 5) and writes ~82,000 points with full provenance. See `docs/runbooks/corpus-index.md`. **This is the firm's only vector search, and no agent consumes it yet** — the CLI queries it; wiring the Hypothesis Generator to retrieve prior work is a separate card. It does **not** address the binding constraint: the funnel is starved because the filter admits nothing (KI-009/KI-035), and making the rejected corpus searchable is a different capability from fixing the taxonomy.
+
+**The local Langfuse was retired 2026-09-19 (#254), and it had never held a
+trace.** All 24 agents carry `LANGFUSE_HOST=https://us.cloud.langfuse.com`;
+Cloud held **4,424 traces** when the container was removed, and the local
+`langfuse/langfuse:2` (2.95.11, OSS v2, **end of life**) held **zero** — while
+costing an 821 MB image, a 68 MB volume, two healthchecks and a nightly backup
+leg. Its compose lives at `infra/langfuse-local/` and can be revived, same
+treatment as `infra/ibgateway/` (#243). **`DEFAULT_HOST` is now empty on
+purpose**: keys set with no host disables tracing and says so, because
+defaulting to a container that no longer exists would reproduce KI-018 exactly.
+One knock-on worth knowing: `src/shrap/llm/tracing.py` is hand-rolled against
+the legacy `/api/public/ingestion` endpoint **because** OSS v2 cannot talk to
+Python SDK v3/v4 or OTel — Cloud supports both, so that constraint is now
+obsolete and dropping the hand-rolled client is an available card.
 
 **Planned / gated:** NautilusTrader (gate: live capital or execution needs beyond market/day orders, per ADR-0003), LangGraph (when an agent actually needs multi-node orchestration), OpenHands SDK (Development Department), VectorBT PRO (Strategy Evaluator), Mem0 (agent memory).
 

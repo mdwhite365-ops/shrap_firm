@@ -1319,6 +1319,36 @@ needing cover-page parsing or another source.
 consuming half.** `SELECT_MARKET_CAP_SQL` still has zero callers, so
 `volatility-rank-forecast` is still not computable. That is the next card.
 
+### The local Langfuse had never held a trace (#254)
+
+`shrap_langfuse` ran for its entire deployed life with **zero traces**. Every one
+of the firm's 24 agents carries `LANGFUSE_HOST=https://us.cloud.langfuse.com`,
+and Cloud held **4,424 traces** when this was checked — newest at 22:48 the same
+day, four `filter-literature-item` calls on the q-fin papers arXiv delivered when
+it recovered.
+
+The local instance was `langfuse/langfuse:2` — **2.95.11, OSS v2, end of life** —
+costing an 821 MB image, a 68 MB volume, two healthchecks and a nightly backup
+leg to store nothing. Same treatment as `ib-gateway` (#243): the compose survives
+at `infra/langfuse-local/` so the decision is reversible, the containers do not.
+
+**`DEFAULT_HOST` is now empty, and that is the load-bearing part.** It used to be
+`http://langfuse:3000`. Left as a fallback after the container was removed, an
+agent with keys set and `LANGFUSE_HOST` unset would log `tracing_enabled` against
+a host that no longer exists and post every trace into nothing — **KI-018
+exactly**, which is the failure that module's own docstring exists to prevent.
+A missing host now disables tracing and names the reason.
+
+The backup script needed no change: #249 already made the Langfuse leg skip
+rather than fail when `shrap_langfuse_db` is absent.
+
+**A knock-on worth recording.** `src/shrap/llm/tracing.py` is hand-rolled against
+the legacy `/api/public/ingestion` endpoint **because** OSS v2 cannot talk to
+Python SDK v3 or v4, or to OTel — Langfuse's own compatibility matrix rules all
+three out against a v2 server. Cloud supports them. That constraint is now
+obsolete, so replacing the hand-rolled client is an available card; it is not
+this one.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.

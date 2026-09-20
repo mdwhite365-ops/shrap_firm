@@ -84,8 +84,20 @@ from shrap.llm.http import HTTPClient
 
 log = structlog.get_logger(__name__)
 
-DEFAULT_HOST = "http://langfuse:3000"
-"""The compose service. Langfuse is not published off-box (ADR-0004)."""
+DEFAULT_HOST = ""
+"""**There is no default host any more, and that is the point.**
+
+This used to be ``http://langfuse:3000`` — the compose service. That service was
+retired on 2026-09-19 because it had held **zero traces** for its entire life
+while all 24 agents pointed at Langfuse Cloud, so the default now names a
+container that does not exist.
+
+Left as a fallback it would reproduce KI-018 exactly: an agent with keys set and
+``LANGFUSE_HOST`` unset would log ``tracing_enabled`` against a dead host and
+every trace would vanish. :func:`tracing_config_from_env` therefore treats a
+missing host as *tracing not configured* and says so, rather than guessing at a
+destination.
+"""
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
 """Short on purpose. This is a same-host POST, and a slow tracer must never
@@ -321,8 +333,13 @@ def tracing_config_from_env(env: Mapping[str, str]) -> TracingConfig | None:
     secret_key = env.get("LANGFUSE_SECRET_KEY", "").strip()
     if not public_key or not secret_key:
         return None
+    host = env.get("LANGFUSE_HOST", "").strip() or DEFAULT_HOST
+    if not host:
+        # Keys set, host missing. Guessing at a host is how KI-018 happened:
+        # the agent would report tracing enabled and post into nothing.
+        return None
     return TracingConfig(
-        host=env.get("LANGFUSE_HOST", "").strip() or DEFAULT_HOST,
+        host=host,
         public_key=public_key,
         secret_key=secret_key,
         timeout_seconds=_float_or(env.get("LANGFUSE_TIMEOUT_SECONDS"), DEFAULT_TIMEOUT_SECONDS),
@@ -341,9 +358,18 @@ def tracer_from_env(env: Mapping[str, str], http: HTTPClient) -> LangfuseTracer 
 
     config = tracing_config_from_env(env)
     if config is None:
+        has_keys = bool(
+            env.get("LANGFUSE_PUBLIC_KEY", "").strip()
+            and env.get("LANGFUSE_SECRET_KEY", "").strip()
+        )
         log.info(
             "llm.tracing_disabled",
-            reason="LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are not both set",
+            reason=(
+                "LANGFUSE_HOST is not set, and there is no local Langfuse to fall back to "
+                "since it was retired on 2026-09-19"
+                if has_keys
+                else "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are not both set"
+            ),
         )
         return None
     log.info("llm.tracing_enabled", host=config.host)

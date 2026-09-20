@@ -23,7 +23,6 @@ volumes:
   redis_data:
   pg_data:
   qdrant_storage:
-  langfuse_pg_data:
   prom_data:
   grafana_data:
   ollama_models:
@@ -121,64 +120,6 @@ services:
         - "exec 3<>/dev/tcp/127.0.0.1/6333 && printf 'GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && head -1 <&3 | grep -q '200 OK'"
       interval: 15s
       timeout: 5s
-      retries: 5
-
-  # -------------------------------------------------------------------------
-  # Langfuse DB - dedicated Postgres for Langfuse. Kept separate so its
-  # migrations cannot collide with the firm's main schema.
-  # No host port binding - only reached from the langfuse container.
-  # -------------------------------------------------------------------------
-  langfuse-db:
-    image: postgres:16.4-alpine
-    container_name: shrap_langfuse_db
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${LANGFUSE_DB_USER}
-      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD}
-      POSTGRES_DB: langfuse
-    volumes:
-      - langfuse_pg_data:/var/lib/postgresql/data
-    networks:
-      - shrap_net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${LANGFUSE_DB_USER} -d langfuse"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # -------------------------------------------------------------------------
-  # Langfuse - LLM tracing UI / collector. ADR-0004 keeps Langfuse for LLM
-  # specifics; Prometheus+Grafana covers everything else.
-  # -------------------------------------------------------------------------
-  langfuse:
-    image: langfuse/langfuse:2
-    container_name: shrap_langfuse
-    restart: unless-stopped
-    depends_on:
-      langfuse-db:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://${LANGFUSE_DB_USER}:${LANGFUSE_DB_PASSWORD}@langfuse-db:5432/langfuse
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
-      NEXTAUTH_URL: ${NEXTAUTH_URL}
-      SALT: ${SALT}
-      TELEMETRY_ENABLED: "false"
-    ports:
-      - "127.0.0.1:3000:3000"
-    networks:
-      - shrap_net
-    # Langfuse binds ONLY to the container's eth0 address, never to loopback —
-    # so `localhost` and `127.0.0.1` are both refused from inside, while the
-    # host reaches it fine through the port mapping. The original probe was
-    # therefore unsatisfiable and read `unhealthy` for seven weeks against a
-    # service returning {"status":"OK"} to every real caller.
-    #
-    # `hostname -i` is that address. Verified against the running container:
-    # localhost -> refused, 127.0.0.1 -> refused, $(hostname -i) -> 200 OK.
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://$$(hostname -i):3000/api/public/health || exit 1"]
-      interval: 30s
-      timeout: 10s
       retries: 5
 
   # -------------------------------------------------------------------------

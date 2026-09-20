@@ -30,6 +30,10 @@ from shrap.llm.tracing import DEFAULT_HOST, LEVEL_DEFAULT, LEVEL_ERROR
 
 KEYS = {"LANGFUSE_PUBLIC_KEY": "pk-lf-1", "LANGFUSE_SECRET_KEY": "sk-lf-1"}
 
+# Keys alone are no longer enough: the local Langfuse was retired 2026-09-19 and
+# there is nothing to default the host to.
+KEYS_AND_HOST = {**KEYS, "LANGFUSE_HOST": "https://us.cloud.langfuse.com"}
+
 
 class FakeResponse:
     def __init__(self, status_code: int, payload: Any = None, text: str = "") -> None:
@@ -141,12 +145,25 @@ def test_blank_keys_are_absent_keys() -> None:
     assert tracing_config_from_env({**KEYS, "LANGFUSE_PUBLIC_KEY": "   "}) is None
 
 
-def test_host_defaults_to_the_compose_service() -> None:
-    config = tracing_config_from_env(KEYS)
+def test_keys_without_a_host_disable_tracing_rather_than_guessing() -> None:
+    """The local Langfuse was retired 2026-09-19 and nothing may default to it.
+
+    It used to default to `http://langfuse:3000`. Left in place, an agent with
+    keys and no host would log `tracing_enabled` against a container that no
+    longer exists and post every trace into nothing — KI-018 exactly, which is
+    the failure this module's own docstring exists to prevent.
+    """
+
+    assert tracing_config_from_env(KEYS) is None
+    assert DEFAULT_HOST == ""
+
+
+def test_an_explicit_host_is_used_as_given() -> None:
+    config = tracing_config_from_env(KEYS_AND_HOST)
 
     assert config is not None
-    assert config.host == DEFAULT_HOST
-    assert config.ingestion_url == "http://langfuse:3000/api/public/ingestion"
+    assert config.host == "https://us.cloud.langfuse.com"
+    assert config.ingestion_url == "https://us.cloud.langfuse.com/api/public/ingestion"
 
 
 def test_trailing_slash_on_host_does_not_double_up() -> None:
@@ -158,7 +175,7 @@ def test_trailing_slash_on_host_does_not_double_up() -> None:
 
 def test_unparseable_numeric_overrides_fall_back_instead_of_crashing() -> None:
     config = tracing_config_from_env(
-        {**KEYS, "LANGFUSE_TIMEOUT_SECONDS": "soon", "LANGFUSE_MAX_FIELD_CHARS": "lots"}
+        {**KEYS_AND_HOST, "LANGFUSE_TIMEOUT_SECONDS": "soon", "LANGFUSE_MAX_FIELD_CHARS": "lots"}
     )
 
     assert config is not None

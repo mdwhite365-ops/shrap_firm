@@ -1,0 +1,95 @@
+# Local Langfuse — retired from the main stack 2026-09-19, kept here to revive.
+#
+# **It held zero traces for its entire deployed life.** Every one of the firm's
+# 24 agents carries `LANGFUSE_HOST=https://us.cloud.langfuse.com`, and Langfuse
+# Cloud held 4,424 traces when this was removed. The local instance was
+# `langfuse/langfuse:2` (2.95.11, OSS v2, **end of life**) costing an 821 MB
+# image, a 68 MB volume, two healthchecks and a nightly backup leg to store
+# nothing.
+#
+# Same treatment as `infra/ibgateway/` (#243): the compose survives so the
+# decision is reversible, the running containers do not.
+#
+# To revive:
+#
+#     cd infra/langfuse-local
+#     cp ../.env .env          # needs LANGFUSE_DB_USER/PASSWORD, NEXTAUTH_*, SALT
+#     docker compose up -d
+#
+# and point `LANGFUSE_HOST` back at `http://langfuse:3000`. Note that the two
+# stacks must share a network for that name to resolve; `shrap_net` is declared
+# external below for exactly that.
+#
+# **Before reviving, read `src/shrap/llm/tracing.py`.** The hand-rolled client
+# exists *because* OSS v2 cannot talk to Python SDK v3/v4 or OTel. Reviving this
+# re-imposes that constraint, which Cloud does not have.
+
+name: shrap-langfuse-local
+
+networks:
+  shrap_net:
+    external: true
+    name: infra_shrap_net
+
+volumes:
+  langfuse_pg_data:
+    external: true
+    name: infra_langfuse_pg_data
+
+services:
+  # -------------------------------------------------------------------------
+  # Langfuse DB - dedicated Postgres, so its migrations cannot collide with the
+  # firm's main schema. No host port binding.
+  # -------------------------------------------------------------------------
+  langfuse-db:
+    image: postgres:16.4-alpine
+    container_name: shrap_langfuse_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${LANGFUSE_DB_USER}
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_pg_data:/var/lib/postgresql/data
+    networks:
+      - shrap_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LANGFUSE_DB_USER} -d langfuse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # Langfuse - LLM tracing UI / collector. ADR-0004 keeps Langfuse for LLM
+  # specifics; Prometheus+Grafana covers everything else.
+  # -------------------------------------------------------------------------
+  langfuse:
+    image: langfuse/langfuse:2
+    container_name: shrap_langfuse
+    restart: unless-stopped
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${LANGFUSE_DB_USER}:${LANGFUSE_DB_PASSWORD}@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      SALT: ${SALT}
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - shrap_net
+    # Langfuse binds ONLY to the container's eth0 address, never to loopback —
+    # so `localhost` and `127.0.0.1` are both refused from inside, while the
+    # host reaches it fine through the port mapping. The original probe was
+    # therefore unsatisfiable and read `unhealthy` for seven weeks against a
+    # service returning {"status":"OK"} to every real caller.
+    #
+    # `hostname -i` is that address. Verified against the running container:
+    # localhost -> refused, 127.0.0.1 -> refused, $(hostname -i) -> 200 OK.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://$$(hostname -i):3000/api/public/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
