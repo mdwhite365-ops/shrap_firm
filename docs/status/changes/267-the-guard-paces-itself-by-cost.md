@@ -1,4 +1,4 @@
-### The quota guard paces itself by observed cost (#268)
+### The quota guard paces itself by observed cost (#267)
 
 #261 re-checked the shared Ollama allowance every 50 items. **A fixed stride only
 works if you know the per-item price in advance, and 2026-09-20 disproved that
