@@ -56,6 +56,19 @@ PROPOSER_PROMPT_VERSION = 3
 MAX_ABSTRACT_CHARS = 4000
 
 
+def _series_block() -> str:
+    """The engine's readable series, rendered from the set that decides them.
+
+    Hard-coding this sentence is how it went stale: `market cap` joined
+    ``AVAILABLE_SERIES`` in #258 while the prompt still told the model there were
+    exactly two series, so the proposer would have called an expressible effect
+    unexpressible. The prompt and the classifier now read the same set.
+    """
+
+    names = sorted(AVAILABLE_SERIES)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 def _rules_block() -> str:
     lines = [
         "  cross-sectional-momentum — rank the universe by trailing return over "
@@ -120,7 +133,8 @@ PROPOSER_SYSTEM_PROMPT = (
     "QUESTION TWO, and only if question one is true: can this effect be expressed "
     "as one of the rules below?\n"
     "\n"
-    "The engine reads exactly two series per stock: close and volume. It reads "
+    f"The engine reads {len(AVAILABLE_SERIES)} series per stock: {_series_block()}. "
+    "It reads "
     "them at a DAILY grain by default, and at an intraday grain (1 minute or "
     "coarser) when you say so — see `cadence_minutes` below.\n"
     f"{_rules_block()}\n"
@@ -153,8 +167,9 @@ PROPOSER_SYSTEM_PROMPT = (
     "- `prior`: the authors (given to you in the item metadata), the year, and "
     "the claim in one sentence. The claim is yours to read from the abstract.\n"
     "- `required_inputs`: every data series the effect needs, using the words "
-    "`close` and `volume` where those suffice and plain English otherwise (for "
-    "example `shares outstanding`, `signed order flow`, `filing text`). Name an "
+    "`close`, `volume` and `market cap` where those suffice and plain English "
+    "otherwise (for example `signed order flow`, `filing text`, `short interest`). "
+    "Name an "
     "intraday series as `intraday returns`, `intraday volume`, `5-minute closes` "
     "and so on when the effect is measured within the session — those ARE "
     "available now, but only alongside `cadence_minutes`. Be complete and be "
@@ -172,7 +187,7 @@ PROPOSER_SYSTEM_PROMPT = (
     "null. Must be 1-390 (one session). REQUIRED if `required_inputs` names an "
     "intraday series: without it the firm would build a within-day effect over "
     "months and cite your paper for it.\n"
-    "- `deviation`: how an implementation on close and volume alone would differ "
+    f"- `deviation`: how an implementation on {_series_block()} alone would differ "
     "from the paper's construction, or the literal string `none`. Be specific: a "
     "dropped short leg, a close used where the paper used an intraday high, 50 "
     "large caps where the paper used all of CRSP.\n"

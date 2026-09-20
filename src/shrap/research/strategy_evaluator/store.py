@@ -24,6 +24,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
+from shrap.market_data.shares_store import PostgresSharesStore
 from shrap.market_data.store import DEFAULT_BAR_SOURCE
 from shrap.operations.market_phase import (
     DEFAULT_CALENDAR,
@@ -365,6 +366,16 @@ class PostgresEvaluatorReader:
             return None
         return float(row["information_ratio"])
 
+    async def read_shares(self, tickers: Sequence[str]) -> dict[str, list[tuple[date, float]]]:
+        """Filed share counts per ticker, for the panel's market-cap series.
+
+        Delegates to the module that owns the table rather than re-deriving the
+        query. Returns ``{}`` when nothing is filed, which the panel reads as
+        "no market cap for this name" — never as zero.
+        """
+
+        return await PostgresSharesStore(self._pool).shares_history(tickers)
+
     async def read_bars(
         self, ticker: str, start: date, end: date, adjustment: str
     ) -> list[BarSample]:
@@ -525,6 +536,15 @@ class IntradayEvaluatorReader:
 
     async def count_draws(self, strategy_ids: Sequence[str]) -> int:
         return await self._delegate.count_draws(strategy_ids)
+
+    async def read_shares(self, tickers: Sequence[str]) -> dict[str, list[tuple[date, float]]]:
+        """Delegated: a share count is a fact about a company, not a bar grain.
+
+        Market cap on an intraday panel is the same ``close x shares`` with a
+        finer close, and the counts themselves are filed quarterly either way.
+        """
+
+        return await self._delegate.read_shares(tickers)
 
     async def read_bars(
         self, ticker: str, start: date, end: date, adjustment: str

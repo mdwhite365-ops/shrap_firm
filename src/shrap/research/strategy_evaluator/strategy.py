@@ -116,6 +116,17 @@ class PanelWindow:
     def volumes(self, ticker: str) -> tuple[float, ...]:
         return self._panel.history_cached(ticker, "volumes", self._index)
 
+    def market_caps(self, ticker: str) -> tuple[float, ...]:
+        """``close x shares outstanding`` up to and including the current bar.
+
+        Compressed like :meth:`closes`, so a rule asking for 21 observations
+        gets 21 and stays ignorant of listing dates. A name with no share
+        history yields an all-``nan`` series; a cross-sectional ranking must
+        drop those rather than sort them.
+        """
+
+        return self._panel.history_cached(ticker, "market_caps", self._index)
+
 
 @dataclass(frozen=True, slots=True)
 class TickerCoverage:
@@ -217,6 +228,43 @@ class PanelCoverage:
         )
 
 
+def _market_cap_series(
+    dates: Sequence[date],
+    closes: Sequence[float],
+    shares: Sequence[tuple[date, float]],
+) -> tuple[float, ...]:
+    """``close x shares`` per panel date, using only counts already filed.
+
+    **The selection is on ``filed_at``, never on the date the count describes**,
+    and that is the whole point-in-time rule. A count describing 2024-03-31 may
+    not be filed until 2024-05-09; using it on 2024-04-15 is look-ahead the
+    backtest would reward and the live book could not reproduce. See
+    :mod:`shrap.market_data.shares` — this is the same discipline one layer up,
+    applied against the panel's own grid.
+
+    ``nan`` before the first filing and wherever the close is absent. A name the
+    firm has no share history for is ``nan`` throughout rather than zero: zero is
+    a number a ranking would happily sort, and "smallest company in the
+    universe" is the wrong answer to "we do not know".
+    """
+
+    if not shares:
+        return tuple(math.nan for _ in dates)
+    ordered = sorted(shares, key=lambda row: row[0])
+    out: list[float] = []
+    cursor = 0
+    latest = math.nan
+    for i, day in enumerate(dates):
+        # `filed_at <= day`, so a count filed *on* the session date counts: it
+        # was public that morning.
+        while cursor < len(ordered) and ordered[cursor][0] <= day:
+            latest = ordered[cursor][1]
+            cursor += 1
+        close = closes[i]
+        out.append(math.nan if math.isnan(latest) or math.isnan(close) else close * latest)
+    return tuple(out)
+
+
 @dataclass(frozen=True, slots=True)
 class PricePanel:
     """Point-in-time daily OHLCV across one or more tickers, ragged by design.
@@ -252,6 +300,13 @@ class PricePanel:
     closes: dict[str, tuple[float, ...]]
     volumes: dict[str, tuple[float, ...]]
     live: dict[str, tuple[bool, ...]]
+    market_caps: dict[str, tuple[float, ...]] = field(default_factory=dict)
+    """``close x shares``, point-in-time on ``filed_at``. See :func:`_market_cap_series`.
+
+    Defaulted so every existing construction of a panel keeps working and
+    simply has no market caps — a panel built without share history is a
+    valid panel, not a broken one.
+    """
 
     # Derived in __post_init__, never by a caller. `compare=False` keeps two
     # panels with identical inputs equal, and `repr=False` keeps a panel's repr
@@ -347,7 +402,16 @@ class PricePanel:
         remains immutable to anything outside this method.
         """
 
-        for name, series in (("closes", self.closes), ("volumes", self.volumes)):
+        # `market_caps` compresses on the same `live` flags as the price series,
+        # which is what keeps `market_caps(t)[i]` the cap of `closes(t)[i]`. It is
+        # compressed by "did the name trade", never by "is the value nan" — a name
+        # that traded before its first filing has a real bar and an unknown cap,
+        # and dropping that position would shift every later value by one.
+        for name, series in (
+            ("closes", self.closes),
+            ("volumes", self.volumes),
+            ("market_caps", self.market_caps),
+        ):
             self._compressed[name] = {
                 ticker: tuple(
                     value
@@ -372,8 +436,33 @@ class PricePanel:
         return PanelWindow(self, index)
 
     @classmethod
-    def from_bars(cls, bars_by_ticker: Mapping[str, Sequence[BarSample]]) -> PricePanel:
-        """Build a panel over every date any ticker traded."""
+    def from_bars(
+        cls,
+        bars_by_ticker: Mapping[str, Sequence[BarSample]],
+        shares_by_ticker: Mapping[str, Sequence[tuple[date, float]]] | None = None,
+    ) -> PricePanel:
+        """Build a panel over every date any ticker traded.
+
+        ``shares_by_ticker`` is each name's reported share counts as
+        ``(filed_at, shares)``, newest last. Market capitalisation is derived
+        here as ``close x shares`` against **this panel's own closes**, and that
+        is the whole reason it is computed here rather than read from SQL.
+
+        `market_data.shares_store` has a `SELECT_MARKET_CAP_SQL` that joins
+        shares onto `daily_bars` itself. Using it would mean the panel's price
+        and the panel's market cap came from two independent reads, each with
+        its own `adjustment` and `source` arguments — and since #247 the
+        evaluator can run on either feed. Two reads that disagree about which
+        feed they used would produce a market cap that is not close x shares for
+        the close the strategy sees. That is this project's recurring defect
+        exactly: a component recomputing a fact the system already holds, and
+        the two copies disagreeing.
+
+        Names with no share history get ``nan`` throughout, the same as a name
+        with no bar. A strategy ranking on market cap must handle that; it is
+        the honest representation of four multi-class issuers whose counts SEC
+        does not publish (see #253).
+        """
 
         if not bars_by_ticker:
             raise ValueError("PricePanel.from_bars requires at least one ticker")
@@ -391,6 +480,8 @@ class PricePanel:
         closes: dict[str, tuple[float, ...]] = {}
         volumes: dict[str, tuple[float, ...]] = {}
         live: dict[str, tuple[bool, ...]] = {}
+        market_caps: dict[str, tuple[float, ...]] = {}
+        shares_by_ticker = shares_by_ticker or {}
         for ticker in tickers:
             indexed = by_ticker[ticker]
             rows = [indexed.get(d) for d in dates]
@@ -400,6 +491,9 @@ class PricePanel:
             closes[ticker] = tuple(r.close if r else math.nan for r in rows)
             volumes[ticker] = tuple(r.volume if r else math.nan for r in rows)
             live[ticker] = tuple(r is not None for r in rows)
+            market_caps[ticker] = _market_cap_series(
+                dates, closes[ticker], shares_by_ticker.get(ticker, ())
+            )
         return cls(
             tickers=tickers,
             dates=dates,
@@ -409,6 +503,7 @@ class PricePanel:
             closes=closes,
             volumes=volumes,
             live=live,
+            market_caps=market_caps,
         )
 
 

@@ -22,6 +22,7 @@ import pytest
 
 from shrap.research.hypothesis_generator.cli import _dsn, items_from_file
 from shrap.research.hypothesis_generator.expressible import (
+    AVAILABLE_SERIES,
     OUTCOME_MISSING_DATA,
     OUTCOME_MISSING_SCORER,
     CapabilityGap,
@@ -696,13 +697,27 @@ def test_the_prompt_forbids_refusing_an_effect_for_being_unimplementable() -> No
     assert "That decision is not yours" in PROPOSER_SYSTEM_PROMPT
     assert "QUESTION ONE" in PROPOSER_SYSTEM_PROMPT
     assert "QUESTION TWO" in PROPOSER_SYSTEM_PROMPT
-    # The engine's two series must not be stated before the effect judgment.
-    # (Wording changed in v3 from "two daily series" to "two series ... at a
-    # DAILY grain by default" when the intraday grain opened; the ORDERING is
-    # what this guards, and it is why v1 refused six real effects.)
+    # The engine's readable series must not be stated before the effect
+    # judgment. (Wording changed in v3 from "two daily series" to "... at a
+    # DAILY grain by default" when the intraday grain opened, and again in #258
+    # when the count stopped being two; the ORDERING is what this guards, and it
+    # is why v1 refused six real effects.)
     assert PROPOSER_SYSTEM_PROMPT.index("QUESTION ONE") < PROPOSER_SYSTEM_PROMPT.index(
-        "exactly two series per stock"
+        "series per stock"
     )
+
+
+def test_the_prompt_lists_every_series_the_classifier_accepts() -> None:
+    """The prompt told the model there were exactly two series for as long as
+    there were. `market cap` joined ``AVAILABLE_SERIES`` in #258 and the sentence
+    did not move, so the proposer would have called an expressible effect
+    unexpressible while ``classify`` called it expressible — the two halves of
+    one decision disagreeing about the same set. The sentence is now rendered
+    from that set; this pins that it stays rendered from it."""
+
+    for series in AVAILABLE_SERIES:
+        assert series in PROPOSER_SYSTEM_PROMPT, series
+    assert f"{len(AVAILABLE_SERIES)} series per stock" in PROPOSER_SYSTEM_PROMPT
 
 
 def test_the_prompt_judges_what_a_paper_finds_not_what_it_examines() -> None:
