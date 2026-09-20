@@ -1417,6 +1417,55 @@ agent sent before.
 `shrap.common.qdrant_client` at all. `--profile tools build hypothesis-generator`
 is required, per `docs/runbooks/deploying-after-a-code-change.md`.
 
+### The experiment that starved the production filter (#261)
+
+A 599-item bar-experiment replay on 2026-09-20 hit Ollama Cloud's **session**
+rate limit at item 192 and then **made 407 more calls it already knew would be
+refused** — every one returning the same HTTP 429 — writing all 407 as error
+rows. Twenty minutes later the Tech Watcher's hourly literature pass, which
+draws on the same account, aborted with `scored: 0` after five consecutive 429s
+of its own. **An experiment took the production filter down.**
+
+Three faults, each independent:
+
+**1. The budget was denominated in the wrong window.** Ollama Cloud enforces a
+**session** window as well as a weekly one. Every estimate this project has made
+— the 2.7x inferred from request counts, then #255's "10.6 weekly allowances"
+measured against `weekly` — priced runs against the window that was not binding.
+`https://ollama.com/api/usage` returns both directly to the firm's own key and
+nobody here had read it. At the moment of the failure it reported
+`session.usage = 1.0` against `weekly.usage = 0.277`.
+
+`src/shrap/llm/ollama_usage.py` now reads it. `--dry-run` prints both windows
+beside the call budget, because a completion count without the allowance it is
+drawn from is exactly how this run got planned.
+
+**2. There was no backpressure between a batch job and the agents.** The quota is
+account-wide; the Tech Watcher, the Hypothesis Generator and any experiment all
+draw on it. The CLI now refuses to start when the binding window is inside a
+**10% reserve** held for the always-on agents. `--ignore-quota` spends it
+deliberately; nothing spends it by accident.
+
+**3. A run of failures is not a failure.** `run_bar` caught every exception and
+continued, which is right for one bad item and wrong for a wall. The production
+literature filter has had `MAX_CONSECUTIVE_FAILURES = 5` for months;
+`run_bar` now has the same guard, and the items behind the wall are left
+**unwritten** rather than recorded as errors — *never attempted* and *failed* are
+different facts, and a resume needs to tell them apart.
+
+**Resuming.** `--resume-run RUN_ID` scores only the items a run errored on and
+writes them into the **same** run id, so the experiment ends as one comparable
+set of rows rather than two halves under two ids. The conflict clause carries
+`WHERE ... error IS NOT NULL`: a row already holding a verdict is never
+overwritten. Without that guard a resume would replace measurements taken hours
+earlier, possibly under a different model — a recomputation overwriting a
+recorded fact, which is this project's oldest defect shape.
+
+The usage reader fails open by design. The endpoint is undocumented, and a
+courtesy check that can block the firm's work when Ollama changes a URL would be
+a worse fault than the one it guards against. An unreadable meter prints
+`unavailable (proceeding blind)` and the run starts.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.

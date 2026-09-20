@@ -17,12 +17,14 @@ from typing import Any
 
 import pytest
 
+from shrap.llm.ollama_usage import UsageSnapshot, WindowUsage
 from shrap.research.bar_experiment import (
     BAR_EVIDENCE,
     BAR_INCUMBENT,
     BAR_SIGNAL,
     CONTROL_ITEM_IDS,
     HARD_SOURCES,
+    MAX_CONSECUTIVE_ERRORS,
     BarCall,
     ExperimentReport,
     all_bars,
@@ -37,7 +39,7 @@ from shrap.research.bar_experiment import (
     stratified_limit,
     summarize,
 )
-from shrap.research.bar_experiment_cli import load_corpus
+from shrap.research.bar_experiment_cli import INSERT_RESULT_SQL, load_corpus, render_plan
 from shrap.research.tech_watcher.archetypes import ARCHETYPES
 from shrap.research.tech_watcher.filter import FILTER_SYSTEM_PROMPT, UnfilteredItem
 
@@ -448,15 +450,22 @@ def test_a_scored_and_rejected_control_reads_differently_from_an_unseen_one() ->
 
 
 class _ReplayConn:
-    def __init__(self, corpus: list[dict[str, Any]], replay_ids: list[str]) -> None:
+    def __init__(
+        self,
+        corpus: list[dict[str, Any]],
+        replay_ids: list[str],
+        error_ids: list[str] | None = None,
+    ) -> None:
         self._corpus = corpus
         self._replay_ids = replay_ids
+        self._error_ids = error_ids or []
         self.queries: list[str] = []
 
     async def fetch(self, sql: str, *args: object) -> list[dict[str, Any]]:
         self.queries.append(sql)
         if "bar_experiment_results" in sql:
-            return [{"item_id": i} for i in self._replay_ids]
+            ids = self._error_ids if "error IS NOT NULL" in sql else self._replay_ids
+            return [{"item_id": i} for i in ids]
         return self._corpus
 
 
@@ -528,3 +537,163 @@ async def test_without_replay_the_corpus_is_unchanged() -> None:
     items = await load_corpus(pool, None, None)
 
     assert len(items) == 4
+
+
+# ---------------------------------------------------------------------------
+# Resuming a run a spent quota stopped
+#
+# 2026-09-20: a 599-item replay hit Ollama's session cap at item 192 and made
+# 407 more calls it already knew would be refused, writing every one as an error
+# row. Two defects in one event — the bar did not stop, and there was no way to
+# finish the run without paying for the 192 again.
+# ---------------------------------------------------------------------------
+
+
+async def test_resume_selects_only_the_items_that_errored() -> None:
+    corpus = [_corpus_row(f"edgar:{n}", "sec-edgar") for n in range(5)]
+    pool = _ReplayPool(
+        _ReplayConn(corpus, replay_ids=[], error_ids=["edgar:3", "edgar:4"]),
+    )
+
+    items = await load_corpus(pool, None, None, "01STALLED")
+
+    assert sorted(i.item_id for i in items) == ["edgar:3", "edgar:4"]
+
+
+async def test_resuming_a_clean_run_is_an_error_not_a_no_op() -> None:
+    """A run with no errored rows is finished. Silently scoring nothing would
+    print a confident report over an empty corpus."""
+
+    pool = _ReplayPool(_ReplayConn([_corpus_row("edgar:1", "sec-edgar")], [], []))
+
+    with pytest.raises(SystemExit, match="no errored results"):
+        await load_corpus(pool, None, None, "01CLEAN")
+
+
+def test_a_resume_never_overwrites_a_recorded_verdict() -> None:
+    """The conflict clause heals errored rows and only errored rows.
+
+    A resume writes into the ORIGINAL run id so the run ends as one comparable
+    set. Without the guard it would also replace verdicts measured hours earlier,
+    possibly under a different model — a recomputation overwriting a recorded
+    fact, which is this project's oldest defect shape (#192-#199, #245).
+    """
+
+    assert "ON CONFLICT (run_id, bar, item_id) DO UPDATE" in INSERT_RESULT_SQL
+    assert "WHERE research.bar_experiment_results.error IS NOT NULL" in INSERT_RESULT_SQL
+
+
+# ---------------------------------------------------------------------------
+# The plan states the allowance, not just the spend
+# ---------------------------------------------------------------------------
+
+
+def test_the_plan_names_both_usage_windows() -> None:
+    """Printing a completion count without the allowance it is drawn from is how
+    a 599-item run was planned against a weekly window with room to spare and a
+    session window with none."""
+
+    items = [UnfilteredItem("edgar:1", "sec-edgar", None, "t", "s")]
+    bars = bars_by_key(["A-incumbent"])
+    snapshot = UsageSnapshot(
+        session=WindowUsage("session", 0.95, 900),
+        weekly=WindowUsage("weekly", 0.20, 1200),
+    )
+
+    plan = render_plan(items, bars, snapshot)
+
+    assert "session 95.0% used" in plan
+    assert "weekly 20.0% used" in plan
+
+
+def test_an_unreadable_meter_says_so_rather_than_printing_nothing() -> None:
+    items = [UnfilteredItem("edgar:1", "sec-edgar", None, "t", "s")]
+
+    plan = render_plan(items, bars_by_key(["A-incumbent"]), None)
+
+    assert "unavailable" in plan
+
+
+# ---------------------------------------------------------------------------
+# A run of failures is not a failure
+# ---------------------------------------------------------------------------
+
+
+class FlakyThenDeadClient:
+    """Succeeds `healthy` times, then fails forever — a quota running out."""
+
+    def __init__(self, healthy: int) -> None:
+        self.healthy = healthy
+        self.attempts = 0
+
+    async def complete(
+        self,
+        tier: str,
+        prompt: str,
+        system: str | None = None,
+        json_mode: bool = False,
+        temperature: float = 0.2,
+        think: bool | None = None,
+        task: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+    ) -> FakeResult:
+        self.attempts += 1
+        if self.attempts > self.healthy:
+            raise ConnectionError("ollama returned 429: session usage limit")
+        return FakeResult('{"relevant": false, "archetype": null}')
+
+
+async def test_a_bar_stops_after_a_run_of_errors_instead_of_burning_the_corpus() -> None:
+    """2026-09-20: a 599-item replay hit Ollama's session cap at item 192 and
+    made 407 more calls it already knew would be refused, writing every one as an
+    error row. Five in a row is systemic — a spent quota, a dead endpoint, a
+    retired model — and every further call spends the account's allowance to
+    learn nothing."""
+
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    client = FlakyThenDeadClient(healthy=3)
+    items = [_item(f"i{n}") for n in range(50)]
+
+    calls = await run_bar(bar, client, items, "local-classification", max_consecutive_errors=5)
+
+    assert client.attempts == 8, "3 good then 5 consecutive errors, then stop"
+    assert len(calls) == 8
+    assert sum(1 for c in calls if c.error) == 5
+
+
+async def test_the_items_behind_the_wall_are_left_unwritten() -> None:
+    """Not recorded as errors. An item that was never attempted and an item that
+    failed are different facts, and a resume needs to tell them apart."""
+
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    items = [_item(f"i{n}") for n in range(50)]
+
+    calls = await run_bar(bar, FlakyThenDeadClient(healthy=0), items, "local-classification")
+
+    scored_ids = {c.item.item_id for c in calls}
+    assert scored_ids == {f"i{n}" for n in range(MAX_CONSECUTIVE_ERRORS)}
+
+
+async def test_scattered_failures_do_not_stop_a_bar() -> None:
+    """The counter resets on success. One flaky item in ten must not end a run
+    that is otherwise working — that is the behaviour `test_a_failed_call_is_
+    recorded_not_raised` protects, and the abort must not break it."""
+
+    class EveryOtherClient:
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def complete(self, tier: str, prompt: str, **kwargs: Any) -> FakeResult:
+            self.attempts += 1
+            if self.attempts % 2 == 0:
+                raise ConnectionError("transient")
+            return FakeResult('{"relevant": false, "archetype": null}')
+
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    items = [_item(f"i{n}") for n in range(20)]
+
+    calls = await run_bar(bar, EveryOtherClient(), items, "local-classification")
+
+    assert len(calls) == 20

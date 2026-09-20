@@ -83,6 +83,11 @@ BAR_SIGNAL = "C-signal-tagging"
 # these, and the distinction is free to measure.
 CONTROL_ITEM_IDS: tuple[str, ...] = ("arxiv:2607.20349v1", "arxiv:2607.20083v1")
 
+# Matches the production literature filter's MAX_CONSECUTIVE_FAILURES. Five in a
+# row is not bad luck: it is a spent quota, a dead endpoint or a retired model,
+# and every further call spends the account's allowance to learn nothing.
+MAX_CONSECUTIVE_ERRORS = 5
+
 HARD_SOURCES: frozenset[str] = frozenset(
     {"sec-edgar", "usaspending", "federal-register", "doe-newsroom"}
 )
@@ -386,6 +391,8 @@ async def run_bar(
     client: CompletionClient,
     items: Sequence[UnfilteredItem],
     tier: str,
+    *,
+    max_consecutive_errors: int = MAX_CONSECUTIVE_ERRORS,
 ) -> list[BarCall]:
     """Score every item under one bar. A failed call is recorded, not raised.
 
@@ -393,9 +400,21 @@ async def run_bar(
     error travels in the result so the report can name a routing failure rather
     than render it as a row of zeroes — the lesson from the model eval's first
     two runs.
+
+    **A run of failures is different from a failure**, and this did not know the
+    difference until 2026-09-20. A 599-item replay hit Ollama's session cap at
+    item 192 and then made **407 more calls it already knew would be refused** —
+    every one returning the same HTTP 429 — writing them all as error rows.
+    Nothing was learned per call and the account's quota kept being asked for.
+    ``max_consecutive_errors`` stops the bar the way the production literature
+    filter already stopped its batch (``MAX_CONSECUTIVE_FAILURES``); the items
+    behind the wall are left **unwritten** rather than recorded as errors, so
+    they can be picked up later without having to distinguish "failed" from
+    "never attempted".
     """
 
     calls: list[BarCall] = []
+    consecutive_errors = 0
     for item in items:
         started = time.perf_counter()
         try:
@@ -418,7 +437,20 @@ async def run_bar(
                     error=f"{type(exc).__name__}: {exc}"[:300],
                 )
             )
+            consecutive_errors += 1
+            if consecutive_errors >= max_consecutive_errors:
+                # Systemic: a spent quota, a dead endpoint, a retired model.
+                log.error(
+                    "bar_experiment.bar_aborted",
+                    bar=bar.key,
+                    scored=len(calls) - consecutive_errors,
+                    consecutive=consecutive_errors,
+                    unattempted=len(items) - len(calls),
+                    error=f"{type(exc).__name__}: {exc}"[:300],
+                )
+                break
             continue
+        consecutive_errors = 0
         latency_ms = (time.perf_counter() - started) * 1000
         raw = str(getattr(result, "content", ""))
         calls.append(
@@ -689,6 +721,7 @@ __all__ = [
     "BAR_SIGNAL",
     "CONTROL_ITEM_IDS",
     "HARD_SOURCES",
+    "MAX_CONSECUTIVE_ERRORS",
     "Bar",
     "BarCall",
     "BarSummary",
