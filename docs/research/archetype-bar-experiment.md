@@ -177,6 +177,14 @@ exact failure: if admits are rare, a sample finds too few to read.
 > live allowance — 600 completions moved weekly usage from 0.100 to 0.202 — that is
 > **~10.6 weekly allowances**, not 3% of one. Do not quote the paragraph below as
 > authority for what this costs; see `docs/research/archetype-bar-results.md`.
+>
+> **And the weekly allowance is the wrong denominator.** Ollama Cloud enforces a
+> **session** window as well as a weekly one, and the session window is what
+> actually stops a run: a 599-item single-bar replay on 2026-09-20 was refused
+> with HTTP 429 after 192 items with `limits.weekly.usage` at **0.277**. Read
+> `https://ollama.com/api/usage` with the firm's key before committing to any
+> multi-hundred-completion run; it reports both windows directly and costs
+> nothing.
 
 That is affordable and the measurement says so rather than the estimate. In the
 week of 2026-07-31 the box spent 3,320 requests — 2,941 of them the production
@@ -220,7 +228,7 @@ sources rather than taxonomy.
 |---|---|
 | 1 | ~~This spec, merged (accepting the experiment design)~~ **DONE** (#173) |
 | 2 | ~~Harness card — bar variants + persistence + isolation test~~ **DONE** — `shrap-bar-experiment`, `src/shrap/research/bar_experiment.py` |
-| 3 | Run over the full corpus; admitted-item lists per bar — **partial 2026-09-20**: 200-item stratified pilot run on `kimi-k3`, results in `docs/research/archetype-bar-results.md`. Full run blocked on quota (63,693 completions ≈ 10.6 weekly allowances, measured) and on whether the hypothesis still warrants it — DQ-006's named exemplar flipped on a *model* change, not a bar change. |
+| 3 | Run over the full corpus; admitted-item lists per bar — **largely DONE 2026-07-31, discovered 2026-09-20**: all three bars ran over the same ~599 items on `qwen3.5:397b` (hard-leg admits A 2/454, B 2/453, C 1/454; every admit one of two USASpending DOE awards). Both `bar_experiment_runs` and `bar_experiment_results` recorded all four invocations the whole time; the results were simply never written up. See `docs/research/archetype-bar-results.md`. Outstanding: the same comparison under `kimi-k3`. Superseded note — **partial 2026-09-20**: 200-item stratified pilot run on `kimi-k3`, results in `docs/research/archetype-bar-results.md`. Full run blocked on quota (63,693 completions ≈ 10.6 weekly allowances, measured) and on whether the hypothesis still warrants it — DQ-006's named exemplar flipped on a *model* change, not a bar change. |
 | 4 | Mike's ruling; `world-changer-archetypes.md` updated first, then the mirror and the prompt |
 | 5 | Re-filter the corpus under the ruled bar (KI-009 fix order step 3, still valid) |
 

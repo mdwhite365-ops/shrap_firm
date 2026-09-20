@@ -90,6 +90,26 @@ true for days and neither of which raised anything.**
   destination directory:** files in `/mnt/backups` were never evidence that the
   schedule worked.
 
+**The Ollama quota has two windows and this project budgeted against the wrong
+one for months (#261, 2026-09-20).** Ollama Cloud enforces a **session** limit as
+well as a weekly one, and the session limit is what stops runs. A 599-item
+experiment was refused after 192 items with `weekly.usage` at **0.277** and
+`session.usage` at **1.0**; #255's "10.6 weekly allowances" and the earlier 2.7x
+estimate are both priced in the window that does not bind.
+**`https://ollama.com/api/usage` returns both directly** to the firm's own key —
+read it (`src/shrap/llm/ollama_usage.py`) before committing to any batch of
+completions. **The quota is account-wide**, so a batch job starves the always-on
+agents: twenty minutes after that run, the Tech Watcher's hourly literature pass
+aborted with `scored: 0`. Batch CLIs hold a 10% reserve back for them.
+
+**A pipe is part of the query (#260).** `select * from research.bar_experiment_runs
+limit 5 | head -14` returned four rows and showed one, because `report_markdown`
+is a multi-line `TEXT` column and psql's aligned output spans dozens of lines per
+row. The truncation was read as a finding — "bars B and C have never been run" —
+and the first correction then invented a root cause the data did not support.
+`SELECT *` on a table with a wide text column is not a listing; name the columns,
+or ask for `count(*)` when a count is the claim.
+
 **And the merge of #249/#250 left `CLAUDE.md` asserting both that Qdrant held
 zero collections and that it was live**, two lines apart, because both PRs
 edited the same paragraph on the same day. Fixed in #251. Two cards touching one

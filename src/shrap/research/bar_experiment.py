@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -82,6 +82,21 @@ BAR_SIGNAL = "C-signal-tagging"
 # because a bar that admits nothing is failing differently from one that admits
 # these, and the distinction is free to measure.
 CONTROL_ITEM_IDS: tuple[str, ...] = ("arxiv:2607.20349v1", "arxiv:2607.20083v1")
+
+# Matches the production literature filter's MAX_CONSECUTIVE_FAILURES. Five in a
+# row is not bad luck: it is a spent quota, a dead endpoint or a retired model,
+# and every further call spends the account's allowance to learn nothing.
+MAX_CONSECUTIVE_ERRORS = 5
+
+# How often a long bar re-checks the shared allowance. 50 items is roughly two
+# minutes at the measured rate — often enough that a bar cannot drain the window
+# between checks, rare enough that the check itself is noise against the
+# completions it guards.
+QUOTA_CHECK_EVERY = 50
+
+# Returns a reason to stop, or None to keep going. Async because the only
+# implementation asks a remote meter.
+QuotaCheck = Callable[[], Awaitable[str | None]]
 
 HARD_SOURCES: frozenset[str] = frozenset(
     {"sec-edgar", "usaspending", "federal-register", "doe-newsroom"}
@@ -386,6 +401,10 @@ async def run_bar(
     client: CompletionClient,
     items: Sequence[UnfilteredItem],
     tier: str,
+    *,
+    max_consecutive_errors: int = MAX_CONSECUTIVE_ERRORS,
+    quota_check: QuotaCheck | None = None,
+    quota_check_every: int = QUOTA_CHECK_EVERY,
 ) -> list[BarCall]:
     """Score every item under one bar. A failed call is recorded, not raised.
 
@@ -393,10 +412,42 @@ async def run_bar(
     error travels in the result so the report can name a routing failure rather
     than render it as a row of zeroes — the lesson from the model eval's first
     two runs.
+
+    **A run of failures is different from a failure**, and this did not know the
+    difference until 2026-09-20. A 599-item replay hit Ollama's session cap at
+    item 192 and then made **407 more calls it already knew would be refused** —
+    every one returning the same HTTP 429 — writing them all as error rows.
+    Nothing was learned per call and the account's quota kept being asked for.
+    ``max_consecutive_errors`` stops the bar the way the production literature
+    filter already stopped its batch (``MAX_CONSECUTIVE_FAILURES``); the items
+    behind the wall are left **unwritten** rather than recorded as errors, so
+    they can be picked up later without having to distinguish "failed" from
+    "never attempted".
+
+    **``quota_check`` is the difference between a guard and a gesture.** Checking
+    the allowance only before the first item proves there was room to *start*,
+    which is the moment the check matters least: a long bar can spend the whole
+    window mid-flight and starve the always-on agents that share the account,
+    which is the fault this guard exists to prevent. The callback is polled every
+    ``quota_check_every`` items and returns a reason to stop, or ``None``. It
+    stops the bar **cleanly** — the items behind it are unwritten, exactly as
+    with a wall of errors — so the run is resumable rather than half-recorded.
     """
 
     calls: list[BarCall] = []
-    for item in items:
+    consecutive_errors = 0
+    for index, item in enumerate(items):
+        if quota_check is not None and index and index % quota_check_every == 0:
+            stop_reason = await quota_check()
+            if stop_reason is not None:
+                log.error(
+                    "bar_experiment.bar_stopped_on_quota",
+                    bar=bar.key,
+                    scored=len(calls),
+                    unattempted=len(items) - len(calls),
+                    reason=stop_reason,
+                )
+                break
         started = time.perf_counter()
         try:
             result = await client.complete(
@@ -418,7 +469,20 @@ async def run_bar(
                     error=f"{type(exc).__name__}: {exc}"[:300],
                 )
             )
+            consecutive_errors += 1
+            if consecutive_errors >= max_consecutive_errors:
+                # Systemic: a spent quota, a dead endpoint, a retired model.
+                log.error(
+                    "bar_experiment.bar_aborted",
+                    bar=bar.key,
+                    scored=len(calls) - consecutive_errors,
+                    consecutive=consecutive_errors,
+                    unattempted=len(items) - len(calls),
+                    error=f"{type(exc).__name__}: {exc}"[:300],
+                )
+                break
             continue
+        consecutive_errors = 0
         latency_ms = (time.perf_counter() - started) * 1000
         raw = str(getattr(result, "content", ""))
         calls.append(
@@ -689,11 +753,14 @@ __all__ = [
     "BAR_SIGNAL",
     "CONTROL_ITEM_IDS",
     "HARD_SOURCES",
+    "MAX_CONSECUTIVE_ERRORS",
+    "QUOTA_CHECK_EVERY",
     "Bar",
     "BarCall",
     "BarSummary",
     "BarVerdict",
     "ExperimentReport",
+    "QuotaCheck",
     "SignalRef",
     "all_bars",
     "bars_by_key",

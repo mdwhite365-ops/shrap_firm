@@ -1456,6 +1456,116 @@ the raw count is a different strategy from one ranking on size, and the module's
 standing rule is that a wording difference may be normalised while a construction
 difference must not.
 
+### Correction: all three archetype bars already ran in July (#260)
+
+#255 said *"bars B and C have never been run."* **That was wrong.**
+
+**And the first version of this correction blamed the wrong cause**, which is
+recorded here because a correction carrying its own error is worth less than
+nothing. It said the summary table held one row while the detail table held
+four. Both tables were right: `research.bar_experiment_runs` has always held
+**four** rows for 2026-07-31, one per invocation, each naming its bar.
+
+The query was `select * from research.bar_experiment_runs order by 1 desc limit
+5` piped to `head -14`. `report_markdown` is a multi-line `TEXT` column holding
+an entire run report, so in psql's aligned output **one row spans dozens of
+lines** and `head -14` cut the result off inside the first one. Four rows came
+back; one was shown. **I read my own truncation as a finding.**
+
+**A pipe is part of the query.** `head` truncates silently and the truncation is
+indistinguishable from a short result. `SELECT *` on a table with a wide text
+column is not a listing — name the columns, or ask for `count(*)` when a count
+is the claim.
+
+The three comparable runs share an item set (A∩B = 598, A∩C = 599 of ~600), one
+corpus, one model:
+
+| bar | hard scored | hard admits |
+|---|---|---|
+| `A-incumbent` | 454 | **2** |
+| `B-evidence-contribution` | 453 | **2** |
+| `C-signal-tagging` | 454 | **1** |
+
+Every admit across all three is one of **two USASpending DOE awards**. `B`
+admits exactly what `A` admits; `C` admits one of them and labels a uranium
+enrichment contract `bio-mechanism`.
+
+**The hypothesis predicts B and especially C should admit substantially more
+than A. They do not.** That is the outcome the spec names as falsifying.
+
+So the full three-bar run on 21,231 items — the one I costed at **10.6 weekly
+Ollama allowances** — is probably not worth funding. The three-bar comparison
+already exists. What does not exist is the same comparison under the current
+model, and that is **one bar over 599 items**, roughly 10% of a week.
+
+That replay ran as `01M2YHEGZ5KSBAADGHYK96QGAY` and **407 of its 599 rows carry
+an error**, every one the same HTTP 429: *"you have reached your session usage
+limit."* 192 items were actually scored.
+
+**The budget number this project has been using is the wrong one.**
+`https://ollama.com/api/usage` — an endpoint nobody here had read, returning JSON
+to the firm's own key — reports `limits.session.usage = 1.0` against
+`limits.weekly.usage = 0.277`. Every cost estimate in #255 and in the spec is
+denominated in the weekly window, and the **session** window is what actually
+stops a run. It had not reset an hour later, and the payload does not say how
+long it lasts.
+
+### The experiment that starved the production filter (#261)
+
+A 599-item bar-experiment replay on 2026-09-20 hit Ollama Cloud's **session**
+rate limit at item 192 and then **made 407 more calls it already knew would be
+refused** — every one returning the same HTTP 429 — writing all 407 as error
+rows. Twenty minutes later the Tech Watcher's hourly literature pass, which
+draws on the same account, aborted with `scored: 0` after five consecutive 429s
+of its own. **An experiment took the production filter down.**
+
+Three faults, each independent:
+
+**1. The budget was denominated in the wrong window.** Ollama Cloud enforces a
+**session** window as well as a weekly one. Every estimate this project has made
+— the 2.7x inferred from request counts, then #255's "10.6 weekly allowances"
+measured against `weekly` — priced runs against the window that was not binding.
+`https://ollama.com/api/usage` returns both directly to the firm's own key and
+nobody here had read it. At the moment of the failure it reported
+`session.usage = 1.0` against `weekly.usage = 0.277`.
+
+`src/shrap/llm/ollama_usage.py` now reads it. `--dry-run` prints both windows
+beside the call budget, because a completion count without the allowance it is
+drawn from is exactly how this run got planned.
+
+**2. There was no backpressure between a batch job and the agents.** The quota is
+account-wide; the Tech Watcher, the Hypothesis Generator and any experiment all
+draw on it. The CLI now refuses to start when the binding window is inside a
+**10% reserve** held for the always-on agents. `--ignore-quota` spends it
+deliberately; nothing spends it by accident.
+
+**The reserve is re-checked every 50 items, not only at the start.** A start-time
+check proves there was room to *begin*, which is the moment it matters least — a
+407-item bar can spend the whole window mid-flight and starve production anyway,
+which is the fault the guard exists to prevent. A mid-run stop is **clean**: the
+items behind it are unwritten, same contract as the error wall, so the run stays
+resumable rather than half-recorded.
+
+**3. A run of failures is not a failure.** `run_bar` caught every exception and
+continued, which is right for one bad item and wrong for a wall. The production
+literature filter has had `MAX_CONSECUTIVE_FAILURES = 5` for months;
+`run_bar` now has the same guard, and the items behind the wall are left
+**unwritten** rather than recorded as errors — *never attempted* and *failed* are
+different facts, and a resume needs to tell them apart.
+
+**Resuming.** `--resume-run RUN_ID` scores only the items a run errored on and
+writes them into the **same** run id, so the experiment ends as one comparable
+set of rows rather than two halves under two ids. The conflict clause carries
+`WHERE ... error IS NOT NULL`: a row already holding a verdict is never
+overwritten. Without that guard a resume would replace measurements taken hours
+earlier, possibly under a different model — a recomputation overwriting a
+recorded fact, which is this project's oldest defect shape.
+
+The usage reader fails open by design. The endpoint is undocumented, and a
+courtesy check that can block the firm's work when Ollama changes a URL would be
+a worse fault than the one it guards against. An unreadable meter prints
+`unavailable (proceeding blind)` and the run starts.
+
 ### The Langfuse constraint is gone; the hand-rolled client stays anyway (#262)
 
 #254 retired the local `langfuse/langfuse:2` container, and `tracing.py` still
