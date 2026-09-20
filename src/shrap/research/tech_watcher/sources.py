@@ -6,11 +6,14 @@ Five source classes, none requiring credentials:
   requires a descriptive ``User-Agent`` with contact info; the value comes
   from settings. Item identity is the accession number.
 - **arXiv** API query over the spec's categories (cs.AI, cs.LG, cond-mat,
-  q-bio.NC), newest first, **one request per category**. Item identity is the
-  arXiv id (with version), deduped across categories. One query per category
-  because arXiv refuses some of them outright with HTTP 406 — measured
-  2026-09-19 — and a single OR query let two refused categories take the two
-  healthy ones down with them for 46 consecutive passes.
+  q-bio.NC), newest first. Item identity is the arXiv id (with version).
+  **One combined query, splitting per category only when that fails** — arXiv
+  refuses `cond-mat` and `q-bio.NC` outright with HTTP 406 (measured
+  2026-09-19), and a single OR query let those two take the two healthy ones
+  down with them for 46 consecutive passes. Splitting *unconditionally* fixed
+  that and cost 24 requests a pass against the old code's 2, at an API whose
+  failure mode is throttling; splitting on failure keeps a healthy source at
+  one request.
 - **USASpending** award search (POST JSON API) filtered to configured
   awarding agencies above a dollar threshold, over a lookback window.
   Item identity is the award's ``generated_internal_id``. This is the
@@ -145,12 +148,19 @@ RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 # experiment: the URL, the user-agent, container-vs-host, the public IP,
 # HTTP/1.1-vs-2, sync-vs-async, the category set and the query shape.
 #
-# **A retry does not rescue a sustained one** — 10 attempts over 60 seconds all
-# returned 406, and so did all four header combinations once the host was
-# throttled. 406 is listed here for the brief version only. The sustained
-# version is answered by not getting throttled (see ARXIV_MIN_INTERVAL_SECONDS)
-# and by the per-source freshness target in `shrap.operations.staleness`.
-ARXIV_RETRYABLE_STATUSES = RETRYABLE_STATUSES | {406}
+# **406 is therefore NOT retried, and the first version of this card had that
+# wrong.** It listed 406 as transient "for the brief version", two lines under a
+# comment recording that 10 attempts over 60 seconds all returned 406. Deployed,
+# that contradiction cost 24 arXiv requests in a single pass against the old
+# code's 2 — a 12x amplification aimed at an endpoint whose whole message is
+# *slow down*. Retrying a throttle signal is not a partial fix, it is the
+# opposite of one.
+#
+# So arXiv shares the default set: 429 and 5xx are worth another attempt, 406 is
+# an instruction to stop. The sustained case is answered by not getting throttled
+# (ARXIV_MIN_INTERVAL_SECONDS) and by the per-source freshness target in
+# `shrap.operations.staleness` making the outage visible within three hours.
+ARXIV_RETRYABLE_STATUSES = RETRYABLE_STATUSES
 
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_BACKOFF_SECONDS = 2.0
@@ -468,21 +478,55 @@ class ArxivSource:
         return self._name
 
     async def fetch(self, http: HTTPClient, timeout: float = 30.0) -> list[RawSourceItem]:
+        """All categories in one query; split per category only if that fails.
+
+        **The combined query first, because requests are the scarce thing.**
+        Splitting unconditionally isolates a refused category — which is the
+        defect this class was fixed for — but it also multiplies a healthy
+        source's request count by the number of categories, against an API whose
+        failure mode is throttling. Deployed that way it made 24 arXiv requests
+        in one pass where the old code made 2.
+
+        One request when everything works, and the fan-out only on the pass where
+        something is actually broken. `arxiv-qfin` therefore costs 1 request;
+        `arxiv`, whose `cond-mat` and `q-bio.NC` are refused outright, costs
+        1 + 4.
+        """
+
+        combined = " OR ".join(f"cat:{c}" for c in self._categories)
+        try:
+            response = await self._query(combined, http, timeout, label=self._name)
+        except SourceError as e:
+            log.info(
+                "tech_watcher.arxiv_combined_failed",
+                source=self._name,
+                error=str(e)[:200],
+                categories=len(self._categories),
+            )
+        else:
+            return self._items_from(response, self._name)
+
+        return await self._fetch_each_category(http, timeout)
+
+    async def _fetch_each_category(self, http: HTTPClient, timeout: float) -> list[RawSourceItem]:
+        """One query per category, so one refusal cannot take the rest with it.
+
+        **Measured 2026-09-19**, three clean rounds eight seconds apart,
+        identical every time: `cs.AI` 200, `cs.LG` 200, `q-bio.NC` 406,
+        `cond-mat` 406, `cond-mat.stat-mech` 406. The source asked for all four
+        in one query, so two refused categories took the two healthy ones down
+        with them for 46 consecutive passes.
+        """
+
         items: list[RawSourceItem] = []
         seen: set[str] = set()
         failures: list[str] = []
 
         for category in self._categories:
+            label = f"{self._name}[{category}]"
             try:
-                response = await self._fetch_category(category, http, timeout)
+                response = await self._query(f"cat:{category}", http, timeout, label=label)
             except SourceError as e:
-                # **One refused category must not cost the whole feed.** Measured
-                # 2026-09-19, three clean rounds, 8s apart: `cs.AI` and `cs.LG`
-                # return 200 while `q-bio.NC`, `cond-mat` and
-                # `cond-mat.stat-mech` return 406 every time. This source asked
-                # for all four in one OR query, so two refused categories took
-                # `cs.AI` and `cs.LG` down with them — 46 consecutive passes
-                # ingesting nothing from a feed that was two-thirds healthy.
                 failures.append(f"{category}: {e}")
                 log.warning(
                     "tech_watcher.arxiv_category_failed",
@@ -491,9 +535,8 @@ class ArxivSource:
                     error=str(e)[:200],
                 )
                 continue
-            for entry in _parse_feed(response.text, f"{self._name}[{category}]"):
-                item = self._entry_to_item(entry)
-                if item is not None and item.item_id not in seen:
+            for item in self._items_from(response, label):
+                if item.item_id not in seen:
                     seen.add(item.item_id)
                     items.append(item)
 
@@ -504,8 +547,16 @@ class ArxivSource:
             raise SourceError(f"{self._name}: every category failed ({'; '.join(failures)})")
         return items
 
-    async def _fetch_category(
-        self, category: str, http: HTTPClient, timeout: float
+    def _items_from(self, response: HTTPResponse, label: str) -> list[RawSourceItem]:
+        out: list[RawSourceItem] = []
+        for entry in _parse_feed(response.text, label):
+            item = self._entry_to_item(entry)
+            if item is not None:
+                out.append(item)
+        return out
+
+    async def _query(
+        self, search_query: str, http: HTTPClient, timeout: float, *, label: str
     ) -> HTTPResponse:
         async def send() -> HTTPResponse:
             # Inside `send`, so it applies to retries too. A retry that ignored
@@ -514,7 +565,7 @@ class ArxivSource:
             return await http.get(
                 ARXIV_QUERY_URL,
                 params={
-                    "search_query": f"cat:{category}",
+                    "search_query": search_query,
                     "sortBy": "submittedDate",
                     "sortOrder": "descending",
                     "start": "0",
@@ -524,7 +575,7 @@ class ArxivSource:
                 timeout=timeout,
             )
 
-        return await _send_with_retry(send, context=f"{self._name}[{category}]", policy=self._retry)
+        return await _send_with_retry(send, context=label, policy=self._retry)
 
     def _entry_to_item(self, entry: ET.Element) -> RawSourceItem | None:
         entry_id = _text(entry, "id")

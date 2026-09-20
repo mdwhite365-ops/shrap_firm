@@ -187,14 +187,10 @@ async def test_the_two_sources_query_disjoint_categories() -> None:
 
     await ArxivSource(DEFAULT_QFIN_CATEGORIES, name=SOURCE_ARXIV_QFIN).fetch(http)  # type: ignore[arg-type]
 
-    # One request per category since #251 — a single OR query meant one refused
-    # category took the healthy ones down with it.
-    assert http.queries == [
-        "cat:q-fin.PM",
-        "cat:q-fin.ST",
-        "cat:q-fin.TR",
-        "cat:q-fin.GN",
-    ]
+    # One combined query while the source is healthy. Since #256 the per-category
+    # split happens only when that fails — splitting unconditionally cost 24
+    # arXiv requests a pass against the old code's 2.
+    assert http.queries == ["cat:q-fin.PM OR cat:q-fin.ST OR cat:q-fin.TR OR cat:q-fin.GN"]
     assert not set(DEFAULT_QFIN_CATEGORIES) & {"cs.AI", "cs.LG", "cond-mat", "q-bio.NC"}
 
 

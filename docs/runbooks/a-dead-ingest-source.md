@@ -141,6 +141,32 @@ either way.
 papers — its first in two days — which is consistent with a throttle that
 expired.
 
+### The first fix amplified the problem, and that is worth keeping on record
+
+Shipped in #252, measured on deploy: **24 arXiv requests in a single pass, where
+the old code made 2.** Two mistakes compounded.
+
+- **406 was listed as retryable.** Two lines under a comment recording that ten
+  attempts over sixty seconds all returned 406. Retrying a throttle signal is not
+  a partial fix — it is the opposite of one, and it tripled every request.
+- **The per-category split was unconditional.** It correctly stops one refused
+  category taking the healthy ones down, but it multiplies a *healthy* source's
+  requests by the number of categories, at an API whose failure mode is exactly
+  too many requests.
+
+Fixed in #256: 406 is no longer retried anywhere, and the combined query is tried
+first with the per-category split as a fallback. Measured against live arXiv:
+
+| | old | #252 | #256 |
+|---|---|---|---|
+| healthy pass | 2 | 8 | **2** |
+| degraded pass | 2 | 24 | **10** |
+
+**The lesson is the one this runbook already carried and I did not apply to my
+own change:** when the failure signal means *slow down*, every reflex that adds
+requests — retry, fan-out, a tighter poll — makes it worse. Count the requests a
+fix will make before shipping it.
+
 ### What is not established
 
 - **Whether the throttle fix prevents recurrence.** It could not be tested
