@@ -1349,6 +1349,35 @@ three out against a v2 server. Cloud supports them. That constraint is now
 obsolete, so replacing the hand-rolled client is an available card; it is not
 this one.
 
+### The archetype bar experiment finally ran, and the premise wobbled (#255)
+
+The spec (#173) has sat at step 3 — *"run over the full corpus"* — since July.
+A 200-item stratified pilot ran 2026-09-20 on `kimi-k3`, three bars, 600
+completions. Full results in `docs/research/archetype-bar-results.md`.
+
+| bar | hard-leg admits / scored |
+|---|---|
+| `A-incumbent` | 2 / 146 |
+| `B-evidence-contribution` | 1 / 146 |
+| `C-signal-tagging` | 0 / 146 |
+
+**Those are not distinguishable from each other** and must not be read as a
+ranking — the spec predicted exactly this about sampling and was right.
+
+**The finding that does not need statistics:** DQ-006's named false negative, the
+DOE fourth-criticality announcement, is admitted by **Bar A — the unmodified
+production prompt v4** — under `kimi-k3`, while production rejected it under
+`qwen3.5:397b`. *The bar did not change; the model did.* The spec's premise opens
+with "four model families, one answer — the filter is not model-limited";
+`kimi-k3` was promoted in #231, after that eval, and was never in it.
+
+**And the full run is not affordable as specified.** Measured directly rather
+than estimated: 600 completions moved the weekly Ollama allowance from 0.100 to
+0.202, so the full 21,231-item corpus × 3 bars = 63,693 completions is **~10.6
+weekly allowances**. The spec's "~3% of a week" was computed in July against a
+corpus eight times smaller. Both the corpus size and the cheaper alternative are
+now recorded in the spec itself so nobody quotes the stale figure.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.

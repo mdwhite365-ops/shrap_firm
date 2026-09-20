@@ -172,6 +172,12 @@ exact failure: if admits are rare, a sample finds too few to read.
 
 ~2,600 items × 3 bars ≈ **7,800 requests**, on `qwen3.5:397b`.
 
+> **Out of date as of 2026-09-20.** The corpus is now **21,231 items** (`sec-edgar`
+> alone is 15,318), so three bars is **63,693 completions**. Measured against the
+> live allowance — 600 completions moved weekly usage from 0.100 to 0.202 — that is
+> **~10.6 weekly allowances**, not 3% of one. Do not quote the paragraph below as
+> authority for what this costs; see `docs/research/archetype-bar-results.md`.
+
 That is affordable and the measurement says so rather than the estimate. In the
 week of 2026-07-31 the box spent 3,320 requests — 2,941 of them the production
 filter — for **1.2% of the weekly Ollama Pro allowance**. This experiment is
@@ -214,7 +220,7 @@ sources rather than taxonomy.
 |---|---|
 | 1 | ~~This spec, merged (accepting the experiment design)~~ **DONE** (#173) |
 | 2 | ~~Harness card — bar variants + persistence + isolation test~~ **DONE** — `shrap-bar-experiment`, `src/shrap/research/bar_experiment.py` |
-| 3 | Run over the full corpus; admitted-item lists per bar |
+| 3 | Run over the full corpus; admitted-item lists per bar — **partial 2026-09-20**: 200-item stratified pilot run on `kimi-k3`, results in `docs/research/archetype-bar-results.md`. Full run blocked on quota (63,693 completions ≈ 10.6 weekly allowances, measured) and on whether the hypothesis still warrants it — DQ-006's named exemplar flipped on a *model* change, not a bar change. |
 | 4 | Mike's ruling; `world-changer-archetypes.md` updated first, then the mirror and the prompt |
 | 5 | Re-filter the corpus under the ruled bar (KI-009 fix order step 3, still valid) |
 
