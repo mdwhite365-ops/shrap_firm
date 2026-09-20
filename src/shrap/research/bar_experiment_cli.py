@@ -364,9 +364,31 @@ async def run(
             client = TierLLMClient(
                 registry, cast(Any, http), tracer=tracer_from_env(env, cast(Any, http))
             )
+
+            async def still_within_budget() -> str | None:
+                """Re-read the shared allowance mid-bar. ``None`` means carry on.
+
+                Checking only before the first item proves there was room to
+                start, which is the moment the check matters least — a long bar
+                can spend the whole window mid-flight and starve the agents that
+                share the account.
+                """
+
+                if ignore_quota:
+                    return None
+                live = await fetch_usage(cast(Any, http), binding.api_key)
+                mid = check_budget(live, reserve=reserve)
+                return None if mid.ok else mid.reason
+
             for bar in bars:
                 log.info("bar_experiment.bar_started", bar=bar.key, items=len(items))
-                bar_calls = await run_bar(bar, cast(Any, client), items, tier)
+                bar_calls = await run_bar(
+                    bar,
+                    cast(Any, client),
+                    items,
+                    tier,
+                    quota_check=still_within_budget,
+                )
                 calls.extend(bar_calls)
                 # Checkpoint per bar. The full corpus is ~5,200 items and a bar
                 # takes hours; persisting only at the end means a dropped

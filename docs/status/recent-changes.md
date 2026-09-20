@@ -1446,6 +1446,13 @@ draw on it. The CLI now refuses to start when the binding window is inside a
 **10% reserve** held for the always-on agents. `--ignore-quota` spends it
 deliberately; nothing spends it by accident.
 
+**The reserve is re-checked every 50 items, not only at the start.** A start-time
+check proves there was room to *begin*, which is the moment it matters least — a
+407-item bar can spend the whole window mid-flight and starve production anyway,
+which is the fault the guard exists to prevent. A mid-run stop is **clean**: the
+items behind it are unwritten, same contract as the error wall, so the run stays
+resumable rather than half-recorded.
+
 **3. A run of failures is not a failure.** `run_bar` caught every exception and
 continued, which is right for one bad item and wrong for a wall. The production
 literature filter has had `MAX_CONSECUTIVE_FAILURES = 5` for months;

@@ -697,3 +697,64 @@ async def test_scattered_failures_do_not_stop_a_bar() -> None:
     calls = await run_bar(bar, EveryOtherClient(), items, "local-classification")
 
     assert len(calls) == 20
+
+
+async def test_a_long_bar_rechecks_the_allowance_mid_flight() -> None:
+    """Checking only before the first item proves there was room to START, which
+    is the moment the check matters least. A 407-item bar can spend the whole
+    window mid-flight and starve the always-on agents that share the account —
+    the exact fault the guard exists to prevent."""
+
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    items = [_item(f"i{n}") for n in range(30)]
+
+    async def spent_after_the_first_check() -> str | None:
+        return "session 100.0% used"
+
+    calls = await run_bar(
+        bar,
+        FakeClient(),
+        items,
+        "local-classification",
+        quota_check=spent_after_the_first_check,
+        quota_check_every=10,
+    )
+
+    assert len(calls) == 10, "stops at the first check, not at the end of the bar"
+
+
+async def test_the_items_behind_a_quota_stop_are_unwritten() -> None:
+    """Same contract as the error wall: a resume must be able to tell 'never
+    attempted' from 'failed', so a clean stop records nothing for what it
+    skipped."""
+
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    items = [_item(f"i{n}") for n in range(30)]
+
+    async def spent() -> str | None:
+        return "session 100.0% used"
+
+    calls = await run_bar(
+        bar, FakeClient(), items, "local-classification", quota_check=spent, quota_check_every=10
+    )
+
+    assert all(c.error is None for c in calls), "a quota stop is not an error row"
+    assert {c.item.item_id for c in calls} == {f"i{n}" for n in range(10)}
+
+
+async def test_a_healthy_allowance_never_interrupts_a_bar() -> None:
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    items = [_item(f"i{n}") for n in range(30)]
+    checks = 0
+
+    async def healthy() -> str | None:
+        nonlocal checks
+        checks += 1
+        return None
+
+    calls = await run_bar(
+        bar, FakeClient(), items, "local-classification", quota_check=healthy, quota_check_every=10
+    )
+
+    assert len(calls) == 30
+    assert checks == 2, "polled at items 10 and 20, not before the first item"
