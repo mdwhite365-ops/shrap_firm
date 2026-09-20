@@ -177,7 +177,15 @@ factors. The Hypothesis Generator logs `sweep_empty` hourly because
 recorded is 0.415 against a 0.50 floor — the gate is not too tight, the strategies
 lack edge. The seven `capability-gap` rows are a prioritised build list; market
 capitalisation is the cheapest and is absent from every table. **Prefer feeding the
-funnel over building another thing that measures it** — but see #264 for what that means: **95% of the ingested corpus admits nothing.** The archetype bar experiment has now tested both its variables (three bars in July, two models on 2026-09-20) and neither moves the hard leg. What does move is *source*: `sec-edgar` is 72% of the corpus and scored **0 of 425** under both models (admit rate < 0.7%, 95% CI), `arxiv` 0 of 145, while every admit the experiment ever produced came from `doe-newsroom`, `federal-register` and `usaspending` — together **1.7%** of what the firm ingests. The volume is in the sources that admit nothing and the signal is in the sources with almost no volume, so more throughput is not the fix.
+funnel over building another thing that measures it.** **#264 claimed the corpus
+was the constraint — that claim is retracted (#267).** It rested on `sec-edgar`
+admitting 0 of 425, which was an artifact of the experiment's own query: it never
+selected `document_text`, so for 72% of the corpus the model was shown the Atom
+index entry (a filed date, an accession number, a file size) rather than the
+filing (#266). Read properly, EDGAR admits **6 of 425 — 1.41%**, Fisher exact
+p = 0.031, and every admit is energy or compute build-out surfacing in corporate
+disclosure. **Before concluding a source has nothing to say, confirm something
+asked it.**
 
 **Always-on services (verified 2026-09-18, 39 containers):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger, Market Data Trigger, **Market Data Intraday Trigger** (#236), plus the substrate: Postgres/TimescaleDB, Redis, Qdrant, Ollama, Prometheus, Grafana, cAdvisor, node-exporter, postgres-exporter, redis-exporter and **docker-state-exporter** (#239). **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker. **`ib-gateway` was stopped and removed 2026-09-18**; its compose project lives at `infra/ibgateway/` (#243) and needs a gitignored `.env` to revive — ADR-0003 gates IBKR on live capital.
 

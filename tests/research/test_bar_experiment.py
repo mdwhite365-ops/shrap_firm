@@ -10,6 +10,8 @@ cost the model eval two runs.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -43,6 +45,7 @@ from shrap.research.bar_experiment import (
 from shrap.research.bar_experiment_cli import (
     INSERT_RESULT_SQL,
     INSERT_RUN_SQL,
+    SELECT_CORPUS_SQL,
     build_report,
     load_corpus,
     render_plan,
@@ -493,13 +496,14 @@ class _ReplayPool:
         return _Ctx()
 
 
-def _corpus_row(item_id: str, source: str) -> dict[str, Any]:
+def _corpus_row(item_id: str, source: str, document_text: str | None = None) -> dict[str, Any]:
     return {
         "item_id": item_id,
         "source": source,
         "kind": None,
         "title": f"title for {item_id}",
         "summary": "a summary",
+        "document_text": document_text,
     }
 
 
@@ -853,3 +857,145 @@ async def test_a_rebuilt_summary_counts_errors_that_are_still_stored() -> None:
 
     assert report.summaries[0].scored == 8
     assert report.summaries[0].errors == 5
+
+
+# ---------------------------------------------------------------------------
+# Every bar must read the filing, not the index entry
+#
+# 2026-09-20: the experiment's corpus query never selected `document_text`, and
+# bars B and C never read it even when present. For `sec-edgar` — 72% of the
+# corpus — `summary` is the Atom index entry: a filed date, an accession number
+# and a file size. So 425 of 454 hard-leg items were scored on metadata, under
+# two models and three bars, and every one was rejected. That is KI-026 (#189)
+# reproduced inside the experiment built to evaluate the filter it was found in.
+# ---------------------------------------------------------------------------
+
+
+EDGAR_INDEX_ENTRY = "<b>Filed:</b> 2026-07-30 <b>AccNo:</b> 0000002969-26-000036 <b>Size:</b> 14 MB"
+
+
+def _filing_item() -> UnfilteredItem:
+    return UnfilteredItem(
+        item_id="edgar:1",
+        source="sec-edgar",
+        kind="10-Q",
+        title="10-Q - Air Products & Chemicals, Inc. (0000002969) (Filer)",
+        summary=EDGAR_INDEX_ENTRY,
+        document_text="The Company commissioned its first commercial-scale green hydrogen facility",
+    )
+
+
+def test_the_corpus_query_selects_the_document_body() -> None:
+    """The column whose absence caused all of it."""
+
+    assert "document_text" in SELECT_CORPUS_SQL
+
+
+def test_every_bar_shows_the_filing_rather_than_the_index_entry() -> None:
+    item = _filing_item()
+
+    for bar in all_bars():
+        prompt = bar.build_prompt(item)
+        assert "green hydrogen facility" in prompt, f"{bar.key} did not show the filing"
+        assert "AccNo:" not in prompt, f"{bar.key} showed the index entry instead"
+
+
+def test_the_body_is_labelled_document_not_summary() -> None:
+    """A model told "Summary:" ahead of six thousand characters of filing text is
+    being told something false about what it is reading."""
+
+    for bar in all_bars():
+        prompt = bar.build_prompt(_filing_item())
+        assert "Document:" in prompt, bar.key
+
+
+def test_an_item_with_no_body_still_shows_its_summary() -> None:
+    """USASpending, Federal Register and DOE newsroom carry their content in
+    `summary` and have no `document_text` at all. Those three produced every
+    admit the experiment ever recorded, so the fallback must not regress."""
+
+    item = UnfilteredItem(
+        item_id="doe:1",
+        source="doe-newsroom",
+        kind=None,
+        title="DOE Celebrates Fourth Criticality",
+        summary="The reactor reached criticality for the fourth time.",
+        document_text=None,
+    )
+
+    for bar in all_bars():
+        prompt = bar.build_prompt(item)
+        assert "reached criticality" in prompt, bar.key
+        assert "Summary:" in prompt, bar.key
+
+
+async def test_the_loaded_corpus_carries_the_document_body() -> None:
+    """`load_corpus` must pass `document_text` through to the item. Dropping it
+    here is indistinguishable, at every layer below, from a filing that has no
+    body — which is how 425 EDGAR items were scored on their index entries."""
+
+    corpus = [_corpus_row("edgar:1", "sec-edgar", document_text="the filing body")]
+    pool = _ReplayPool(_ReplayConn(corpus, []))
+
+    items = await load_corpus(pool, None, None)
+
+    assert items[0].document_text == "the filing body"
+
+
+async def test_sources_narrows_the_corpus_to_named_feeds() -> None:
+    """A change to how one source renders does not change the others. When the
+    filings started being read, the four sources with no `document_text` built
+    byte-identical prompts, so re-scoring them would have spent a third of the
+    budget reproducing numbers already held."""
+
+    corpus = [
+        _corpus_row("arxiv:1", "arxiv"),
+        _corpus_row("edgar:1", "sec-edgar", document_text="body"),
+        _corpus_row("edgar:2", "sec-edgar", document_text="body"),
+        _corpus_row("doe:1", "doe-newsroom"),
+    ]
+    pool = _ReplayPool(_ReplayConn(corpus, []))
+
+    items = await load_corpus(pool, None, None, None, ["sec-edgar"])
+
+    assert sorted(i.item_id for i in items) == ["edgar:1", "edgar:2"]
+
+
+async def test_an_unknown_source_is_an_error_not_an_empty_run() -> None:
+    """A typo would otherwise score nothing and print a confident report over an
+    empty corpus."""
+
+    pool = _ReplayPool(_ReplayConn([_corpus_row("arxiv:1", "arxiv")], []))
+
+    with pytest.raises(SystemExit, match="no corpus items from source"):
+        await load_corpus(pool, None, None, None, ["sec-edgard"])
+
+
+async def test_a_source_filter_does_not_make_replayed_items_look_missing() -> None:
+    """The missing-items warning exists to catch a panel silently shrinking. It
+    fired on every correct `--sources` run because the filter ran before the
+    replay intersection, and a warning that fires on correct usage is one nobody
+    reads."""
+
+    corpus = [
+        _corpus_row("arxiv:1", "arxiv"),
+        _corpus_row("edgar:1", "sec-edgar", document_text="body"),
+    ]
+    pool = _ReplayPool(_ReplayConn(corpus, ["arxiv:1", "edgar:1"]))
+
+    items, out = [], io.StringIO()
+    with contextlib.redirect_stdout(out):
+        items = await load_corpus(pool, None, "01OLD", None, ["sec-edgar"])
+
+    assert [i.item_id for i in items] == ["edgar:1"]
+    assert "no longer in the corpus" not in out.getvalue()
+
+
+async def test_a_genuinely_absent_replayed_item_still_warns() -> None:
+    pool = _ReplayPool(_ReplayConn([_corpus_row("edgar:1", "sec-edgar")], ["edgar:1", "gone:1"]))
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        await load_corpus(pool, None, "01OLD", None, None)
+
+    assert "1 of 2 replayed items are no longer in the corpus" in out.getvalue()

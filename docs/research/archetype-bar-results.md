@@ -105,6 +105,27 @@
 > the current model, and that is one bar over 599 items — about 10% of a weekly
 > allowance, not 10.6 of them.
 
+> ## Retraction, 2026-09-20 — the section below drew the wrong conclusion
+>
+> **Everything here about `sec-edgar` is void.** The experiment's corpus query
+> never selected `document_text`, so for 72% of the corpus the model was shown
+> the Atom index entry — a filed date, an accession number and a file size —
+> rather than the filing (#266). EDGAR's 0 of 425 measures how often a model
+> calls an accession number a technology signal.
+>
+> Re-scored with the filings in the prompt, **EDGAR admits 6 of 425 — 1.41%**
+> (Fisher exact vs 0/425, two-sided **p = 0.031**), five of six `compute-substrate`:
+> AEP securing 13 GW of gas-fired capacity, a 20-year 2.67 GW Chevron PPA,
+> Corning's hyperscaler capex redirection, Intel's Data Center and AI revenue.
+>
+> So "the volume is in the sources that admit nothing" is **backwards**, and
+> "feed the funnel cannot mean more throughput" is withdrawn. See
+> `docs/status/changes/267-retracting-the-corpus-verdict.md`.
+>
+> What survives: the model comparison (3 vs 2, indistinguishable), DQ-006's
+> exemplar flipping, and the cost figures. The July three-bar comparison is void
+> for the same reason.
+
 ## The `kimi-k3` replay finished, 2026-09-20 — and the model was never the question
 
 Run `01M2YHEGZ5KSBAADGHYK96QGAY`: **Bar A, the unmodified production prompt v4,

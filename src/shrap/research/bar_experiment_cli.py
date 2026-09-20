@@ -78,8 +78,18 @@ DEFAULT_TIER = "local-classification"
 # costs a whole item rather than a retry.
 HTTP_TIMEOUT_SECONDS = 120.0
 
+# **`document_text` is not optional here.** Leaving it out is what made every run
+# of this experiment a test of EDGAR's index entries rather than its filings: for
+# `sec-edgar` — 72% of the corpus — `summary` is the Atom entry (a filed date, an
+# accession number, a file size) and the filing itself is in `document_text`.
+# Bar A uses the production prompt builder, which reads the body when it is
+# there, so omitting the column silently downgraded the control to metadata and
+# the "unmodified production prompt v4" was not what production runs.
+# Production's own query (`SELECT_UNFILTERED_SQL`) has always selected it; this
+# one did not, which is KI-026 (#189) reproduced inside the experiment built to
+# evaluate the filter KI-026 was found in.
 SELECT_CORPUS_SQL = """
-SELECT item_id, source, kind, title, summary
+SELECT item_id, source, kind, title, summary, document_text
 FROM research.raw_source_items
 WHERE NOT (source = ANY($1::text[]))
 ORDER BY item_id
@@ -222,6 +232,7 @@ async def load_corpus(
     limit: int | None,
     items_from_run: str | None = None,
     resume_run: str | None = None,
+    sources: Sequence[str] | None = None,
 ) -> list[UnfilteredItem]:
     """The items to score, in corpus order.
 
@@ -229,6 +240,13 @@ async def load_corpus(
     ``limit`` samples proportionally, ``items_from_run`` replays another run's
     item set, and ``resume_run`` takes only the items a run recorded an error
     against.
+
+    ``sources`` narrows any of those to named feeds. It exists because a change
+    to how one source is rendered does not change the others: when #266 started
+    showing EDGAR filings instead of index entries, the prompts for the four
+    sources that carry no ``document_text`` were byte-identical to the previous
+    run, so re-scoring them would have spent a third of the budget to reproduce
+    numbers already held.
     """
 
     async with pool.acquire() as conn:
@@ -257,18 +275,32 @@ async def load_corpus(
             kind=None if row["kind"] is None else str(row["kind"]),
             title=str(row["title"]),
             summary=None if row["summary"] is None else str(row["summary"]),
+            document_text=(None if row["document_text"] is None else str(row["document_text"])),
         )
         for row in rows
     ]
+    # **Order matters, and getting it wrong makes a real warning cry wolf.** The
+    # replay intersection runs against the WHOLE corpus, before any source
+    # filter, so `missing` means "scored once and gone now" — a panel silently
+    # shrinking, which is the thing replaying exists to prevent. Filtering first
+    # made every `--sources` run report the other sources as missing, and a
+    # warning that fires on correct usage is one nobody reads.
     if replay is not None:
         kept = [item for item in items if item.item_id in replay]
-        # An item scored then and absent now would silently shrink the panel and
-        # make the two runs incomparable in exactly the way replaying is meant to
-        # prevent. `raw_source_items` is append-only, so this should be zero.
         missing = len(replay) - len(kept)
         if missing:
             print(f"warning: {missing} of {len(replay)} replayed items are no longer in the corpus")
-        return kept
+        items = kept
+
+    if sources:
+        wanted = {s.strip() for s in sources if s.strip()}
+        unknown = wanted - {item.source for item in items}
+        if unknown:
+            raise SystemExit(f"no corpus items from source(s): {sorted(unknown)}")
+        items = [item for item in items if item.source in wanted]
+
+    if replay is not None:
+        return items
 
     # Proportional, never a head-of-list slice. The corpus is ordered by
     # item_id and `arxiv:` sorts first, so `items[:600]` is 600 arXiv items and
@@ -427,6 +459,7 @@ async def run(
     dry_run: bool,
     items_from_run: str | None = None,
     resume_run: str | None = None,
+    sources: Sequence[str] | None = None,
     reserve: float = PRODUCTION_RESERVE,
     ignore_quota: bool = False,
 ) -> tuple[str, ExperimentReport | None, list[BarCall], tuple[Bar, ...]]:
@@ -434,7 +467,7 @@ async def run(
     pool = await create_asyncpg_pool(dsn)
     try:
         await ensure_schema(pool)
-        items = await load_corpus(pool, limit, items_from_run, resume_run)
+        items = await load_corpus(pool, limit, items_from_run, resume_run, sources)
 
         env = dict(os.environ)
         registry = TierRegistry(env)
@@ -597,6 +630,15 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--sources",
+        default=None,
+        metavar="A,B",
+        help=(
+            "Comma-separated sources to score. Combines with --items-from-run. "
+            "For re-running only the feed a change affects."
+        ),
+    )
+    parser.add_argument(
         "--report-only",
         default=None,
         metavar="RUN_ID",
@@ -672,6 +714,7 @@ def main() -> None:
             dry_run=args.dry_run,
             items_from_run=args.items_from_run,
             resume_run=args.resume_run,
+            sources=args.sources.split(",") if args.sources else None,
             reserve=args.reserve,
             ignore_quota=args.ignore_quota,
         )
