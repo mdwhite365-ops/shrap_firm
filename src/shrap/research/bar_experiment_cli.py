@@ -67,6 +67,19 @@ WHERE NOT (source = ANY($1::text[]))
 ORDER BY item_id
 """.strip()
 
+# The exact items an earlier run scored, so a later run can change ONE variable.
+#
+# **Why this exists.** The 2026-07-31 control ran 599 items on `qwen3.5:397b`.
+# The corpus is now 21,231, so any fresh sample compared against that run varies
+# the model *and* the corpus at once — the confound #247 exists to warn about.
+# Replaying the item set holds the corpus fixed and leaves the model as the only
+# difference.
+SELECT_RUN_ITEM_IDS_SQL = """
+SELECT DISTINCT item_id
+FROM research.bar_experiment_results
+WHERE run_id = $1
+""".strip()
+
 CREATE_RUNS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS research.bar_experiment_runs (
     run_id TEXT PRIMARY KEY,
@@ -121,9 +134,18 @@ async def ensure_schema(pool: Any) -> None:
         await conn.execute(CREATE_RESULTS_TABLE_SQL)
 
 
-async def load_corpus(pool: Any, limit: int | None) -> list[UnfilteredItem]:
+async def load_corpus(
+    pool: Any, limit: int | None, items_from_run: str | None = None
+) -> list[UnfilteredItem]:
     async with pool.acquire() as conn:
         rows = await conn.fetch(SELECT_CORPUS_SQL, sorted(EXCLUDED_SOURCES))
+        replay: set[str] | None = None
+        if items_from_run:
+            replay = {
+                str(r["item_id"]) for r in await conn.fetch(SELECT_RUN_ITEM_IDS_SQL, items_from_run)
+            }
+            if not replay:
+                raise SystemExit(f"run {items_from_run!r} has no recorded results to replay")
     items = [
         UnfilteredItem(
             item_id=str(row["item_id"]),
@@ -134,6 +156,16 @@ async def load_corpus(pool: Any, limit: int | None) -> list[UnfilteredItem]:
         )
         for row in rows
     ]
+    if replay is not None:
+        kept = [item for item in items if item.item_id in replay]
+        # An item scored then and absent now would silently shrink the panel and
+        # make the two runs incomparable in exactly the way replaying is meant to
+        # prevent. `raw_source_items` is append-only, so this should be zero.
+        missing = len(replay) - len(kept)
+        if missing:
+            print(f"warning: {missing} of {len(replay)} replayed items are no longer in the corpus")
+        return kept
+
     # Proportional, never a head-of-list slice. The corpus is ordered by
     # item_id and `arxiv:` sorts first, so `items[:600]` is 600 arXiv items and
     # a hard-leg count taken from it is an artifact of the ordering.
@@ -209,12 +241,13 @@ async def run(
     tier: str,
     limit: int | None,
     dry_run: bool,
+    items_from_run: str | None = None,
 ) -> tuple[str, ExperimentReport | None, list[BarCall], tuple[Bar, ...]]:
     bars = bars_by_key(bar_keys)
     pool = await create_asyncpg_pool(dsn)
     try:
         await ensure_schema(pool)
-        items = await load_corpus(pool, limit)
+        items = await load_corpus(pool, limit, items_from_run)
         print(render_plan(items, bars))
         if dry_run or not items:
             return "", None, [], bars
@@ -282,6 +315,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "a sample reproduces the thin-positive problem every eval has carried.",
     )
     parser.add_argument(
+        "--items-from-run",
+        default=None,
+        metavar="RUN_ID",
+        help=(
+            "Score exactly the items an earlier run scored, so the model is the "
+            "only variable. Ignores --limit."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the corpus shape and call budget without spending any of it",
@@ -301,7 +343,14 @@ def main() -> None:
         parser.error("TECH_WATCHER_POSTGRES_DSN is not set")
 
     run_id, report, _calls, _bars = asyncio.run(
-        run(dsn, bar_keys=bar_keys, tier=args.tier, limit=args.limit, dry_run=args.dry_run)
+        run(
+            dsn,
+            bar_keys=bar_keys,
+            tier=args.tier,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            items_from_run=args.items_from_run,
+        )
     )
     if report is None:
         print("\ndry run — no completions were made and nothing was written")
