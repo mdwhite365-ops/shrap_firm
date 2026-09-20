@@ -195,9 +195,7 @@ class PostgresSharesStore:
             rows = await conn.fetch(SELECT_SHARES_HISTORY_SQL, wanted)
         out: dict[str, list[tuple[date, float]]] = {}
         for row in rows:
-            out.setdefault(str(row["ticker"]), []).append(
-                (row["filed_at"], float(row["shares"]))
-            )
+            out.setdefault(str(row["ticker"]), []).append((row["filed_at"], float(row["shares"])))
         return out
 
     async def latest_filed_by_ticker(self) -> dict[str, date]:
