@@ -60,6 +60,7 @@ import structlog
 from shrap.llm import CompletionClient
 from shrap.research.tech_watcher.archetypes import ARCHETYPES, archetype_filter_prompt_block
 from shrap.research.tech_watcher.filter import (
+    DOCUMENT_PROMPT_CHARS,
     FILTER_PROMPT_VERSION,
     FILTER_SYSTEM_PROMPT,
     UnfilteredItem,
@@ -321,25 +322,49 @@ def _incumbent_parse(item_id: str, content: str) -> BarVerdict:
     return parse_evidence_response(item_id, content)
 
 
+def _item_content(item: UnfilteredItem) -> str:
+    """The evidence block, body-first, exactly as the production filter builds it.
+
+    **Bars B and C read only ``summary`` until 2026-09-20, and that made every
+    run of this experiment a test of EDGAR's index entries rather than its
+    filings.** For `sec-edgar` — 72% of the corpus — ``summary`` is the Atom
+    index entry: a filed date, an accession number and a file size. The filing is
+    in ``document_text``. Asking a model whether *"Filed: 2026-07-30 AccNo:
+    0000002969-26-000036 Size: 14 MB"* is a world-changing technology signal has
+    exactly one answer, and the experiment collected it 425 times.
+
+    That is KI-026 (#189) reproduced inside the experiment built to evaluate the
+    filter that KI-026 was found in. Shared with
+    :func:`shrap.research.tech_watcher.filter._item_prompt` in spirit rather than
+    in code only because the bars differ in what surrounds this block — the
+    labelling rule is the same, and it matters: a model told "Summary:" ahead of
+    six thousand characters of filing text is being told something false about
+    what it is reading.
+    """
+
+    body = (item.document_text or "").strip()
+    if body:
+        return f"Document:\n{body[:DOCUMENT_PROMPT_CHARS]}"
+    return f"Summary: {(item.summary or '')[:1500] or '(none)'}"
+
+
 def _signal_item_prompt(item: UnfilteredItem) -> str:
-    summary = (item.summary or "")[:1500]
     return (
         f"{signal_prompt_block()}\n\n"
         f"Item (source={item.source}, kind={item.kind or 'unknown'}, "
         f"evidence_class={evidence_class(item.source)}):\n"
         f"Title: {item.title}\n"
-        f"Summary: {summary or '(none)'}"
+        f"{_item_content(item)}"
     )
 
 
 def _evidence_item_prompt(item: UnfilteredItem) -> str:
-    summary = (item.summary or "")[:1500]
     return (
         f"Recognition grammar:\n{archetype_filter_prompt_block()}\n\n"
         f"Item (source={item.source}, kind={item.kind or 'unknown'}, "
         f"evidence_class={evidence_class(item.source)}):\n"
         f"Title: {item.title}\n"
-        f"Summary: {summary or '(none)'}"
+        f"{_item_content(item)}"
     )
 
 

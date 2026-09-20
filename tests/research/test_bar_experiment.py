@@ -43,6 +43,7 @@ from shrap.research.bar_experiment import (
 from shrap.research.bar_experiment_cli import (
     INSERT_RESULT_SQL,
     INSERT_RUN_SQL,
+    SELECT_CORPUS_SQL,
     build_report,
     load_corpus,
     render_plan,
@@ -493,13 +494,14 @@ class _ReplayPool:
         return _Ctx()
 
 
-def _corpus_row(item_id: str, source: str) -> dict[str, Any]:
+def _corpus_row(item_id: str, source: str, document_text: str | None = None) -> dict[str, Any]:
     return {
         "item_id": item_id,
         "source": source,
         "kind": None,
         "title": f"title for {item_id}",
         "summary": "a summary",
+        "document_text": document_text,
     }
 
 
@@ -853,3 +855,86 @@ async def test_a_rebuilt_summary_counts_errors_that_are_still_stored() -> None:
 
     assert report.summaries[0].scored == 8
     assert report.summaries[0].errors == 5
+
+
+# ---------------------------------------------------------------------------
+# Every bar must read the filing, not the index entry
+#
+# 2026-09-20: the experiment's corpus query never selected `document_text`, and
+# bars B and C never read it even when present. For `sec-edgar` — 72% of the
+# corpus — `summary` is the Atom index entry: a filed date, an accession number
+# and a file size. So 425 of 454 hard-leg items were scored on metadata, under
+# two models and three bars, and every one was rejected. That is KI-026 (#189)
+# reproduced inside the experiment built to evaluate the filter it was found in.
+# ---------------------------------------------------------------------------
+
+
+EDGAR_INDEX_ENTRY = "<b>Filed:</b> 2026-07-30 <b>AccNo:</b> 0000002969-26-000036 <b>Size:</b> 14 MB"
+
+
+def _filing_item() -> UnfilteredItem:
+    return UnfilteredItem(
+        item_id="edgar:1",
+        source="sec-edgar",
+        kind="10-Q",
+        title="10-Q - Air Products & Chemicals, Inc. (0000002969) (Filer)",
+        summary=EDGAR_INDEX_ENTRY,
+        document_text="The Company commissioned its first commercial-scale green hydrogen facility",
+    )
+
+
+def test_the_corpus_query_selects_the_document_body() -> None:
+    """The column whose absence caused all of it."""
+
+    assert "document_text" in SELECT_CORPUS_SQL
+
+
+def test_every_bar_shows_the_filing_rather_than_the_index_entry() -> None:
+    item = _filing_item()
+
+    for bar in all_bars():
+        prompt = bar.build_prompt(item)
+        assert "green hydrogen facility" in prompt, f"{bar.key} did not show the filing"
+        assert "AccNo:" not in prompt, f"{bar.key} showed the index entry instead"
+
+
+def test_the_body_is_labelled_document_not_summary() -> None:
+    """A model told "Summary:" ahead of six thousand characters of filing text is
+    being told something false about what it is reading."""
+
+    for bar in all_bars():
+        prompt = bar.build_prompt(_filing_item())
+        assert "Document:" in prompt, bar.key
+
+
+def test_an_item_with_no_body_still_shows_its_summary() -> None:
+    """USASpending, Federal Register and DOE newsroom carry their content in
+    `summary` and have no `document_text` at all. Those three produced every
+    admit the experiment ever recorded, so the fallback must not regress."""
+
+    item = UnfilteredItem(
+        item_id="doe:1",
+        source="doe-newsroom",
+        kind=None,
+        title="DOE Celebrates Fourth Criticality",
+        summary="The reactor reached criticality for the fourth time.",
+        document_text=None,
+    )
+
+    for bar in all_bars():
+        prompt = bar.build_prompt(item)
+        assert "reached criticality" in prompt, bar.key
+        assert "Summary:" in prompt, bar.key
+
+
+async def test_the_loaded_corpus_carries_the_document_body() -> None:
+    """`load_corpus` must pass `document_text` through to the item. Dropping it
+    here is indistinguishable, at every layer below, from a filing that has no
+    body — which is how 425 EDGAR items were scored on their index entries."""
+
+    corpus = [_corpus_row("edgar:1", "sec-edgar", document_text="the filing body")]
+    pool = _ReplayPool(_ReplayConn(corpus, []))
+
+    items = await load_corpus(pool, None, None)
+
+    assert items[0].document_text == "the filing body"

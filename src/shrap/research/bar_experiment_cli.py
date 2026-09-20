@@ -78,8 +78,18 @@ DEFAULT_TIER = "local-classification"
 # costs a whole item rather than a retry.
 HTTP_TIMEOUT_SECONDS = 120.0
 
+# **`document_text` is not optional here.** Leaving it out is what made every run
+# of this experiment a test of EDGAR's index entries rather than its filings: for
+# `sec-edgar` — 72% of the corpus — `summary` is the Atom entry (a filed date, an
+# accession number, a file size) and the filing itself is in `document_text`.
+# Bar A uses the production prompt builder, which reads the body when it is
+# there, so omitting the column silently downgraded the control to metadata and
+# the "unmodified production prompt v4" was not what production runs.
+# Production's own query (`SELECT_UNFILTERED_SQL`) has always selected it; this
+# one did not, which is KI-026 (#189) reproduced inside the experiment built to
+# evaluate the filter KI-026 was found in.
 SELECT_CORPUS_SQL = """
-SELECT item_id, source, kind, title, summary
+SELECT item_id, source, kind, title, summary, document_text
 FROM research.raw_source_items
 WHERE NOT (source = ANY($1::text[]))
 ORDER BY item_id
@@ -257,6 +267,7 @@ async def load_corpus(
             kind=None if row["kind"] is None else str(row["kind"]),
             title=str(row["title"]),
             summary=None if row["summary"] is None else str(row["summary"]),
+            document_text=(None if row["document_text"] is None else str(row["document_text"])),
         )
         for row in rows
     ]
