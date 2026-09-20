@@ -182,8 +182,8 @@ was the constraint — that claim is retracted (#267).** It rested on `sec-edgar
 admitting 0 of 425, which was an artifact of the experiment's own query: it never
 selected `document_text`, so for 72% of the corpus the model was shown the Atom
 index entry (a filed date, an accession number, a file size) rather than the
-filing (#266). Read properly, EDGAR admits **4 of 250 — 1.6%**, Fisher exact
-p = 0.019, and every admit is energy or compute build-out surfacing in corporate
+filing (#266). Read properly, EDGAR admits **6 of 425 — 1.41%**, Fisher exact
+p = 0.031, and every admit is energy or compute build-out surfacing in corporate
 disclosure. **Before concluding a source has nothing to say, confirm something
 asked it.**
 

@@ -27,15 +27,18 @@ Re-running the same EDGAR items with the filings actually in the prompt:
 | EDGAR scored on… | items | admits | rate |
 |---|---|---|---|
 | index entries | 425 | **0** | 0% |
-| **the filings** | 250 | **4** | **1.6%** |
+| **the filings** | 425 | **6** | **1.41%** |
 
-**Fisher exact, two-sided: p = 0.019.** Every admit is `compute-substrate`, and
-they are exactly what the taxonomy exists to catch:
+**Fisher exact, two-sided: p = 0.031** on the full set, 0 errors either side.
+Five of the six are `compute-substrate`, and they are exactly what the taxonomy
+exists to catch:
 
 - **American Electric Power** — a utility securing **13 GW** of gas-fired capacity
 - **Chevron** — a 20-year, **2.67 GW** behind-the-meter power purchase agreement
 - **Corning** — sustained hyperscaler/AI-factory capex redirection
 - **Intel** — Data Center and AI segment revenue
+- **KLA** — semiconductor process control
+- **Avis Budget** — `physical-realization`
 
 They were in the corpus the whole time.
 

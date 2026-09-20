@@ -22,7 +22,7 @@ measures how often a model calls an accession number a technology signal.
 > sources with almost no volume."*
 
 **Backwards.** Re-scored with the filings actually in the prompt, EDGAR admits
-**4 of 250 — 1.6%** (Fisher exact vs 0/425, two-sided **p = 0.019**). That is
+**6 of 425 — 1.41%** (Fisher exact vs 0/425, two-sided **p = 0.031**). That is
 *higher* than the ~10% rate #264 credited to the three small sources, which rests
 on a 29-item base, and EDGAR has ~1,000 items a week behind it.
 

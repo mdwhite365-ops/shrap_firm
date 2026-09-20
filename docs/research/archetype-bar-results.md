@@ -113,8 +113,8 @@
 > rather than the filing (#266). EDGAR's 0 of 425 measures how often a model
 > calls an accession number a technology signal.
 >
-> Re-scored with the filings in the prompt, **EDGAR admits 4 of 250 — 1.6%**
-> (Fisher exact vs 0/425, two-sided **p = 0.019**), every one `compute-substrate`:
+> Re-scored with the filings in the prompt, **EDGAR admits 6 of 425 — 1.41%**
+> (Fisher exact vs 0/425, two-sided **p = 0.031**), five of six `compute-substrate`:
 > AEP securing 13 GW of gas-fired capacity, a 20-year 2.67 GW Chevron PPA,
 > Corning's hyperscaler capex redirection, Intel's Data Center and AI revenue.
 >
