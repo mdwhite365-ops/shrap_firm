@@ -1417,6 +1417,45 @@ agent sent before.
 `shrap.common.qdrant_client` at all. `--profile tools build hypothesis-generator`
 is required, per `docs/runbooks/deploying-after-a-code-change.md`.
 
+### Market cap became something a strategy can read (#258)
+
+#253 made the data correct. This makes it *reachable*: `PanelWindow` gains
+`market_caps()`, and `AVAILABLE_SERIES` — the whole expressible surface of the
+firm's strategy engine — goes from `{close, volume}` to `{close, volume, market
+cap}`. It is the **first addition to that set**.
+
+Verified end to end: `volatility-rank-forecast`, the cheapest of KI-035's seven
+capability gaps, now classifies as **`missing-scorer`** rather than
+`missing-data`. Those two mean very different things in
+`expressible.py`'s own words — *"an ingestion pipeline, and often a paid feed"*
+versus *"cost: an afternoon. This is the queue worth working."*
+
+**Market cap is derived in the panel from the panel's own closes, and that is the
+load-bearing decision.** `SELECT_MARKET_CAP_SQL` already existed and joins shares
+onto `daily_bars` itself — so using it would mean the panel's price and the
+panel's market cap came from two independent reads, each with its own
+`adjustment` and `source`. Since #247 the evaluator can run on either feed, so a
+panel built on `alpaca-sip` could be handed caps computed from `alpaca-iex`
+closes with nothing to say so. That is this project's recurring defect exactly: a
+component recomputing a fact the system already holds, and the copies disagreeing.
+The reader now returns raw `(filed_at, shares)` and the panel multiplies.
+
+**Selection is on `filed_at`, never `as_of`** — the same no-peek rule
+`shares_store` enforces one layer down, applied against the panel's grid. A count
+describing 2024-03-31 filed on 2024-05-09 is invisible until 2024-05-09.
+
+Sanity-checked against live data on the latest session: NVDA $5.35T, AAPL
+$4.90T, GOOGL $4.27T, MSFT $3.66T. Coverage is **36 of 50 names** — the other 14
+are 10 ETFs (market cap is meaningless) and the 4 multi-class issuers SEC
+publishes no point-in-time count for (#253). Those carry `nan` throughout, never
+zero: zero is a number a size ranking would happily sort to the bottom.
+
+One alias was written and then removed before shipping: **`shares outstanding` is
+not a synonym for market cap**, it is a component of it. A strategy ranking on
+the raw count is a different strategy from one ranking on size, and the module's
+standing rule is that a wording difference may be normalised while a construction
+difference must not.
+
 ### Correction: all three archetype bars already ran in July (#260)
 
 #255 said *"bars B and C have never been run."* **That was wrong.**
