@@ -1264,6 +1264,42 @@ seconds all returned 406. The mitigation is detection, not prevention.
 
 See `docs/runbooks/a-dead-ingest-source.md`.
 
+### Market cap: one name was missing because SEC serves two endpoints inconsistently (#253)
+
+`market_data.shares_outstanding` covered **35 of 50** names. Ten of the fifteen
+gaps are ETFs, where market cap is meaningless and no CIK resolves (the
+`LAUNCH_CIKS_UNRESOLVED` set from #246). The five real gaps were DKNG, META,
+MSTR, NET and PYPL — and **PYPL was ours, not SEC's**.
+
+PYPL's `companyconcept` answers **HTTP 200 with `{"units": {"shares": []}}`** for
+`dei:EntityCommonStockSharesOutstanding`. The concept exists; it carries nothing.
+`companyfacts`, for the same registrant and the same concept, holds **44 rows**
+with identical `end`/`val`/`filed`/`form` fields. The concept chain cannot tell
+"answered empty" apart from "does not tag this concept" — both yield no rows —
+so PYPL was filed under `no_data` while the data sat one endpoint away.
+
+`companyfacts` is now the last link in the chain, tried only when the concept
+path comes up dry. The two endpoints agree exactly where both have data
+(**AAPL 70/70, MSFT 68/68, NVDA 69/69**), so nothing changes for the names that
+already work, and a megabyte-scale payload is only fetched for names that would
+otherwise be recorded as empty. Verified against live SEC: **PYPL 0 → 44 rows**
+(882,105,493 shares, filed 2026-05-05), AAPL unchanged at 70.
+
+**DKNG, META, MSTR and NET remain genuinely absent, and are not faked.** Their
+entire `dei` fact set is `EntityPublicFloat`, and they do not tag
+`us-gaap:CommonStockSharesOutstanding` either — multi-class issuers whose
+point-in-time count is reported per share class with a dimension that neither
+endpoint exposes. The only figures available are
+`WeightedAverageNumberOfSharesOutstandingBasic`, which is a *period average*, not
+a count on a date. Substituting it would change what market cap means without
+saying so, which is the shape of error this project keeps finding. Coverage is
+therefore **36 of the 40 non-ETF names**, and the four are a separate card
+needing cover-page parsing or another source.
+
+**This closes the ingest half of the market-cap capability gap, not the
+consuming half.** `SELECT_MARKET_CAP_SQL` still has zero callers, so
+`volatility-rank-forecast` is still not computable. That is the next card.
+
 ## Security notes
 
 - Old Alpaca paper key was rotated after appearing in chat.

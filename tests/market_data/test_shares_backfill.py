@@ -12,8 +12,14 @@ from typing import Any
 
 import pytest
 
+from shrap.market_data.shares import (
+    CONCEPT_CHAIN,
+    company_facts_url,
+    parse_company_facts,
+)
 from shrap.market_data.shares_backfill import (
     DEFAULT_USER_AGENT,
+    fetch_shares_for_ticker,
     run_backfill,
 )
 
@@ -282,3 +288,145 @@ async def test_the_summary_reports_coverage_not_just_failures() -> None:
     )
 
     assert "covered=2" in result.summary()
+
+
+# ---------------------------------------------------------------------------
+# companyfacts fallback
+#
+# Measured against live SEC on 2026-09-19: PYPL (CIK 1633917) answers
+# `companyconcept` with HTTP 200 and `{"units": {"shares": []}}` for a concept
+# that `companyfacts` holds 44 rows of. The concept chain cannot tell that apart
+# from a registrant that genuinely does not tag the concept — both yield nothing
+# — so PYPL was recorded as `no_data` while the data was one endpoint away.
+# ---------------------------------------------------------------------------
+
+EMPTY_CONCEPT: dict[str, Any] = {"units": {"shares": []}}
+
+COMPANY_FACTS_PAYLOAD: dict[str, Any] = {
+    "facts": {
+        "dei": {
+            "EntityCommonStockSharesOutstanding": {
+                "units": {
+                    "shares": [
+                        {
+                            "end": "2026-01-28",
+                            "val": 920664542,
+                            "filed": "2026-02-03",
+                            "form": "10-K",
+                        },
+                        {
+                            "end": "2026-04-29",
+                            "val": 882105493,
+                            "filed": "2026-05-05",
+                            "form": "10-Q",
+                        },
+                    ]
+                }
+            }
+        }
+    }
+}
+
+
+class EmptyConceptThenFactsHTTP:
+    """Every concept answers 200-but-empty; companyfacts has the rows."""
+
+    def __init__(self, facts: Any = COMPANY_FACTS_PAYLOAD) -> None:
+        self.requests: list[str] = []
+        self._facts = facts
+
+    async def get(
+        self, url: str, *, params: dict[str, str], headers: dict[str, str], timeout: float
+    ) -> FakeResponse:
+        self.requests.append(url)
+        if "companyfacts" in url:
+            return FakeResponse(self._facts)
+        return FakeResponse(EMPTY_CONCEPT)
+
+
+async def test_an_empty_concept_response_falls_back_to_company_facts() -> None:
+    http = EmptyConceptThenFactsHTTP()
+
+    rows = await fetch_shares_for_ticker(
+        http, ticker="PYPL", cik="1633917", user_agent="test (t@e.com)", timeout=5.0
+    )
+
+    assert [r.shares for r in rows] == [920664542.0, 882105493.0]
+    assert rows[-1].filed_at.isoformat() == "2026-05-05"
+    # The chain is still tried first, and companyfacts only after it comes up dry.
+    assert sum("companyconcept" in u for u in http.requests) == len(CONCEPT_CHAIN)
+    assert sum("companyfacts" in u for u in http.requests) == 1
+
+
+async def test_company_facts_is_not_fetched_when_the_concept_chain_works() -> None:
+    """The endpoints agree where both have data (AAPL 70/70, MSFT 68/68), and a
+    companyfacts payload is megabytes. Only names that would be empty pay."""
+
+    http = FakeHTTP()
+
+    rows = await fetch_shares_for_ticker(
+        http, ticker="AAPL", cik="320193", user_agent="test (t@e.com)", timeout=5.0
+    )
+
+    assert rows
+    assert not any("companyfacts" in u for u in http.requests)
+
+
+async def test_a_registrant_with_neither_still_reports_empty() -> None:
+    """META, MSTR, NET and DKNG: multi-class issuers whose point-in-time count is
+    absent from XBRL entirely. The fallback must not invent one."""
+
+    class NothingAnywhere(EmptyConceptThenFactsHTTP):
+        def __init__(self) -> None:
+            super().__init__(facts={"facts": {"dei": {"EntityPublicFloat": {"units": {}}}}})
+
+    http = NothingAnywhere()
+
+    rows = await fetch_shares_for_ticker(
+        http, ticker="META", cik="1326801", user_agent="test (t@e.com)", timeout=5.0
+    )
+
+    assert rows == []
+
+
+async def test_a_company_facts_error_is_not_fatal() -> None:
+    class FactsErrors(EmptyConceptThenFactsHTTP):
+        async def get(
+            self, url: str, *, params: dict[str, str], headers: dict[str, str], timeout: float
+        ) -> FakeResponse:
+            self.requests.append(url)
+            if "companyfacts" in url:
+                return FakeResponse({}, status_code=503)
+            return FakeResponse(EMPTY_CONCEPT)
+
+    rows = await fetch_shares_for_ticker(
+        FactsErrors(), ticker="PYPL", cik="1633917", user_agent="test (t@e.com)", timeout=5.0
+    )
+
+    assert rows == []
+
+
+def test_company_facts_url_pads_the_cik_to_ten_digits() -> None:
+    assert company_facts_url("1633917").endswith("/CIK0001633917.json")
+    assert company_facts_url("0001633917").endswith("/CIK0001633917.json")
+
+
+def test_parse_company_facts_walks_the_same_chain_as_the_concept_path() -> None:
+    """A registrant with only the us-gaap fallback concept is still read."""
+
+    payload = {
+        "facts": {
+            "dei": {"EntityPublicFloat": {"units": {}}},
+            "us-gaap": {
+                "CommonStockSharesOutstanding": {
+                    "units": {
+                        "shares": [{"end": "2026-03-31", "val": 892000000, "filed": "2026-05-05"}]
+                    }
+                }
+            },
+        }
+    }
+
+    rows = parse_company_facts(payload, ticker="PYPL", cik="1633917")
+
+    assert [r.shares for r in rows] == [892000000.0]
