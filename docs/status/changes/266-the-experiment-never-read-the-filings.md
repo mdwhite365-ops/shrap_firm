@@ -44,7 +44,7 @@ They were in the corpus the whole time.
 
 ### What it invalidates
 
-**#264's conclusion is retracted** — see `267-retracting-the-corpus-verdict.md`.
+**#264's conclusion is retracted** — see `266-retracting-the-corpus-verdict.md`.
 EDGAR is not a dead leg; it was never read. Also void: the July three-bar
 comparison, which used the same query, and every hard-leg number computed from
 these runs.
