@@ -177,7 +177,22 @@ factors. The Hypothesis Generator logs `sweep_empty` hourly because
 recorded is 0.415 against a 0.50 floor — the gate is not too tight, the strategies
 lack edge. The seven `capability-gap` rows are a prioritised build list; market
 capitalisation is the cheapest and is absent from every table. **Prefer feeding the
-funnel over building another thing that measures it.** **#264 claimed the corpus
+funnel over building another thing that measures it.**
+
+**The archetype bar experiment is answered (#270): Bar B.** On 425 `sec-edgar`
+filings under `kimi-k3`, `B-evidence-contribution` admits **14** against
+`A-incumbent`'s 6 and `C-signal-tagging`'s 3 — and the disagreements nest
+perfectly: B-only 8, A-only **0** (McNemar p = 0.008), B-only 11 against C
+(p = 0.001). **C is worse than the unmodified production prompt.** B catches the
+AI build-out supply chain A misses — Alliant Energy, EMCOR, MasTec, SPX, 3M, Air
+Products, Ford. Evidence in `docs/research/archetype-bar-ruling.md`; the ruling
+is Mike's. **But B's advantage is concentrated in filings.** Over the full 599
+items it is A 9, B 17, C 5 — B vs A 9-vs-1, p = 0.022 — while on the 174
+non-EDGAR items the bars are indistinguishable (3 each, one item each way) and
+**the item B loses is DQ-006's named exemplar.** 29 non-EDGAR hard-leg items is
+too few to detect an 8-in-425 effect, so this is underpowered rather than a
+refutation, but **the EDGAR result is not evidence about the bar everywhere.**
+The other limit: 14 admits is a small base, so direction yes, magnitude no. **#264 claimed the corpus
 was the constraint — that claim is retracted (#267).** It rested on `sec-edgar`
 admitting 0 of 425, which was an artifact of the experiment's own query: it never
 selected `document_text`, so for 72% of the corpus the model was shown the Atom
