@@ -1,4 +1,4 @@
-# Session handoff — 2026-09-20 (`main` at #263)
+# Session handoff — 2026-09-22 (`main` at #269)
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -15,6 +15,46 @@ them, and `git log` has the history.
 ---
 
 ## Pick up here (reconciled at #263, deployed 2026-09-20)
+
+### The archetype bar experiment has an answer: Bar B (#264–#270)
+
+**Three bars, 425 `sec-edgar` filings, `kimi-k3`, identical item set:** A admits
+6, **B admits 14**, C admits 3. The nesting is the finding, not the rates — B
+admits everything A admits plus eight more with **zero** going the other way
+(McNemar p = 0.008), and 11-vs-0 against C (p = 0.001). **C is worse than the
+unmodified production prompt.** Evidence:
+`docs/research/archetype-bar-ruling.md`. **The ruling is Mike's.**
+
+**Two limits, both stated in the write-up:** 14 admits is a small base, so the
+direction is supported and the magnitude is not; and this is EDGAR only, which is
+a particular kind of text. B and C are being extended to the other 174 items so
+all three bars cover one 599-item corpus.
+
+**Everything recorded before 2026-09-20 is void (#266).** The experiment's corpus
+query never selected `document_text`, so for `sec-edgar` — 72% of the corpus —
+the model was shown the Atom index entry (a filed date, an accession number, a
+file size) rather than the filing. 425 of 454 hard-leg items were scored on
+metadata across two models and three bars, and every one was rejected. **EDGAR
+is not a dead leg; it had never been read.** Read properly it admits 6 of 425
+(1.41%, Fisher p = 0.031 against 0 of 425).
+
+That also **retracts #264's verdict** that the corpus was the constraint
+(`266-retracting-the-corpus-verdict.md`). The claim rested entirely on an
+artifact of my own query.
+
+### Three defects found by the runs that used them
+
+- **#265** — a resume healed its results rows and then died on a primary-key
+  violation writing the run row, leaving the summary claiming `1 admit, 407
+  errors` beside 599 correct rows. The summary is now derived from the stored
+  rows rather than process memory.
+- **#269** — the "paced" quota guard never paced. It read `len(calls)`, which is
+  only extended *after* `run_bar` returns, so every interval measured zero items
+  and the stride silently fell back to its maximum. **A constant count is not a
+  measurement.**
+- **ruff was unpinned** (`>=0.6`), so CI ran 0.16.8 against a cached local
+  0.15.20 and the format gate was not deterministic. Pinned exactly. Preview
+  CI's view with `uvx ruff@latest format --check .`.
 
 ### Changelog entries moved (#263)
 

@@ -1,6 +1,13 @@
 # Implementation timeline
 
-**Last updated:** 2026-09-20 (`main` at #263)
+**Last updated:** 2026-09-22 (`main` at #269)
+
+**The archetype bar experiment is answered (#270): Bar B.** On 425 EDGAR filings
+B admits 14 against A's 6 and C's 3, and the disagreements nest perfectly —
+B-only 8, A-only 0, McNemar p = 0.008. Mike's ruling is the remaining step.
+Everything recorded before 2026-09-20 is void because the corpus query never
+read the filings (#266), which also retracts #264's claim that the corpus was
+the constraint.
 
 **The ordered plan is the card list at the top of
 `docs/status/session-handoff.md`**, and only the first of it moves the binding
