@@ -727,7 +727,7 @@ async def test_a_long_bar_rechecks_the_allowance_mid_flight() -> None:
     bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
     items = [_item(f"i{n}") for n in range(30)]
 
-    async def spent_after_the_first_check() -> QuotaDecision:
+    async def spent_after_the_first_check(scored: int) -> QuotaDecision:
         return QuotaDecision("session 100.0% used")
 
     calls = await run_bar(
@@ -750,7 +750,7 @@ async def test_the_items_behind_a_quota_stop_are_unwritten() -> None:
     bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
     items = [_item(f"i{n}") for n in range(30)]
 
-    async def spent() -> QuotaDecision:
+    async def spent(scored: int) -> QuotaDecision:
         return QuotaDecision("session 100.0% used")
 
     calls = await run_bar(
@@ -766,7 +766,7 @@ async def test_a_healthy_allowance_never_interrupts_a_bar() -> None:
     items = [_item(f"i{n}") for n in range(30)]
     checks = 0
 
-    async def healthy() -> QuotaDecision:
+    async def healthy(scored: int) -> QuotaDecision:
         nonlocal checks
         checks += 1
         return QuotaDecision(None, next_check_after=10)
@@ -1054,7 +1054,7 @@ async def test_a_costly_run_is_re_checked_often() -> None:
     bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
     asks = 0
 
-    async def expensive() -> QuotaDecision:
+    async def expensive(scored: int) -> QuotaDecision:
         nonlocal asks
         asks += 1
         return QuotaDecision(None, next_check_after=5)
@@ -1078,7 +1078,7 @@ async def test_a_cheap_run_is_not_re_checked_every_few_items() -> None:
     bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
     asks = 0
 
-    async def cheap() -> QuotaDecision:
+    async def cheap(scored: int) -> QuotaDecision:
         nonlocal asks
         asks += 1
         return QuotaDecision(None, next_check_after=QUOTA_CHECK_MAX)
@@ -1125,3 +1125,32 @@ def test_report_only_takes_no_item_selector() -> None:
 
     with pytest.raises(SystemExit):
         _validate_selectors(parser, args, [BAR_INCUMBENT])
+
+
+async def test_the_guard_is_told_how_many_items_have_been_scored() -> None:
+    """**The test that would have caught #267 being a no-op.** The CLI read
+    `len(calls)` from the enclosing scope, but `calls` is only extended after
+    `run_bar` returns — so during a bar it never moved, every interval measured
+    zero items, and the adaptive stride silently fell back to its maximum on
+    every check. A fixed 100-item interval wearing the costume of an adaptive
+    one."""
+
+    bar = next(b for b in all_bars() if b.key == BAR_INCUMBENT)
+    told: list[int] = []
+
+    async def record(scored: int) -> QuotaDecision:
+        told.append(scored)
+        return QuotaDecision(None, next_check_after=10)
+
+    await run_bar(
+        bar,
+        FakeClient(),
+        [_item(f"i{n}") for n in range(50)],
+        "local-classification",
+        quota_check=record,
+        quota_check_every=10,
+    )
+
+    assert told == sorted(told), "the count must not go backwards"
+    assert len(set(told)) == len(told), "a constant count means nothing is measurable"
+    assert told[0] >= 10 and told[-1] >= 40

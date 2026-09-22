@@ -541,9 +541,18 @@ async def run(
             # between two checks is the only honest measure of what an item
             # costs — it depends on the prompt, the prompt depends on the source,
             # and the window is cost-weighted rather than per-request.
-            paced = {"usage": 0.0, "items": 0, "seen": False}
+            # Seeded from the preflight read, so the FIRST mid-run check already
+            # has a baseline to measure against. Without it the first interval is
+            # a guess — and a guess at the maximum, which is the widest possible
+            # window in which an unexpectedly expensive item can run unchecked.
+            preflight = None if usage is None else usage.binding
+            paced = {
+                "usage": 0.0 if preflight is None else preflight.usage,
+                "items": 0,
+                "seen": preflight is not None,
+            }
 
-            async def still_within_budget() -> QuotaDecision:
+            async def still_within_budget(scored_now: int) -> QuotaDecision:
                 """Re-read the shared allowance mid-bar and say when to ask again.
 
                 Checking only before the first item proves there was room to
@@ -567,7 +576,6 @@ async def run(
                     # coasting on an estimate that does not exist.
                     return QuotaDecision(None, QUOTA_CHECK_MIN)
 
-                scored_now = len(calls)
                 headroom = binding_window.headroom(reserve)
                 stride = QUOTA_CHECK_MAX
                 if paced["seen"]:
