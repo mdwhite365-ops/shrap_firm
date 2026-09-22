@@ -16,6 +16,7 @@ The experiment asks whether the world-changer filter admits so little because of
 ## The result
 
 `kimi-k3`, 425 `sec-edgar` filings, every bar scoring the identical item set.
+The full 599-item corpus is in limit 2 below, and it matters.
 
 | bar | scored | admits | rate |
 |---|---|---|---|
@@ -68,17 +69,56 @@ of no difference regardless of the base rate — but anyone quoting "3.29%" as t
 admit rate B will deliver on the full corpus is quoting a number with real width
 on it. **The direction is well supported. The magnitude is not.**
 
-**2. This was measured on `sec-edgar` only.** EDGAR was chosen because it is 72%
+**2. B's advantage is concentrated in EDGAR, and this is now measured rather
+than cautioned about.** All three bars have since been extended to the full
+599-item set:
+
+| bar | admits (599) |
+|---|---|
+| `A-incumbent` | 9 |
+| **`B-evidence-contribution`** | **17** |
+| `C-signal-tagging` | 5 |
+
+**B vs A over the whole corpus: 9 B-only, 1 A-only, McNemar p = 0.022.** Still
+significant, but weaker than EDGAR alone (p = 0.008) and **no longer perfectly
+nested.** On the 174 non-EDGAR items the two bars are indistinguishable — 3
+admits each, one item each way:
+
+| source | items | A | B | B-only | A-only |
+|---|---|---|---|---|---|
+| `arxiv` | 145 | 0 | 1 | 1 | 0 |
+| `doe-newsroom` | 2 | 1 | 0 | 0 | **1** |
+| `federal-register` | 13 | 1 | 1 | 0 | 0 |
+| `usaspending` | 14 | 1 | 1 | 0 | 0 |
+
+**Every one of B's net gains comes from filings.** Worse, the single item B
+loses is the DOE fourth-criticality announcement — **DQ-006's named exemplar**,
+the specific false negative this whole line of work was started to fix. B's one
+non-EDGAR gain is an arXiv paper on generative AI and the book market, tagged
+`platform-shift`.
+
+Two explanations fit and the data does not separate them. The non-EDGAR hard leg
+is **29 items**, far too few to detect an 8-in-425 effect, so this is genuinely
+underpowered and does not refute B. Or "what does this contribute" needs long
+attested prose to have something to work with, and the bar is better on filings
+rather than better in general.
+
+**The EDGAR result stands on its own. It should not be read as evidence about
+the bar everywhere.**
+
+**The original framing of this limit —** measured on `sec-edgar` only — EDGAR was chosen because it is 72%
 of the corpus and because it is the leg that #266 showed had never been read
 properly. It is also a *particular kind* of text — attested corporate disclosure,
-long, formal, and written to be precise about what a company has committed to.
-A contribution-shaped question may do well there for reasons that do not carry to
-arXiv abstracts, Federal Register rules, or USASpending award descriptions.
-B's advantage outside EDGAR is being measured separately — bars B and C are
-being extended to the other 174 items of the same set, so all three bars will
-cover one 599-item corpus. Until that lands, **this result is about EDGAR.**
+long, formal, written to be precise about what a company has committed to. That
+caution turned out to be the finding above.
 
-Neither limit points the other way. Both belong in any summary of this result.
+**C's verdict does not change.** Over all 599 items it admits 5 against A's 9,
+with **0 items A does not already have** (p = 0.125). It contributes nothing
+unique on any source.
+
+**The first limit softens the magnitude; the second narrows the claim.** Both
+belong in any summary, and the second is a measured negative rather than a
+caveat — it was written as a caution and came back as a result.
 
 ## What this does not establish
 

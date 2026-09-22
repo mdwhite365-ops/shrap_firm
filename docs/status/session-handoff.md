@@ -25,10 +25,13 @@ admits everything A admits plus eight more with **zero** going the other way
 unmodified production prompt.** Evidence:
 `docs/research/archetype-bar-ruling.md`. **The ruling is Mike's.**
 
-**Two limits, both stated in the write-up:** 14 admits is a small base, so the
-direction is supported and the magnitude is not; and this is EDGAR only, which is
-a particular kind of text. B and C are being extended to the other 174 items so
-all three bars cover one 599-item corpus.
+**All three bars now cover the full 599 items: A 9, B 17, C 5.** B vs A is
+9-vs-1 (p = 0.022) — still significant but weaker than EDGAR alone, and **B's
+advantage is concentrated entirely in filings.** On the 174 non-EDGAR items the
+bars are indistinguishable (3 each, one item each way), and the item B loses is
+**DQ-006's named exemplar**. Underpowered at 29 non-EDGAR hard-leg items, so not
+a refutation — but the EDGAR result is not evidence about the bar everywhere.
+The other limit: 14 admits is a small base, so direction yes, magnitude no.
 
 **Everything recorded before 2026-09-20 is void (#266).** The experiment's corpus
 query never selected `document_text`, so for `sec-edgar` — 72% of the corpus —

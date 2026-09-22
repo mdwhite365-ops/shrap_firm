@@ -186,8 +186,13 @@ perfectly: B-only 8, A-only **0** (McNemar p = 0.008), B-only 11 against C
 (p = 0.001). **C is worse than the unmodified production prompt.** B catches the
 AI build-out supply chain A misses — Alliant Energy, EMCOR, MasTec, SPX, 3M, Air
 Products, Ford. Evidence in `docs/research/archetype-bar-ruling.md`; the ruling
-is Mike's. **Two limits belong in any summary: 14 admits is a small base (the
-direction is supported, the magnitude is not), and it is EDGAR only.** **#264 claimed the corpus
+is Mike's. **But B's advantage is concentrated in filings.** Over the full 599
+items it is A 9, B 17, C 5 — B vs A 9-vs-1, p = 0.022 — while on the 174
+non-EDGAR items the bars are indistinguishable (3 each, one item each way) and
+**the item B loses is DQ-006's named exemplar.** 29 non-EDGAR hard-leg items is
+too few to detect an 8-in-425 effect, so this is underpowered rather than a
+refutation, but **the EDGAR result is not evidence about the bar everywhere.**
+The other limit: 14 admits is a small base, so direction yes, magnitude no. **#264 claimed the corpus
 was the constraint — that claim is retracted (#267).** It rested on `sec-edgar`
 admitting 0 of 425, which was an artifact of the experiment's own query: it never
 selected `document_text`, so for 72% of the corpus the model was shown the Atom

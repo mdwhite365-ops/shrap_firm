@@ -25,12 +25,28 @@ American Electric Power; **B also catches the contractors who physically build
 the data centres and the suppliers feeding them.** That is the earlier-stage
 evidence the spec argued a contribution-shaped question would surface.
 
-**Two limits, stated rather than buried.** Fourteen admits is a small base, so
-the *direction* is well supported and the *magnitude* is not — anyone quoting
-3.29% is quoting a number with real width. And this is `sec-edgar` only, a
-particular kind of text: attested, long, written to be precise about commitments.
-B and C are being extended to the other 174 items so all three bars cover one
-599-item corpus; until then the result is about EDGAR.
+**B's advantage is concentrated in EDGAR, and that is measured, not cautioned
+about.** All three bars now cover the full 599-item set: A 9, **B 17**, C 5.
+B vs A over the whole corpus is 9-vs-1, **p = 0.022** — still significant, but
+weaker than EDGAR alone and **no longer perfectly nested.**
+
+On the 174 non-EDGAR items the two bars are indistinguishable: **3 admits each,
+one item each way.** Every one of B's net gains comes from filings. And the
+single item B *loses* is the DOE fourth-criticality announcement — **DQ-006's
+named exemplar**, the specific false negative this line of work exists to fix.
+
+Two explanations fit and the data does not separate them: 29 non-EDGAR hard-leg
+items is far too few to detect an 8-in-425 effect, or a contribution-shaped
+question needs long attested prose and is better on filings rather than better in
+general. **The EDGAR result stands on its own; it is not evidence about the bar
+everywhere.**
+
+**The other limit: fourteen admits is a small base**, so the direction is
+supported and the magnitude is not — anyone quoting 3.29% is quoting a number
+with real width.
+
+**C's verdict is unchanged** and now covers everything: 5 admits against A's 9,
+with **zero** items A does not already have, on any source.
 
 Evidence assembled in `docs/research/archetype-bar-ruling.md`. **The ruling is
 Mike's** — adopting B means the production filter's question changes from *what
