@@ -23,7 +23,15 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "fakeredis>=2.24",
-    "ruff>=0.6",
+    # **Pinned, not floored.** `ruff>=0.6` meant CI installed whatever ruff had
+    # released most recently while a developer ran whatever was cached, so the
+    # format gate was not deterministic. On 2026-09-20 CI (0.16.8) failed a
+    # branch that `make lint` had just passed locally (0.15.20): 0.16 formats
+    # Python inside markdown fences, so it checked 528 files where the older
+    # version checked 409. A formatter that disagrees with itself across
+    # machines turns a green local gate into a red CI one for reasons nobody can
+    # reproduce. Bump this deliberately, and reformat in the same commit.
+    "ruff==0.16.8",
     "mypy>=1.11",
     "pre-commit>=3.8",
 ]

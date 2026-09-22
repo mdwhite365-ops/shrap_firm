@@ -7,8 +7,8 @@ The CLI's closure read `len(calls)` from the enclosing scope to learn how many
 items had been scored. But `calls` is only extended *after* `run_bar` returns:
 
 ```python
-bar_calls = await run_bar(...)   # every check happens in here
-calls.extend(bar_calls)          # ...and this runs afterwards
+bar_calls = await run_bar(...)  # every check happens in here
+calls.extend(bar_calls)  # ...and this runs afterwards
 ```
 
 So during a bar the count never moved. `items_since` was zero at every check,
@@ -49,3 +49,20 @@ from a variable that was not being updated. Nothing raised. The guard reported
 success, stopped runs, and logged reasons, while measuring a constant.
 
 **A number that never changes is not a measurement.** Assert that it moves.
+
+### And ruff is now pinned, because the gate was not deterministic
+
+This branch failed CI on a branch `make lint` had just passed locally. Not a
+mistake either side made: `ruff>=0.6` let CI install **0.16.8** while the
+developer ran a cached **0.15.20**, and **0.16 formats Python inside markdown
+fences**. CI therefore checked 528 files where local checked 409, and the one
+disagreement was a fenced `python` block in this very entry.
+
+A formatter that disagrees with itself across machines turns a green local gate
+into a red CI one for reasons nobody can reproduce — and the obvious response,
+reformatting until CI is happy, changes files the local tool will change straight
+back. `ruff` is pinned to an exact version now. Bump it deliberately, and
+reformat in the same commit.
+
+To see CI's view before pushing without touching the pin:
+`uvx ruff@latest format --check .`
