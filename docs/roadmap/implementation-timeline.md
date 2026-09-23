@@ -1,6 +1,14 @@
 # Implementation timeline
 
-**Last updated:** 2026-09-22 (`main` at #269)
+**Last updated:** 2026-09-23 (`main` at #270; audit PRs #271–#276 open)
+
+**The 2026-09-23 audit (#271–#276) changes no priority, but it answers how
+much research is happening: almost none.** Of 16 strategies ever, 15 were
+Mike-seeded. The Evaluator ran zero evaluations from 07-31 to 09-14. The
+funnel admitted 0 of 1,284 arXiv items in the last week. The fixes are
+hygiene (a nano-share left on every exit, arXiv throttling, lost commits, a
+leaked webhook). The binding constraint is unchanged, and the next step is still
+the Bar B ruling below. Details: `docs/status/session-handoff.md`.
 
 **The archetype bar experiment is answered (#270): Bar B.** On 425 EDGAR filings
 B admits 14 against A's 6 and C's 3, and the disagreements nest perfectly —

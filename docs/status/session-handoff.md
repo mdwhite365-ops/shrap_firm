@@ -1,4 +1,4 @@
-# Session handoff — 2026-09-22 (`main` at #269)
+# Session handoff — 2026-09-23 (`main` at #270, audit PRs #271–#276 open)
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -14,7 +14,72 @@ them, and `git log` has the history.
 
 ---
 
-## Pick up here (reconciled at #263, deployed 2026-09-20)
+## Pick up here: the 2026-09-23 audit (#271–#276)
+
+A full audit through #270: code, git, docs, and the live Dell. **The code was
+clean** (2,172 tests, ruff, mypy --strict), **and the order path works** (fills
+every session 09-14 → 09-23, no kill switch active). What it found was silent:
+
+| PR | Finding | Deploy |
+|---|---|---|
+| #271 | Every exit sold **one nano-share less than held** (`floor(q*1e9)` in float). AVGO, GD, QQQ and TSLA sit at 1e-09 shares, vetoed daily as `BELOW_BROKER_MINIMUM` | `execution-agent` ×3, `pre-trade-checker` |
+| #272 | arXiv's 406 is aimed at **the Dell**, not at categories (every query returned 200 from the MacBook), and #251's fan-out made 10 requests/pass at a throttled host. `arxiv-qfin` dark since 07:13 UTC 09-23 | `tech-watcher` |
+| #273 | **#250's last three commits never reached `main`**: `main` indexed EDGAR only. The live index had papers only because the image was built from the branch. The index was also manual-only and 4 days stale | `corpus-index` (now always-on), `health-monitor` |
+| #274 | The Health Monitor logged the **Discord webhook token** into `docker logs` (httpx INFO) | `health-monitor` |
+| #275 | #26's regime floor never reached `main`. **Your ruling**: merge to adjoin the bands at 0.18, close to keep the gap. No effect today (vol_20d 0.108) | `regime-classifier` |
+| #276 | This doc set | — |
+
+All deploys use `--build --force-recreate`, and are verified by image ID (KI-039).
+
+**Mike's actions, none of which code can do:**
+
+- **Rotate the Discord webhook** (#274 stops new leaks, not old ones).
+- **Disarm the Strategy Fixture.** The Dell's `infra/.env` sets
+  `STRATEGY_FIXTURE_ENABLED=true` three times, so the "disarmed" fixture has
+  sent an SPY buy every night at 00:03 UTC, stopped only by the Risk Officer's
+  `UNKNOWN_STRATEGY` veto. The audit's attempt to edit `.env` was blocked by the
+  permission classifier.
+- **Clear the dust by hand** in Alpaca for `PA3KQN57WVXY`: AVGO, GD, QQQ, TSLA
+  (1e-09 each) and U (0.012648483). Positions under $1 cannot be sold via the API.
+- **Decide where backups live.** They run nightly and restore (verified 09-19),
+  but `/mnt/backups` is on `boot-pool/ROOT/25.10.4` — the TrueNAS *boot
+  environment*, on the OS disk — and nothing is copied off the box. Whether a
+  TrueNAS upgrade carries that directory into the new boot environment is
+  **not verified**.
+
+### Is the firm researching? Barely — measured 2026-09-23
+
+- **New strategies:** 16 ever. **15 were seeded by Mike**, 1 by the Hypothesis
+  Generator (2026-07-30, killed). Nothing new has entered the pipeline since
+  09-18, and nothing from the autonomous loop since 07-30.
+- **Backtests:** the Evaluator ran **zero evaluations from 2026-07-31 to
+  2026-09-14**. Since then it re-evaluates one strategy (the 15-minute
+  momentum variant) daily: `hold / below-sharpe-floor` each time. A HOLD
+  never expires, and #242 already measured that variant at IR 0.003.
+- **Forward tests:** the two `paper` strategies, running since 08-04. Momentum
+  +1.56% and high-volume +0.32%, against SPY −0.17% (price only). Seven weeks
+  is not evidence. The third account is exactly $10,066.19 on both dates.
+- **Funnel:** 7 days to 09-23, **0 of 1,284 arXiv items admitted**, EDGAR 12 of
+  962. `literature_items` holds 14 rows ever (11 `capability-gap`, 2 `refused`,
+  1 `proposed`). The Hypothesis Generator logs `sweep_empty` hourly.
+
+The machinery runs; the input is empty. The lever is still the filter bar
+(the Bar B ruling below) and the capability-gap build list — not more
+measurement.
+
+### Smaller findings, not yet cards
+
+- **SIP daily bars have no schedule.** They were a one-off for #247, so
+  `--feed alpaca-sip` gets a panel ending 2026-09-17.
+- **Filing Processor matched 2 of 442 EDGAR items** over three business days
+  against ~6 expected for a 42-name roster. Borderline (Poisson p ≈ 0.06), so
+  watch it rather than act.
+- Ollama quota healthy (session 3.3%, weekly 38.2%). The filter is on `kimi-k3`,
+  so the `qwen3.5:397b` retirement on 09-25 does not touch it.
+
+---
+
+## Previously: reconciled at #263, deployed 2026-09-20
 
 ### The archetype bar experiment has an answer: Bar B (#264–#270)
 
@@ -273,8 +338,8 @@ Run against the Dell, not inferred. **KI-035** has the full working.
 | `hypothesis-generator` | **1** |
 
 That one proposal scored IR **−0.006**. The Hypothesis Generator is not broken —
-it logs `sweep_empty` hourly because `research.literature_items` has **nine rows
-in total** and all nine are processed. Lifetime funnel yield: ~111 papers → 9
+it logs `sweep_empty` hourly because `research.literature_items` had **nine rows
+in total** (14 by 2026-09-23) and all are processed. Lifetime funnel yield: ~111 papers → 9
 items → 1 strategy.
 
 Everything else the firm has ever tested is a textbook factor (momentum,

@@ -5,7 +5,7 @@ This is **Shrap**, a self-developing multi-agent trading firm. The repo name is 
 **Read `docs/00-vision.md` first.** Everything in this project flows from that document. Do not propose changes that conflict with the vision without flagging the conflict explicitly.
 
 ## Current phase
-**Phase 1: implementation — Research unlock.** The paper-trading spine is deployed on the Dell and **closed** (market-hours smoke 9/9 on 2026-07-15; first fully autonomous trade, signal through fill, 2026-07-16). The Research funnel went live 2026-07-17; the Tech Watcher ingests EDGAR, arXiv, arXiv q-fin, USASpending, the Federal Register and DOE newsroom, and filters on **`qwen3.5:397b` via Ollama Cloud** (promoted 2026-07-31 by the first shadow eval — routing has been box-wide cloud since #169, and nothing runs on the local 9B).
+**Phase 1: implementation — Research unlock.** The paper-trading spine is deployed on the Dell and **closed** (market-hours smoke 9/9 on 2026-07-15; first fully autonomous trade, signal through fill, 2026-07-16). The Research funnel went live 2026-07-17; the Tech Watcher ingests EDGAR, arXiv, arXiv q-fin, USASpending, the Federal Register and DOE newsroom, and filters on **`kimi-k3` via Ollama Cloud** (since #231; `qwen3.5:397b` held the slot from 2026-07-31 and retires 2026-09-25 — routing has been box-wide cloud since #169, and nothing runs on the local 9B).
 
 **The funnel closed end to end on 2026-08-02** (#189, KI-009). It had admitted nothing for two months because the EDGAR leg stored the Atom *index entry* — a filed date, an accession number and a file size — rather than the filing. With document bodies it admitted **46 items** and synthesized its first pipeline candidate.
 
@@ -15,8 +15,8 @@ The trading path was fixed **five times in ten days** (#192, #193, #195, #196, #
 
 **The same shape, again, in the backups (#212–#214).** Three PRs to get one
 backup that works: the crons were never installed, then the script could not
-reach Docker (`truenas_admin` is not in the `docker` group — this is why every
-interactive command here is `sudo docker`), then its dump would not have
+reach Docker (`truenas_admin` was not in the `docker` group then; it was added
+2026-09-17, and `docker` no longer needs `sudo`), then its dump would not have
 *restored*, because `shrap` is TimescaleDB being dumped as plain Postgres. **Each
 failure was only visible on the next real run; none were findable by reading the
 script.** Assume a component is wrong about what it talks to until it has run
@@ -137,6 +137,17 @@ files cannot conflict. `make changelog` reads them in order.
 2026-09-18).** This set went 16 PRs stale again during that session — the
 fourth occurrence after #72–80, #92–101 and #129–175.
 
+**The 2026-09-23 audit (#271–#276) found the repo wrong and the container
+right.** Four commits sat on already-merged branches (KI-001's second shape):
+three from #250, including the fix that put research papers in the corpus index,
+and #26's regime floor. The live index was correct only because the image was
+built from the branch thirteen seconds after the fix, so no test, deploy check or
+doc-drift run could see that `main` was wrong. **Run `git cherry origin/main
+<branch>` over every remote branch, not only the ones a session remembers
+touching.** The same audit found a sell leaving one nano-share behind on every
+exit (float floor, #271), arXiv's 406 aimed at the host rather than at categories
+(#272), and the Discord webhook token in `docker logs` (#274).
+
 **The promote gate has never been failed on evidence (KI-036, 2026-09-17).** The
 standard error of an annualised IR over 5.1 years on this firm's panel is
 **±0.47**; the best IR ever recorded is **0.448**. That is **0.11 standard
@@ -173,7 +184,7 @@ KI-009: taxonomy, not model.
 **The binding constraint, measured 2026-09-17 (KI-035):** the autonomous research
 loop has produced **one** strategy ever (IR −0.006) against 14 Mike-seeded textbook
 factors. The Hypothesis Generator logs `sweep_empty` hourly because
-`research.literature_items` holds nine rows in total. Best IR the firm has ever
+`research.literature_items` held nine rows in total (14 by 2026-09-23). Best IR the firm has ever
 recorded is 0.415 against a 0.50 floor — the gate is not too tight, the strategies
 lack edge. The seven `capability-gap` rows are a prioritised build list; market
 capitalisation is the cheapest and is absent from every table. **Prefer feeding the
@@ -202,7 +213,7 @@ p = 0.031, and every admit is energy or compute build-out surfacing in corporate
 disclosure. **Before concluding a source has nothing to say, confirm something
 asked it.**
 
-**Always-on services (verified 2026-09-18, 39 containers):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (disarmed), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger, Market Data Trigger, **Market Data Intraday Trigger** (#236), plus the substrate: Postgres/TimescaleDB, Redis, Qdrant, Ollama, Prometheus, Grafana, cAdvisor, node-exporter, postgres-exporter, redis-exporter and **docker-state-exporter** (#239). **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker. **`ib-gateway` was stopped and removed 2026-09-18**; its compose project lives at `infra/ibgateway/` (#243) and needs a gitignored `.env` to revive — ADR-0003 gates IBKR on live capital.
+**Always-on services (verified 2026-09-23, 35 containers; 36 once #273 deploys the Corpus Index):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (meant to be disarmed — the Dell's `infra/.env` had `STRATEGY_FIXTURE_ENABLED=true` three times until the 2026-09-23 audit), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger, Market Data Trigger, **Market Data Intraday Trigger** (#236), plus the substrate: Postgres/TimescaleDB, Redis, Qdrant, Ollama, Prometheus, Grafana, cAdvisor, node-exporter, postgres-exporter, redis-exporter and **docker-state-exporter** (#239). **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker. **`ib-gateway` was stopped and removed 2026-09-18**; its compose project lives at `infra/ibgateway/` (#243) and needs a gitignored `.env` to revive — ADR-0003 gates IBKR on live capital.
 
 Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike reviews and merges; never stack PRs — see KI-001).
 
@@ -255,7 +266,7 @@ All ten foundational docs are drafted: vision, architecture (all open questions 
 ## Tooling stack
 **In production now:** Redis Streams (ADR-0001/0006 event bus), PostgreSQL + TimescaleDB, Prometheus + Grafana (ADR-0004), **Langfuse Cloud**, Qdrant, Ollama, Docker Compose on TrueNAS SCALE, direct Alpaca paper client (ADR-0003 — paper phase). Agents are plain asyncio service loops, not LangGraph, so far.
 
-**Qdrant became true on 2026-09-19, having been listed here since July.** It was deployed 2026-07-02 and held **zero collections for two and a half months** while 164 MB of filing and paper text sat in Postgres, searchable only by exact string match. `docs/02-architecture.md` specified "full text to Qdrant" for Intelligence and Structural Analysis; nothing implemented it. The corpus index now does: `shrap-corpus-index` chunks, embeds with **local `nomic-embed-text`** (768-dim, on the Dell's own Ollama — not the cloud host, per vision principle 5) and writes ~82,000 points with full provenance. See `docs/runbooks/corpus-index.md`. **This is the firm's only vector search, and no agent consumes it yet** — the CLI queries it; wiring the Hypothesis Generator to retrieve prior work is a separate card. It does **not** address the binding constraint: the funnel is starved because the filter admits nothing (KI-009/KI-035), and making the rejected corpus searchable is a different capability from fixing the taxonomy.
+**Qdrant became true on 2026-09-19, having been listed here since July.** It was deployed 2026-07-02 and held **zero collections for two and a half months** while 164 MB of filing and paper text sat in Postgres, searchable only by exact string match. `docs/02-architecture.md` specified "full text to Qdrant" for Intelligence and Structural Analysis; nothing implemented it. The corpus index now does: `shrap-corpus-index` chunks, embeds with **local `nomic-embed-text`** (768-dim, on the Dell's own Ollama — not the cloud host, per vision principle 5) and holds 107,384 points with full provenance (2026-09-23). See `docs/runbooks/corpus-index.md`. **This is the firm's only vector search; #259 made the Hypothesis Generator its first consumer.** Until #273 it was run by hand, and `main` indexed EDGAR only — the live index held papers solely because the Dell's image was built from #250's branch after the merge. It does **not** address the binding constraint: the funnel is starved because the filter admits nothing (KI-009/KI-035), and making the rejected corpus searchable is a different capability from fixing the taxonomy.
 
 **The local Langfuse was retired 2026-09-19 (#254), and it had never held a
 trace.** All 24 agents carry `LANGFUSE_HOST=https://us.cloud.langfuse.com`;
