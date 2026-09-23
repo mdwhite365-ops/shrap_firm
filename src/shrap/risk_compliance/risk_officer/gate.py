@@ -31,9 +31,9 @@ Prices come from ``market_data.daily_bars``. The intent carries no price (see
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import ROUND_DOWN, Decimal
 
 from shrap.risk_compliance.risk_officer.clusters import Cluster, cluster_positions
 from shrap.risk_compliance.risk_officer.exposure import BookExposure
@@ -58,7 +58,7 @@ BISECTION_PROBE = 1e-6
 # Alpaca accepts nine decimal places on a fractional quantity, so that is the
 # finest real size and anything beyond it is bisection noise.
 QUANTITY_PRECISION = 9
-_QUANTUM: float = float(10**QUANTITY_PRECISION)
+_QUANTUM = Decimal(1).scaleb(-QUANTITY_PRECISION)
 
 
 def quantize_down(quantity: float) -> float:
@@ -72,9 +72,13 @@ def quantize_down(quantity: float) -> float:
     like 1.8e-11 rather than a clean zero, which reads as approved and would
     submit an order for a hundred-billionth of a share. Snapping down makes it
     the zero it means.
+
+    In decimal, not float: ``math.floor(q * 1e9) / 1e9`` floors 0.531726136 to
+    0.531726135, because the multiply lands on 531726135.99999994. ``repr`` is
+    the shortest decimal that round-trips the float, so truncating it is exact.
     """
 
-    return math.floor(quantity * _QUANTUM) / _QUANTUM
+    return float(Decimal(repr(quantity)).quantize(_QUANTUM, rounding=ROUND_DOWN))
 
 
 BUY = "buy"
