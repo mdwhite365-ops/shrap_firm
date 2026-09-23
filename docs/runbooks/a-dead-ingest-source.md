@@ -118,6 +118,23 @@ than a category, which would explain that one; `q-bio.NC` looks valid and is
 refused anyway. It does not matter much: the design now survives any category
 being refused, including ones that are fine today.
 
+> **Correction, 2026-09-23 (#PRNUM): arXiv does not refuse those categories.**
+> From 2026-09-22 ~20:00 UTC the Dell got 406 for *every* query — `cs.AI`,
+> `cs.LG`, `cond-mat`, `q-bio.NC`, all four q-fin sections and both combined
+> queries. From the MacBook, in the same hour, every one of them returned 200,
+> including `cat:cond-mat`, `cat:q-bio.NC` and `cat:cond-mat.stat-mech`. The
+> 2026-09-19 table above is the cache-hit/cache-miss pattern of section 2, read
+> as a property of the categories: `cs.AI` and `cs.LG` are busy enough to be
+> cached, the others are not.
+>
+> The per-category split built on that reading made every failed pass cost ten
+> requests instead of two, at a host whose refusal each request prolongs. It is
+> gone. Each arXiv source makes **one** combined query; a 406 or 429 starts a
+> shared cooldown (2h, doubling to 12h, cleared by the first 200) during which
+> neither arXiv source makes a request. The cursor does not advance while it
+> runs, so `research.ingest_cursors[arxiv]` goes stale and the Health Monitor
+> says so — which is true: the firm is not reading arXiv.
+
 ### 2. Rate limiting, which is what hit `arxiv-qfin`
 
 arXiv's [terms of use](https://info.arxiv.org/help/api/tou.html):
@@ -174,8 +191,8 @@ fix will make before shipping it.
   heavy enough to keep re-tripping the throttle, so live probing from this
   address is contaminated evidence for a while. **Do not diagnose an external
   API by hammering it from the production IP.**
-- **Why `cond-mat` and `q-bio.NC` are refused.** The feed no longer depends on
-  knowing.
+- ~~**Why `cond-mat` and `q-bio.NC` are refused.**~~ They are not; the host was
+  (see the correction above).
 
 The per-source freshness check is what answers both over time: if
 `research.ingest_cursors[arxiv]` goes green and stays green, this worked.
