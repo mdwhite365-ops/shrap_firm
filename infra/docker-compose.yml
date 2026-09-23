@@ -1277,7 +1277,13 @@ services:
   # shipped, while 156 MB of filing and paper text sat in Postgres searchable
   # only by exact string match.
   #
-  # Run to completion, resumable, idempotent:
+  # Always on since 2026-09-23: an incremental build every six hours. It was
+  # tools-only, nobody ran it after 2026-09-19, and the index fell ~1,000 arXiv
+  # papers behind the Hypothesis Generator's retrieval without anything saying
+  # so. A failed build is logged and the loop continues; a loop that stops
+  # writing is caught by the research.corpus_index_cursor freshness target.
+  #
+  # Still resumable and idempotent, and still runnable by hand:
   #     docker compose run --rm corpus-index shrap-corpus-index build
   #     docker compose run --rm corpus-index shrap-corpus-index search "..."
   #
@@ -1291,7 +1297,11 @@ services:
       context: ../
       dockerfile: infra/corpus-index.Dockerfile
     container_name: shrap_corpus_index
-    profiles: ["tools"]
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - 'while true; do shrap-corpus-index build || echo "corpus-index build failed, exit $$?"; sleep $${CORPUS_INDEX_INTERVAL_SECONDS:-21600}; done'
     env_file:
       - .env
     environment:

@@ -193,6 +193,22 @@ DEFAULT_TARGETS: tuple[FreshnessTarget, ...] = (
         ),
     ),
     FreshnessTarget(
+        name="research.corpus_index_cursor",
+        schema="research",
+        table="corpus_index_cursor",
+        timestamp_column="updated_at",
+        producer="corpus-index",
+        max_age=timedelta(hours=72),
+        rationale=(
+            "The corpus index was run by hand only, and from 2026-09-19 nobody ran it: "
+            "the Qdrant backup was byte-identical for five days while ~1,000 arXiv papers "
+            "went unindexed under the Hypothesis Generator's retrieval. It now builds every "
+            "six hours, and `updated_at` moves only when a batch is written, so the "
+            "threshold must clear a quiet weekend: EDGAR files nothing on one and arXiv "
+            "can be in its throttle cooldown. Seventy-two hours does."
+        ),
+    ),
+    FreshnessTarget(
         name="intelligence.filings",
         schema="intelligence",
         table="filings",
