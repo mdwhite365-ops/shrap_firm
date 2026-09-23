@@ -118,7 +118,7 @@ than a category, which would explain that one; `q-bio.NC` looks valid and is
 refused anyway. It does not matter much: the design now survives any category
 being refused, including ones that are fine today.
 
-> **Correction, 2026-09-23 (#PRNUM): arXiv does not refuse those categories.**
+> **Correction, 2026-09-23 (#272): arXiv does not refuse those categories.**
 > From 2026-09-22 ~20:00 UTC the Dell got 406 for *every* query — `cs.AI`,
 > `cs.LG`, `cond-mat`, `q-bio.NC`, all four q-fin sections and both combined
 > queries. From the MacBook, in the same hour, every one of them returned 200,

@@ -73,7 +73,7 @@ true for days and neither of which raised anything.**
   `research.ingest_cursors`, which advances on every *successful* pass rather
   than only when new items appear. Two faults behind one symptom.
   ~~arXiv refuses `cond-mat` and `q-bio.NC` outright~~ — **retracted
-  2026-09-23 (#PRNUM):** from another IP every one of those categories returns
+  2026-09-23 (#272):** from another IP every one of those categories returns
   200; the 406s were aimed at the Dell, and the per-category fan-out built on
   that reading multiplied requests at a throttled host. One combined query per
   source now, and a 406 starts a 2–12h cooldown. Separately, the firm was **violating arXiv's
