@@ -263,11 +263,9 @@ tomorrow that is the mechanism working, not a surprise.
 
 ### The three rulings Mike still owns
 
-1. **Exposure.** The accounts are **84% cash** (stage 0.25 x regime 0.75 =
-   0.1875). Holding selection constant, **IR is `-Sharpe(benchmark)` at every
-   exposure below 1.0** — −1.152 here, independent of the level. The deadlock:
-   exposure is low because edge is unproven, and a $70 return cannot prove
-   edge. Raising it is one line and is not a tuning decision.
+1. ~~**Exposure.**~~ **Ruled 2026-09-18: `paper` 0.25 → 0.80**, so new buys
+   size at 0.60 in this regime. As measured on 2026-09-23 it applies to new buys
+   only, so held positions stayed at the old ~18.75% size until a resize step.
 2. **Whether to cap simultaneous exits.** Nothing limits how many positions may
    exit in one pass. A market-wide drop that breaches the stop everywhere
    liquidates the book at once. That is arguably what a stop is for, and it is

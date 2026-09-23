@@ -411,8 +411,8 @@ since-entry take-profit deliberately unarmed because it fights momentum.
 1. **Feed the funnel.** The remaining `capability-gap` rows are the build list;
    **news text and 10-K full text are closable against data the firm already
    ingests**. This is the binding constraint and everything else is apparatus.
-2. **Exposure ruling.** The accounts are 84% cash and that costs 1.15 of IR
-   against a fully-invested benchmark. Not a tuning decision — see the handoff.
+2. ~~**Exposure ruling.**~~ Ruled 2026-09-18 (`paper` 0.80). Held positions
+   were not resized, so the momentum account sat ~29% invested on 2026-09-23.
 3. **Whether to cap simultaneous exits.** Nothing limits how many positions exit
    in one pass.
 4. **Recover `glm-5.3`'s parseable answers.** 17 of 40 rejected responses

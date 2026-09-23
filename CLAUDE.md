@@ -168,12 +168,15 @@ Exit rules are now **armed**: stop −10%, intraday take-profit +7%. The
 since-entry take-profit is deliberately unarmed — it would sell a position the
 126-day momentum signal is actively long.
 
-**The accounts are 84% cash, and that alone costs 1.15 of IR.** Stage 0.25 x
-regime 0.75 = 0.1875. Holding selection perfectly constant, **IR is
-`-Sharpe(benchmark)` at every exposure below 1.0**, independent of the level.
-The deadlock: exposure is low because edge is unproven, and a $70 return cannot
-prove edge. Raising it is Mike's ruling. **The third account is idle because
-nothing has reached `paper` in 46 days** — 15 strategies, 13 killed, 2 promoted.
+**Exposure was ruled on 2026-09-18: `paper` stage 0.25 → 0.80** ("the 10k is
+there to be used"), so a buy is sized at 0.80 x regime 0.75 = **0.60** (it was
+0.1875, and the accounts were 84% cash). Holding selection constant, **IR is
+`-Sharpe(benchmark)` at every exposure below 1.0**, which is why it mattered.
+**But the raise applies only to new buys** (measured 2026-09-23): nothing resized
+held positions, so the momentum account was still ~29% invested, with six
+positions at ~$190 (the old size) next to three at ~$600. **The third account is
+idle because nothing has reached `paper`**, and it stays empty (Mike, 2026-09-23)
+until the shadow forward test produces something worth putting there.
 
 **The Tech Watcher's filter is `kimi-k3` as of #231**, promoted on a shadow eval
 because Ollama retires `qwen3.5:397b` on 2026-09-25. The eval also found that
