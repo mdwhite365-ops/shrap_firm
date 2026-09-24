@@ -65,6 +65,39 @@ leaderboard (needs #279; **the third account stays empty until the ledger shows
 something worth trying**, Mike 2026-09-23), and the Hypothesis Generator
 emitting specs (needs #278).
 
+**The first spec batches, backtested read-only on the Dell (2026-09-24).** 13
+specs (7 price/volume, 6 from SEC fundamentals) run through the real
+`EvaluationPipeline` in dry-run, from a scratch merge of #278+#279+#280, with
+fundamentals held in memory (nothing written). IR against a benchmark of the
+names each strategy can actually hold:
+
+| Spec | IR | Folds | Verdict |
+|---|---|---|---|
+| Gross profitability (Novy-Marx 2013) | **+0.81** | **6/6** | kill: insufficient-trades |
+| MACD histogram leaders | **+0.88** | 5/6 | promote |
+| Book-to-market (Fama-French 1992) | +0.72 | 4/6 | kill: insufficient-trades |
+| Size (Banz 1981) | +0.51 | 4/6 | kill: insufficient-trades |
+| Asset growth (Cooper et al. 2008) | +0.50 | 3/6 | promote |
+| Faber trend, accruals, R&D, LT reversal, earnings yield, RSI(2), Bollinger, inverse-vol | ≤ +0.12 | | kill / hold |
+
+The firm's best IR before this was 0.448. **Read it with three discounts:**
+the IR standard error is ±0.47 (KI-036); these are 13 draws; and **the
+universe was chosen in 2026**, so every backtest here is survivorship-biased,
+value-style strategies most of all. MACD is not momentum in disguise: 18% book
+overlap, active-return correlation −0.08 with 126/21.
+
+**Two protocol findings from it:**
+
+- **The benchmark includes names a strategy cannot hold.** Measured against all
+  50 (TLT, UUP, GLD, index ETFs), the fundamental strategies read ~0.3 IR
+  higher. Stocks beating bonds over 2020–2026 is not selection. Specs must
+  declare the universe they can score.
+- **`min_trades` kills every monthly-rebalanced anomaly**, which is how
+  academic factors are traded: four of the five best died on trade count, not
+  evidence. Per the 2026-07-27 finding this is a protocol-fit question, not a
+  constant to lower. The shadow ledger enrols killed strategies, so it tests
+  them anyway.
+
 **Found while building, each needs a decision or a deploy:**
 
 - **Four live images predate #258/#259** (`strategy-evaluator`, `-trigger`,
