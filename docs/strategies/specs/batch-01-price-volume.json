@@ -1,0 +1,98 @@
+[
+  {
+    "name": "Size effect (bottom 10 by market cap, monthly)",
+    "thesis": "Smaller companies earn higher average returns than larger ones (Banz 1981; Fama & French 1992). The usual explanations are a liquidity premium and neglect by institutions. On fifty liquid names the effect is expected to be weak, because it is concentrated in micro-caps this universe does not hold, so this is a test of whether any of it survives among large, liquid names. Market cap is close x filed shares, point in time.",
+    "kill_criteria": [
+      "the bottom ten by market cap is a crypto and meme-stock basket (AMC, GME, RIOT, MARA, NIO) rather than a size tilt, so any result is a sector bet wearing a size label; check what it held before believing it",
+      "the effect is absent across folds, which is the published expectation outside micro-caps"
+    ],
+    "params": {
+      "signal": {"feature": "market_cap"},
+      "select": "bottom",
+      "top_n": 10,
+      "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Long-term reversal (3-year losers, monthly)",
+    "thesis": "Stocks that lost the most over the prior three to five years outperform prior winners over the following years (De Bondt & Thaler 1985), usually read as investor overreaction to a long run of bad news. It sits at the opposite horizon from momentum, which this firm has measured at six months, so it tests a separate mechanism rather than a variant of one already on record.",
+    "kill_criteria": [
+      "the three-year losers are distressed or bust names (crypto miners, EV start-ups) whose recovery is a single sector rebound rather than a reversal effect",
+      "the panel is short enough that a 756-bar formation window leaves only a year or two of evaluable history, in which case the result is not evidence either way"
+    ],
+    "params": {
+      "signal": {"feature": "return", "lookback": 756},
+      "select": "bottom",
+      "top_n": 10,
+      "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Trend filter: price above its 10-month average (Faber)",
+    "thesis": "Holding an asset only while its price is above its roughly ten-month (210-session) moving average cut drawdowns sharply at little cost to return across a century of asset-class data (Faber 2007, A Quantitative Approach to Tactical Asset Allocation). It is an absolute, per-name rule, applied here to each of the fifty names independently with monthly checks, as the paper does.",
+    "kill_criteria": [
+      "the rule's advantage in the paper is lower drawdown rather than higher return; if the information ratio is negative and drawdown is not materially lower than the benchmark's, it adds nothing",
+      "it behaves like the killed time-series momentum rule (own 252-day return above zero), which would make it the same hypothesis measured twice"
+    ],
+    "params": {
+      "signal": {"feature": "sma_ratio", "fast": 1, "slow": 210},
+      "select": "positive",
+      "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "RSI(2) oversold, long when below 10 (Connors)",
+    "thesis": "A practitioner staple and one of the most-published TradingView strategies: buy names whose two-day RSI falls below 10 and hold while it stays there (Connors & Alvarez 2008, Short Term Trading Strategies That Work). The claim is that extreme short-term selling in liquid names mean-reverts within days. RSI uses the window-only (Cutler) form, so backtest and live compute the same value.",
+    "kill_criteria": [
+      "the edge disappears under the friction stress, since a two-day signal trades constantly and short-term reversal profits are known to be mostly bid-ask bounce",
+      "it holds almost nothing most days, so the result rests on a handful of trades and the fold consistency is below half"
+    ],
+    "params": {
+      "signal": {"op": "sub", "args": [{"const": 10}, {"feature": "rsi", "lookback": 2}]},
+      "select": "positive",
+      "rebalance": "daily"
+    }
+  },
+  {
+    "name": "Bollinger band reversion (close below the lower band)",
+    "thesis": "Hold names whose close is more than two standard deviations below their twenty-day mean, the lower Bollinger band, on the view that such stretches revert (Bollinger 2001). Another widely used TradingView strategy, stated here exactly: score is minus two minus the band z-score, positive only below the lower band.",
+    "kill_criteria": [
+      "names below the lower band keep falling more often than they revert in this universe, which is what momentum at short horizons would predict and would make this a losing bet against it",
+      "the result depends on one crash period (2020, 2022) and fails in the other folds"
+    ],
+    "params": {
+      "signal": {"op": "sub", "args": [{"const": -2}, {"feature": "bollinger_z", "lookback": 20}]},
+      "select": "positive",
+      "rebalance": "daily"
+    }
+  },
+  {
+    "name": "MACD histogram leaders (top 10, winners only)",
+    "thesis": "Rank names by the MACD histogram (12/26/9, Appel), normalised by price so names are comparable, and hold the ten with the strongest positive readings. The MACD cross is among the most common TradingView entries; this states it cross-sectionally so that it can be measured against owning the whole universe.",
+    "kill_criteria": [
+      "it selects the same names as six-month momentum, which would make it momentum measured through a noisier lens rather than a separate effect",
+      "the edge does not survive the one-day execution lag in the friction stress, which a signal this fast is exposed to"
+    ],
+    "params": {
+      "signal": {"feature": "macd"},
+      "select": "top",
+      "top_n": 10,
+      "require_sign": true,
+      "rebalance": "daily"
+    }
+  },
+  {
+    "name": "Inverse-volatility universe (hold everything, weight by 1/vol)",
+    "thesis": "The firm measured on its own fifty names that 21-day volatility rank persists month to month (rho +0.880, #226) while return rank does not (+0.019), matching the actionable finding of arXiv 2607.27461. The only way to use a forecastable risk and an unforecastable return is through weighting, not selection: hold every name, weighted by inverse 21-day volatility, against the equal-weight benchmark of the same names. Active return here is the weighting alone.",
+    "kill_criteria": [
+      "the information ratio is not positive, meaning risk weighting does not improve on equal weighting in this universe despite the forecastability",
+      "any advantage is a tilt into the lowest-volatility ETFs (TLT, UUP, GLD) during one bond or dollar rally rather than a steady improvement across folds"
+    ],
+    "params": {
+      "signal": {"const": 1},
+      "select": "positive",
+      "weighting": "inverse-vol",
+      "rebalance": "monthly"
+    }
+  }
+]

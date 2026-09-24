@@ -45,6 +45,7 @@ from datetime import date
 from itertools import pairwise
 from typing import Any
 
+from shrap.market_data.fundamentals import METRICS
 from shrap.research.strategy_evaluator.cross_sectional import (
     _equal_weights,
     _inverse_volatility_weights,
@@ -267,6 +268,28 @@ FEATURES: dict[str, _Feature] = {
 }
 
 
+def _a_fundamental(w: PanelWindow, t: str, metric: str) -> float | None:
+    return w.fundamental(t, metric)
+
+
+def _a_fundamental_growth(w: PanelWindow, t: str, metric: str) -> float | None:
+    """Year-on-year growth of a filed figure, both years as visible on this bar."""
+
+    now, before = w.fundamental(t, metric), w.fundamental_prior(t, metric)
+    if now is None or before is None or before <= 0.0:
+        return None
+    return now / before - 1.0
+
+
+# Features over filed accounting figures (``market_data.fundamentals``), point in
+# time on the filing date. They take a metric name rather than a lookback.
+# Ratios such as earnings-to-price are built with ``div`` against ``market_cap``.
+ACCOUNTING_FEATURES: dict[str, Callable[[PanelWindow, str, str], float | None]] = {
+    "fundamental": _a_fundamental,
+    "fundamental_growth": _a_fundamental_growth,
+}
+
+
 # --- the expression tree --------------------------------------------------------
 
 
@@ -283,19 +306,23 @@ class Node:
     args: Mapping[str, int]
     children: tuple[Node, ...]
     value: float = 0.0
+    metric: str = ""
+    """For the accounting features: which filed figure (see ``market_data.fundamentals``)."""
 
     @property
     def bars(self) -> int:
         """Trailing bars the whole subtree needs."""
 
         if self.kind == "feature":
-            return FEATURES[self.name].bars(self.args)
+            return FEATURES[self.name].bars(self.args) if self.name in FEATURES else 1
         return max((c.bars for c in self.children), default=1)
 
     def describe(self) -> str:
         if self.kind == "const":
             return f"{self.value:g}"
         if self.kind == "feature":
+            if self.metric:
+                return f"{self.name}({self.metric})"
             inner = ", ".join(f"{k}={v}" for k, v in sorted(self.args.items()))
             return f"{self.name}({inner})"
         if self.name in UNARY_OPS:
@@ -333,6 +360,16 @@ def parse(raw: object, *, _depth: int = 1, _count: list[int] | None = None) -> N
         if not math.isfinite(float(value)):
             raise SignalSpecError("const must be finite")
         return Node("const", "const", {}, (), float(value))
+
+    if "feature" in raw and raw["feature"] in ACCOUNTING_FEATURES:
+        name = str(raw["feature"])
+        if set(raw) != {"feature", "metric"}:
+            raise SignalSpecError(f"{name!r} takes exactly one argument, 'metric'")
+        metric = str(raw["metric"])
+        if metric not in METRICS:
+            known = ", ".join(sorted(METRICS))
+            raise SignalSpecError(f"unknown metric {metric!r}; known metrics are {known}")
+        return Node("feature", name, {}, (), metric=metric)
 
     if "feature" in raw:
         name = raw["feature"]
@@ -416,6 +453,8 @@ def evaluate(node: Node, window: PanelWindow, tickers: Sequence[str]) -> Scores:
 
     if node.kind == "const":
         return dict.fromkeys(tickers, node.value)
+    if node.kind == "feature" and node.name in ACCOUNTING_FEATURES:
+        return {t: ACCOUNTING_FEATURES[node.name](window, t, node.metric) for t in tickers}
     if node.kind == "feature":
         feature = FEATURES[node.name]
         out: Scores = {}
@@ -604,6 +643,7 @@ class SignalSpecStrategy:
 
 
 __all__ = [
+    "ACCOUNTING_FEATURES",
     "FEATURES",
     "MAX_DEPTH",
     "MAX_LOOKBACK",

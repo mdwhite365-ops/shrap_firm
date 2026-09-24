@@ -1,0 +1,76 @@
+[
+  {
+    "name": "Earnings yield (top 10 by net income / market cap, monthly)",
+    "thesis": "Firms with high earnings relative to price outperform low earnings-yield firms (Basu 1977), one of the oldest value effects. Earnings are the latest annual net income filed with the SEC as of each date, and market cap is close x filed shares, both point in time, so no figure is used before it was public.",
+    "kill_criteria": [
+      "the top ten by earnings yield is a sector bet (defense or banks-adjacent names) and the result tracks that sector's run rather than value across the universe",
+      "value's well-documented post-2007 weakness holds here, so any positive result rests on one fold"
+    ],
+    "params": {
+      "signal": {"op": "div", "args": [{"feature": "fundamental", "metric": "net_income"}, {"feature": "market_cap"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Book-to-market (top 10 by equity / market cap, monthly)",
+    "thesis": "High book-to-market stocks earn higher average returns than low ones (Fama & French 1992, the HML factor). Book equity is the latest stockholders' equity instant filed with the SEC; names with negative equity are excluded by construction, because the ratio then ranks them last rather than as cheap.",
+    "kill_criteria": [
+      "the result is driven by one or two names whose equity is tiny or distorted by buybacks, making the ratio a measure of capital structure rather than cheapness",
+      "HML's weak last two decades hold here and the edge is confined to one fold"
+    ],
+    "params": {
+      "signal": {"op": "div", "args": [{"feature": "fundamental", "metric": "stockholders_equity"}, {"feature": "market_cap"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Gross profitability (top 10 by gross profit / assets, monthly)",
+    "thesis": "Profitable firms, measured by gross profit over total assets, earn higher returns than unprofitable ones, and the effect is about as strong as value while being negatively correlated with it (Novy-Marx 2013). Gross profit is the cleanest measure of economic profitability because it sits above the accounting choices lower in the income statement.",
+    "kill_criteria": [
+      "firms that do not report gross profit (many tech and service companies tag no GrossProfit) are silently excluded, so the ranking covers only a subset of the universe; check coverage before believing a result",
+      "it selects the same mega-cap tech names as momentum and adds nothing a momentum book does not already hold"
+    ],
+    "params": {
+      "signal": {"op": "div", "args": [{"feature": "fundamental", "metric": "gross_profit"}, {"feature": "fundamental", "metric": "total_assets"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Asset growth (bottom 10 by year-on-year asset growth, monthly)",
+    "thesis": "Firms that grow their total assets fastest subsequently underperform those that grow slowest (Cooper, Gulen & Schill 2008), one of the strongest predictors in the cross-section and the basis of the investment factor. Growth compares the latest filed balance sheet with the one a year earlier, both as visible on the date.",
+    "kill_criteria": [
+      "the slowest-growing names are shrinking because they are in decline, and the result is a distressed-stock bet rather than an investment effect",
+      "the effect is known to be weak among large firms; if it is absent here that is the published expectation, not a surprise"
+    ],
+    "params": {
+      "signal": {"feature": "fundamental_growth", "metric": "total_assets"},
+      "select": "bottom", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Accruals (bottom 10 by (net income - operating cash flow) / assets, monthly)",
+    "thesis": "Earnings made of accruals rather than cash are less persistent, and firms with high accruals subsequently underperform those with low accruals (Sloan 1996). Accruals here are annual net income minus annual operating cash flow, scaled by total assets, all as filed with the SEC.",
+    "kill_criteria": [
+      "the accrual anomaly has largely disappeared since publication; if the result is flat that matches the literature and is not evidence of a data problem",
+      "one-off items (impairments, tax charges) dominate the accrual ranking for a few names and drive the whole result"
+    ],
+    "params": {
+      "signal": {"op": "div", "args": [
+        {"op": "sub", "args": [{"feature": "fundamental", "metric": "net_income"}, {"feature": "fundamental", "metric": "operating_cash_flow"}]},
+        {"feature": "fundamental", "metric": "total_assets"}]},
+      "select": "bottom", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "R&D intensity (top 10 by R&D / market cap, monthly)",
+    "thesis": "Firms spending heavily on research relative to their market value earn higher subsequent returns, because the market undervalues intangible investment that accounting expenses immediately (Chan, Lakonishok & Sougiannis 2001). R&D is the latest annual research and development expense filed with the SEC.",
+    "kill_criteria": [
+      "only the tech and defense names report R&D, so this is a comparison among roughly half the universe; the result must be read against that subset rather than the full benchmark",
+      "the selected names are the same mega-cap tech holdings as momentum, making this a tech tilt rather than an intangibles effect"
+    ],
+    "params": {
+      "signal": {"op": "div", "args": [{"feature": "fundamental", "metric": "rd_expense"}, {"feature": "market_cap"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  }
+]
