@@ -1432,6 +1432,32 @@ services:
       - shrap_net
 
   # -------------------------------------------------------------------------
+  # Shadow Ledger - the shadow forward test. Every enrolled strategy (killed
+  # ones included) is decided each completed session and settled the next, net
+  # of the Evaluator's cost model, against its own equal-weight benchmark. No
+  # broker. The decision is stored before the next close exists, so the record
+  # is out-of-sample by construction. `shrap-shadow-ledger report` reads it.
+  # -------------------------------------------------------------------------
+  shadow-ledger:
+    build:
+      context: ../
+      dockerfile: infra/strategy-evaluator.Dockerfile
+    container_name: shrap_shadow_ledger
+    command: ["shrap-shadow-ledger", "loop"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      SHADOW_LEDGER_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      SHADOW_LEDGER_INTERVAL_SECONDS: "3600"
+      SHADOW_LEDGER_LOG_LEVEL: "INFO"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
+  # -------------------------------------------------------------------------
   # Hypothesis Generator - the firm proposing its own strategies from the
   # literature (technical-catalyst archetype, ADR-0013). Tools profile: one
   # batch on demand, exits when done.
