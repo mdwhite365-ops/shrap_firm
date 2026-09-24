@@ -72,11 +72,11 @@ true for days and neither of which raised anything.**
   across every producer writing to that table.** Now checked per source on
   `research.ingest_cursors`, which advances on every *successful* pass rather
   than only when new items appear. Two faults behind one symptom.
-  **arXiv refuses `cond-mat` and `q-bio.NC` outright with 406** (deterministic,
-  three clean rounds) while `cs.AI` and `cs.LG` return 200 — and the source
-  asked for all four in **one OR query**, so two bad categories took the two
-  good ones down with them. Now one request per category: **182 items where the
-  old code returned zero.** Separately, the firm was **violating arXiv's
+  ~~arXiv refuses `cond-mat` and `q-bio.NC` outright~~ — **retracted
+  2026-09-23 (#272):** from another IP every one of those categories returns
+  200; the 406s were aimed at the Dell, and the per-category fan-out built on
+  that reading multiplied requests at a throttled host. One combined query per
+  source now, and a 406 starts a 2–12h cooldown. Separately, the firm was **violating arXiv's
   published rate limit on every pass** (one request per three seconds; the pass
   fetched two `ArxivSource` instances back to back), and a throttled host gets
   406 on every cache *miss* while cache *hits* keep returning 200 — which is why

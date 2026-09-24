@@ -7,13 +7,11 @@ Five source classes, none requiring credentials:
   from settings. Item identity is the accession number.
 - **arXiv** API query over the spec's categories (cs.AI, cs.LG, cond-mat,
   q-bio.NC), newest first. Item identity is the arXiv id (with version).
-  **One combined query, splitting per category only when that fails** — arXiv
-  refuses `cond-mat` and `q-bio.NC` outright with HTTP 406 (measured
-  2026-09-19), and a single OR query let those two take the two healthy ones
-  down with them for 46 consecutive passes. Splitting *unconditionally* fixed
-  that and cost 24 requests a pass against the old code's 2, at an API whose
-  failure mode is throttling; splitting on failure keeps a healthy source at
-  one request.
+  **One combined query per source, and a cooldown after a 406.** arXiv's 406
+  means *this host* is throttled, not that a category is refused: on
+  2026-09-23 every category the Dell was getting 406 for — `cond-mat`,
+  `q-bio.NC`, all four q-fin sections, and the combined queries — returned 200
+  from a different IP in the same hour.
 - **USASpending** award search (POST JSON API) filtered to configured
   awarding agencies above a dollar threshold, over a lookback window.
   Item identity is the award's ``generated_internal_id``. This is the
@@ -129,6 +127,10 @@ class HTTPClient(Protocol):
 class SourceError(Exception):
     """A source fetch or parse failed; the pass continues with other sources."""
 
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
 
 # Statuses worth a second attempt: the server is saying "not now", not "no".
 # 4xx is otherwise excluded on purpose — a 400, 401, 403 or 404 will still be
@@ -215,7 +217,23 @@ ARXIV_RETRY = RetryPolicy(statuses=ARXIV_RETRYABLE_STATUSES)
 # violation, and arXiv's answer to a throttled host is to serve **406 with an
 # empty body on every cache miss** — which is exactly the shape of the
 # 2026-09-17 outage, and why waiting inside a pass never cleared it.
-ARXIV_MIN_INTERVAL_SECONDS = 3.0
+#
+# Five seconds rather than three: the requests were logged exactly 3.00s apart,
+# which is on the limit rather than inside it, and a pass makes two requests, so
+# the margin costs four seconds an hour.
+ARXIV_MIN_INTERVAL_SECONDS = 5.0
+
+# **Stop asking a host that has been told no.** A throttled host is refused on
+# every cache miss, so each further request both fails and extends the
+# throttle. From 2026-09-22 ~20:00 UTC the Dell made ten arXiv requests an hour
+# — a combined query, then a fan-out across every category — and all but the
+# occasional cache hit came back 406, for as long as it kept asking. The
+# cooldown doubles on each consecutive refusal (2h, 4h, 8h, capped at 12h) and
+# clears on the first 200. While it runs the source raises without a request,
+# so the cursor does not advance and the per-source freshness check says so.
+ARXIV_THROTTLED_STATUSES = frozenset({406, 429})
+ARXIV_COOLDOWN_SECONDS = 2 * 3600.0
+ARXIV_MAX_COOLDOWN_SECONDS = 12 * 3600.0
 
 # arXiv's edge is reported to refuse requests that do not name a format or a
 # client. Both are cheap, both are good practice, and neither can be verified
@@ -239,13 +257,19 @@ class RequestThrottle:
         self,
         min_interval_seconds: float,
         *,
+        cooldown_seconds: float = 0.0,
+        max_cooldown_seconds: float = 0.0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._min_interval = min_interval_seconds
+        self._cooldown = cooldown_seconds
+        self._max_cooldown = max(max_cooldown_seconds, cooldown_seconds)
         self._clock = clock
         self._sleep = sleep
         self._last: float | None = None
+        self._refusals = 0
+        self._cooling_until: float | None = None
         # Serialises callers, which is the "single connection at a time" half
         # of the terms. Without it two concurrent sources would both read the
         # same `_last` and both decide they were clear to go.
@@ -256,6 +280,11 @@ class RequestThrottle:
 
         async with self._lock:
             now = self._clock()
+            if self._cooling_until is not None and now < self._cooling_until:
+                raise SourceError(
+                    f"host refused {self._refusals} time(s) in a row; cooling down for "
+                    f"another {self._cooling_until - now:.0f}s without a request"
+                )
             waited = 0.0
             if self._last is not None:
                 remaining = self._min_interval - (now - self._last)
@@ -265,8 +294,31 @@ class RequestThrottle:
             self._last = self._clock()
             return waited
 
+    def refused(self) -> float:
+        """Record a throttling answer. Returns the cooldown now in force, in seconds.
 
-ARXIV_THROTTLE = RequestThrottle(ARXIV_MIN_INTERVAL_SECONDS)
+        A no-op on a throttle built without a cooldown.
+        """
+
+        if self._cooldown <= 0.0:
+            return 0.0
+        seconds = min(self._cooldown * 2.0**self._refusals, self._max_cooldown)
+        self._refusals += 1
+        self._cooling_until = self._clock() + seconds
+        return seconds
+
+    def accepted(self) -> None:
+        """Record a successful answer, which ends any cooldown."""
+
+        self._refusals = 0
+        self._cooling_until = None
+
+
+ARXIV_THROTTLE = RequestThrottle(
+    ARXIV_MIN_INTERVAL_SECONDS,
+    cooldown_seconds=ARXIV_COOLDOWN_SECONDS,
+    max_cooldown_seconds=ARXIV_MAX_COOLDOWN_SECONDS,
+)
 """Shared by every :class:`ArxivSource`, because the limit is per *host*.
 
 Giving each source its own throttle would let two instances issue simultaneous
@@ -301,7 +353,8 @@ async def _send_with_retry(
             raise SourceError(
                 f"{context}: {last}"
                 + (f" after {attempt} attempts" if attempt > 1 else "")
-                + (" (not retryable)" if final and attempt == 1 else "")
+                + (" (not retryable)" if final and attempt == 1 else ""),
+                status=response.status_code,
             )
         delay = policy.delay_for(attempt)
         log.info(
@@ -478,74 +531,21 @@ class ArxivSource:
         return self._name
 
     async def fetch(self, http: HTTPClient, timeout: float = 30.0) -> list[RawSourceItem]:
-        """All categories in one query; split per category only if that fails.
+        """All categories in one query, and nothing more on a refusal.
 
-        **The combined query first, because requests are the scarce thing.**
-        Splitting unconditionally isolates a refused category — which is the
-        defect this class was fixed for — but it also multiplies a healthy
-        source's request count by the number of categories, against an API whose
-        failure mode is throttling. Deployed that way it made 24 arXiv requests
-        in one pass where the old code made 2.
-
-        One request when everything works, and the fan-out only on the pass where
-        something is actually broken. `arxiv-qfin` therefore costs 1 request;
-        `arxiv`, whose `cond-mat` and `q-bio.NC` are refused outright, costs
-        1 + 4.
+        This split per category whenever the combined query failed (#251/#256),
+        on the reading that arXiv refused `cond-mat` and `q-bio.NC` outright.
+        **That reading was wrong.** On 2026-09-23 the Dell got 406 for both, for
+        all four q-fin sections and for the combined queries, while a request
+        from another IP in the same hour got 200 for every one of them. The 406
+        was aimed at the host. Splitting on it turned one refused request into
+        five — ten a pass across both sources — against the one API where extra
+        requests are exactly what keeps a host refused.
         """
 
         combined = " OR ".join(f"cat:{c}" for c in self._categories)
-        try:
-            response = await self._query(combined, http, timeout, label=self._name)
-        except SourceError as e:
-            log.info(
-                "tech_watcher.arxiv_combined_failed",
-                source=self._name,
-                error=str(e)[:200],
-                categories=len(self._categories),
-            )
-        else:
-            return self._items_from(response, self._name)
-
-        return await self._fetch_each_category(http, timeout)
-
-    async def _fetch_each_category(self, http: HTTPClient, timeout: float) -> list[RawSourceItem]:
-        """One query per category, so one refusal cannot take the rest with it.
-
-        **Measured 2026-09-19**, three clean rounds eight seconds apart,
-        identical every time: `cs.AI` 200, `cs.LG` 200, `q-bio.NC` 406,
-        `cond-mat` 406, `cond-mat.stat-mech` 406. The source asked for all four
-        in one query, so two refused categories took the two healthy ones down
-        with them for 46 consecutive passes.
-        """
-
-        items: list[RawSourceItem] = []
-        seen: set[str] = set()
-        failures: list[str] = []
-
-        for category in self._categories:
-            label = f"{self._name}[{category}]"
-            try:
-                response = await self._query(f"cat:{category}", http, timeout, label=label)
-            except SourceError as e:
-                failures.append(f"{category}: {e}")
-                log.warning(
-                    "tech_watcher.arxiv_category_failed",
-                    source=self._name,
-                    category=category,
-                    error=str(e)[:200],
-                )
-                continue
-            for item in self._items_from(response, label):
-                if item.item_id not in seen:
-                    seen.add(item.item_id)
-                    items.append(item)
-
-        # Only a total failure is a source failure. A partial one is logged and
-        # the surviving categories are still ingested, because half a feed is
-        # worth strictly more than none of it.
-        if failures and not items:
-            raise SourceError(f"{self._name}: every category failed ({'; '.join(failures)})")
-        return items
+        response = await self._query(combined, http, timeout, label=self._name)
+        return self._items_from(response, self._name)
 
     def _items_from(self, response: HTTPResponse, label: str) -> list[RawSourceItem]:
         out: list[RawSourceItem] = []
@@ -561,8 +561,11 @@ class ArxivSource:
         async def send() -> HTTPResponse:
             # Inside `send`, so it applies to retries too. A retry that ignored
             # the limit would be the fastest way back into the throttle.
-            await self._throttle.acquire()
-            return await http.get(
+            try:
+                await self._throttle.acquire()
+            except SourceError as e:
+                raise SourceError(f"{label}: {e}") from None
+            response = await http.get(
                 ARXIV_QUERY_URL,
                 params={
                     "search_query": search_query,
@@ -574,6 +577,17 @@ class ArxivSource:
                 headers=self._headers,
                 timeout=timeout,
             )
+            if response.status_code == 200:
+                self._throttle.accepted()
+            elif response.status_code in ARXIV_THROTTLED_STATUSES:
+                cooldown = self._throttle.refused()
+                log.warning(
+                    "tech_watcher.arxiv_throttled",
+                    source=label,
+                    status=response.status_code,
+                    cooldown_seconds=round(cooldown),
+                )
+            return response
 
         return await _send_with_retry(send, context=label, policy=self._retry)
 
