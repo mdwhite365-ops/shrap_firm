@@ -180,6 +180,13 @@ class StrategyInput:
     record: StrategyRecord
     tickers: list[str]
     bars_by_ticker: dict[str, list[BarSample]]
+    shares_by_ticker: Mapping[str, Sequence[tuple[date, float]]] | None = None
+    """Filed share counts, so live panels carry market caps as backtests do."""
+
+    fundamentals_by_ticker: (
+        Mapping[str, Mapping[str, Sequence[tuple[date, date, float]]]] | None
+    ) = None
+    """Filed accounting figures, for the same reason."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -431,8 +438,13 @@ def _plan_strategy(
         if any(not item.bars_by_ticker.get(ticker) for ticker in item.tickers):
             return _skip(strategy_id, "missing bars for one or more tickers")
 
+        # The same optional series the Evaluator builds its panel with. Until
+        # 2026-09-24 the Runner passed bars alone, so a live panel had no market
+        # caps while the backtest that admitted the strategy did.
         panel = PricePanel.from_bars(
-            {ticker: item.bars_by_ticker[ticker] for ticker in item.tickers}
+            {ticker: item.bars_by_ticker[ticker] for ticker in item.tickers},
+            item.shares_by_ticker,
+            item.fundamentals_by_ticker,
         )
         if panel.n_bars < warmup:
             return _skip(

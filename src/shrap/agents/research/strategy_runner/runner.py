@@ -78,7 +78,11 @@ from shrap.common.logging import configure_logging
 from shrap.events import EventPublisher, RedisPublisher
 from shrap.events.groups import GroupEventSubscriber, RedisGroupClient
 from shrap.operations.market_phase import Phase
-from shrap.research.strategy_evaluator.pipeline import _default_strategy_factory, _extract_tickers
+from shrap.research.strategy_evaluator.pipeline import (
+    _default_strategy_factory,
+    _extract_tickers,
+    read_optional,
+)
 from shrap.research.strategy_evaluator.strategy import BarSample
 from shrap.research.strategy_fixture import FixtureRedis, latest_regime_label
 from shrap.research.strategy_registry import (
@@ -299,7 +303,15 @@ async def _build_input(
     bars_by_ticker: dict[str, list[BarSample]] = {}
     for ticker in tickers:
         bars_by_ticker[ticker] = await reader.read_bars(ticker, start, session_date, adjustment)
-    return StrategyInput(record=record, tickers=tickers, bars_by_ticker=bars_by_ticker)
+    # Share counts and fundamentals from the same reader, by the same optional
+    # contract the Evaluator uses, so a live panel is the panel the backtest saw.
+    return StrategyInput(
+        record=record,
+        tickers=tickers,
+        bars_by_ticker=bars_by_ticker,
+        shares_by_ticker=await read_optional(reader, "read_shares", tickers),
+        fundamentals_by_ticker=await read_optional(reader, "read_fundamentals", tickers),
+    )
 
 
 @dataclass(frozen=True, slots=True)

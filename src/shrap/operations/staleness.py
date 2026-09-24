@@ -193,6 +193,20 @@ DEFAULT_TARGETS: tuple[FreshnessTarget, ...] = (
         ),
     ),
     FreshnessTarget(
+        name="research.shadow_ledger",
+        schema="research",
+        table="shadow_ledger",
+        timestamp_column="decided_at",
+        producer="shadow-ledger",
+        max_age=timedelta(days=5),
+        rationale=(
+            "The shadow forward test decides once per completed session, a day behind "
+            "(it never reads the session in progress). Friday's session is decided "
+            "Saturday and Monday's on Tuesday, so a normal weekend leaves a gap of just "
+            "over three days; five clears a holiday Monday with a day spare."
+        ),
+    ),
+    FreshnessTarget(
         name="intelligence.filings",
         schema="intelligence",
         table="filings",

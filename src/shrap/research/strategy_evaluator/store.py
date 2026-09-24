@@ -24,6 +24,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
+from shrap.market_data.fundamentals_store import PostgresFundamentalsStore
 from shrap.market_data.shares_store import PostgresSharesStore
 from shrap.market_data.store import DEFAULT_BAR_SOURCE
 from shrap.operations.market_phase import (
@@ -375,6 +376,17 @@ class PostgresEvaluatorReader:
         """
 
         return await PostgresSharesStore(self._pool).shares_history(tickers)
+
+    async def read_fundamentals(
+        self, tickers: Sequence[str]
+    ) -> dict[str, dict[str, list[tuple[date, date, float]]]]:
+        """Filed accounting figures per ticker and metric, for the panel.
+
+        Delegates to the module that owns the table. Empty when the backfill has
+        not run, which the panel reads as "unknown" for every name.
+        """
+
+        return await PostgresFundamentalsStore(self._pool).history(tickers)
 
     async def read_bars(
         self, ticker: str, start: date, end: date, adjustment: str
