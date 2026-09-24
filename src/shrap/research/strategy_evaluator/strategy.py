@@ -92,6 +92,16 @@ class PanelWindow:
     def dates(self) -> tuple[date, ...]:
         return self._panel.dates[: self._index + 1]
 
+    def rewind(self, index: int) -> PanelWindow:
+        """The same panel as of an earlier bar. Never a later one.
+
+        For rules that rebalance on a schedule: between rebalances they hold what
+        they chose on the last rebalance date, which is the window at that date.
+        Clamped to the current bar, so rewinding cannot become a way to peek.
+        """
+
+        return PanelWindow(self._panel, max(0, min(index, self._index)))
+
     def closes(self, ticker: str) -> tuple[float, ...]:
         return self._panel.history_cached(ticker, "closes", self._index)
 
