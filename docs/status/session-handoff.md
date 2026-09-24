@@ -47,6 +47,39 @@ All deploys use `--build --force-recreate`, and are verified by image ID (KI-039
   TrueNAS upgrade carries that directory into the new boot environment is
   **not verified**.
 
+### The strategy factory (2026-09-23/24, #277–#280): make and test strategies at volume
+
+Mike asked for the best way to make the firm actually research. The plan and
+its first cards:
+
+| PR | Card | Why |
+|---|---|---|
+| #277 | Held positions resize toward target | The 09-18 raise to 0.80 reached new buys only; momentum sat ~29% invested |
+| #278 | **Strategies as specs** (`signal-spec`) | A new idea is a JSON document, not a PR. Reproduces momentum bar-for-bar |
+| #279 | **Shadow forward test** | Every strategy, killed ones too, decided and settled daily with no broker; out-of-sample by construction |
+| #280 | **SEC XBRL fundamentals** | Value/profitability/investment become computable; 40/50 names, 20,297 figures |
+
+**Next, blocked only on merges (no stacking, KI-001):** the first spec batch
+(needs #278; fundamentals specs need #280), account rotation from the shadow
+leaderboard (needs #279; **the third account stays empty until the ledger shows
+something worth trying**, Mike 2026-09-23), and the Hypothesis Generator
+emitting specs (needs #278).
+
+**Found while building, each needs a decision or a deploy:**
+
+- **Four live images predate #258/#259** (`strategy-evaluator`, `-trigger`,
+  `strategy-runner`, `hypothesis-generator-trigger`, all built 09-18). **#259's
+  retrieval is not running** in the hourly Hypothesis Generator.
+  `check-deploy-drift.sh` compares containers to images, never images to code.
+- **The live Runner's panel never had market caps** (bars only), while the
+  Evaluator's did. Fixed in #280.
+- **`daily_bars` holds a partial bar for the session in progress**, and anything
+  that reads "the latest bar" mid-session reads a price that is not a close. The
+  shadow ledger now reads only completed sessions; nothing else was checked.
+- **The −10% stop fights momentum.** AFRM was stopped out at −11.3% on 09-23 and
+  re-bought 09-24 because it still ranks top-ten. **Mike's ruling:** a re-entry
+  cooldown after a stop, or no stop on rank-based strategies.
+
 ### Is the firm researching? Barely — measured 2026-09-23
 
 - **New strategies:** 16 ever. **15 were seeded by Mike**, 1 by the Hypothesis
