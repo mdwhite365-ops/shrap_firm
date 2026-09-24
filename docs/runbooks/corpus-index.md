@@ -91,6 +91,47 @@ query: "material definitive agreement and debt financing"
 Every hit carries the ticker or feed, the source URL, the chunk position and
 the passage text, so a result can be traced to a row someone can go and read.
 
+## Retrieval quality, measured
+
+Mike asked why embeddings run on a local model when the local model was ruled
+out for the Tech Watcher's filter. The distinction is that **embedding is
+representation and the filter is judgment** — `nomic-embed-text` is a 137M model
+purpose-built to map text to a vector, not a shrunken chat model being asked to
+reason, and KI-009 found four *cloud* flagships failing the filter too. But that
+is an argument. This is the evidence.
+
+15 queries against the live index, top-5 each, every hit judged relevant or not
+by **`kimi-k3` via Ollama Cloud** — the judgment task going to the model class
+that is good at judgment:
+
+```
+precision@5 over 15 queries:  65/75 = 86.7%
+
+  filings / corporate events     7 queries   35/35   100%
+  research literature            8 queries   30/40    75%
+```
+
+Every corporate-event query — mergers, officer changes, earnings guidance, debt
+facilities, buybacks, restructuring, material weakness — returned 5 of 5
+relevant. The weak queries were both research ones:
+
+```
+  cross-sectional momentum factor predicts equity returns   2/5
+  portfolio optimisation under transaction costs            2/5
+```
+
+**Read that carefully before concluding the model is at fault.** The q-fin
+corpus is 287 papers. A top-5 over a corpus that holds two relevant documents
+*must* return three marginal ones, and no embedding model fixes that. A manual
+read of the momentum query's hits found four clearly on-topic papers where the
+judge allowed two, so the judge is also stricter than a human would be.
+
+**Limits of this measurement**, stated rather than buried: one judge model, no
+human adjudication, 15 queries, and no comparison against a cloud embedding
+model — Ollama Cloud returns `unauthorized` for `/api/embed`, so a comparison
+needs a new vendor and a new credential. What this establishes is a floor:
+86.7% is what the free, local, zero-dependency option delivers.
+
 ## What this does not do yet
 
 - **No agent consumes it.** The index exists and is queryable by CLI; nothing in

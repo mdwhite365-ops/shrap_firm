@@ -1,5 +1,5 @@
 # Corpus Index - chunks the firm's stored full text, embeds it locally, and
-# writes the vectors to Qdrant. Run to completion, not an always-on agent:
+# writes the vectors to Qdrant. Compose runs it as a six-hourly incremental loop. By hand:
 #   docker compose run --rm corpus-index shrap-corpus-index build
 #
 # This is the "full text to Qdrant" leg that docs/02-architecture.md specifies
