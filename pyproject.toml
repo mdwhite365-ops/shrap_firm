@@ -133,6 +133,7 @@ shrap-hypothesis-generator-trigger = "shrap.agents.research.hypothesis_generator
 shrap-strategy-evaluator-trigger = "shrap.agents.research.strategy_evaluator.__main__:main"
 shrap-strategy-runner = "shrap.agents.research.strategy_runner.__main__:main"
 shrap-strategy-seed = "shrap.research.strategy_seed.cli:main"
+shrap-shadow-ledger = "shrap.research.shadow_ledger_cli:main"
 shrap-strategy-stage = "shrap.research.strategy_stage_cli:main"
 shrap-infra-mapper = "shrap.research.infra_mapper.cli:main"
 

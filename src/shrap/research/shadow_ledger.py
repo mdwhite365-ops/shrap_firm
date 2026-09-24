@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS research.shadow_ledger (
 """.strip()
 
 INSERT_DECISION_SQL = """
-INSERT INTO research.shadow_ledger (strategy_id, session_date, spec_hash, weights, benchmark_weights)
+INSERT INTO research.shadow_ledger
+    (strategy_id, session_date, spec_hash, weights, benchmark_weights)
 VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
 ON CONFLICT (strategy_id, session_date) DO NOTHING
 """.strip()
@@ -258,7 +259,11 @@ class LedgerStore(Protocol):
     async def record_decision(self, row: LedgerRow) -> bool: ...
 
     async def settle(
-        self, strategy_id: str, session_date: date, next_date: date, result: PeriodResult,
+        self,
+        strategy_id: str,
+        session_date: date,
+        next_date: date,
+        result: PeriodResult,
         benchmark_return: float,
     ) -> None: ...
 
@@ -318,7 +323,9 @@ async def run_strategy(
             cost_model,
             adv,
         )
-        await store.settle(record.strategy_id, row.session_date, panel.dates[i + 1], result, bench.net)
+        await store.settle(
+            record.strategy_id, row.session_date, panel.dates[i + 1], result, bench.net
+        )
         settled += 1
 
     latest = panel.dates[-1]
@@ -442,7 +449,8 @@ def render_report(
         "IR +/- SE is annualised; until SE is well under the gap between two strategies, "
         "their order is not evidence.",
         "",
-        f"{'strategy':<52} {'days':>5} {'net':>8} {'bench':>8} {'active':>8} {'IR':>7} {'+/-SE':>7}",
+        f"{'strategy':<52} {'days':>5} {'net':>8} {'bench':>8} {'active':>8} "
+        f"{'IR':>7} {'+/-SE':>7}",
     ]
     for s in ranked:
         ir = "n/a" if s.information_ratio is None else f"{s.information_ratio:+.2f}"
