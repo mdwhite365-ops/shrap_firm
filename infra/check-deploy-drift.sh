@@ -24,13 +24,13 @@
 # so they are filtered out by construction rather than by a hardcoded list —
 # a new tools-profile service needs no change here.
 #
-# Usage — NOTE the sudo. On the Dell, truenas_admin is not in the docker group,
-# so anything touching the daemon needs it. `compose config` does NOT touch the
-# daemon and `compose ps` DOES, so without sudo this script gets past the first
-# check and fails the second, which is confusing unless the real error is shown.
+# Usage. `truenas_admin` has been in the docker group since 2026-09-17, so no
+# sudo. A user outside that group gets past `compose config` (which does not
+# touch the daemon) and fails at `compose ps` (which does); the script shows the
+# real error when that happens.
 #
-#   sudo ./infra/check-deploy-drift.sh          # report; exit 1 if drift
-#   sudo ./infra/check-deploy-drift.sh --quiet  # exit code only, no output
+#   ./infra/check-deploy-drift.sh          # report; exit 1 if drift
+#   ./infra/check-deploy-drift.sh --quiet  # exit code only, no output
 #
 # Exit codes: 0 = no drift, 1 = services missing, 2 = could not determine.
 
@@ -59,7 +59,7 @@ fail() {
   fi
   if grep -qiE "permission denied|dial unix|docker daemon" "$err_file"; then
     log ""
-    log "This looks like a docker-daemon permission problem. Re-run with sudo:"
+    log "This looks like a docker-daemon permission problem. Is this user in the docker group? Otherwise re-run with sudo:"
     log "  sudo ./infra/check-deploy-drift.sh"
   fi
   exit 2

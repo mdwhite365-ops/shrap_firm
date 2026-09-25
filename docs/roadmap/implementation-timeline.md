@@ -1,6 +1,14 @@
 # Implementation timeline
 
-**Last updated:** 2026-09-22 (`main` at #269)
+**Last updated:** 2026-09-23 (`main` at #270; audit PRs #271–#276 open)
+
+**The 2026-09-23 audit (#271–#276) changes no priority, but it answers how
+much research is happening: almost none.** Of 16 strategies ever, 15 were
+Mike-seeded. The Evaluator ran zero evaluations from 07-31 to 09-14. The
+funnel admitted 0 of 1,284 arXiv items in the last week. The fixes are
+hygiene (a nano-share left on every exit, arXiv throttling, lost commits, a
+leaked webhook). The binding constraint is unchanged, and the next step is still
+the Bar B ruling below. Details: `docs/status/session-handoff.md`.
 
 **The archetype bar experiment is answered (#270): Bar B.** On 425 EDGAR filings
 B admits 14 against A's 6 and C's 3, and the disagreements nest perfectly —
@@ -403,8 +411,8 @@ since-entry take-profit deliberately unarmed because it fights momentum.
 1. **Feed the funnel.** The remaining `capability-gap` rows are the build list;
    **news text and 10-K full text are closable against data the firm already
    ingests**. This is the binding constraint and everything else is apparatus.
-2. **Exposure ruling.** The accounts are 84% cash and that costs 1.15 of IR
-   against a fully-invested benchmark. Not a tuning decision — see the handoff.
+2. ~~**Exposure ruling.**~~ Ruled 2026-09-18 (`paper` 0.80). Held positions
+   were not resized, so the momentum account sat ~29% invested on 2026-09-23.
 3. **Whether to cap simultaneous exits.** Nothing limits how many positions exit
    in one pass.
 4. **Recover `glm-5.3`'s parseable answers.** 17 of 40 rejected responses

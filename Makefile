@@ -26,7 +26,7 @@ all: install lint typecheck test
 # Run this on the Dell after any deploy — the per-service deploy pattern
 # silently skips services that were never explicitly named (KI-014).
 deploy-drift:
-	sudo ./infra/check-deploy-drift.sh
+	./infra/check-deploy-drift.sh
 
 # Report status documents that have fallen behind `main`. Reads git, not
 # GitHub — no network, no auth. The same gap has opened three times (#72-80,
