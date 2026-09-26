@@ -944,10 +944,11 @@ class EvaluationPipeline:
             bars = await self._reader.read_bars(ticker, start, today, self._config.adjustment)
             bars_by_ticker[ticker] = bars
         shares = await self._read_shares(tickers)
+        fundamentals = await read_optional(self._reader, "read_fundamentals", tickers)
         # Measured from the same dict the panel aligns, so coverage can never
         # describe a different fetch than the one that produced the verdict.
         return (
-            PricePanel.from_bars(bars_by_ticker, shares),
+            PricePanel.from_bars(bars_by_ticker, shares, fundamentals),
             PanelCoverage.from_bars(bars_by_ticker),
         )
 
@@ -965,14 +966,7 @@ class EvaluationPipeline:
         of quiet wrong answer this project keeps finding.
         """
 
-        read = getattr(self._reader, "read_shares", None)
-        if read is None:
-            return {}
-        try:
-            return dict(await read(tickers))
-        except Exception:
-            log.exception("strategy_evaluator.shares_read_failed", tickers=len(tickers))
-            return {}
+        return await read_optional(self._reader, "read_shares", tickers)
 
     def _build_outcome(
         self,
@@ -1046,6 +1040,26 @@ def _with_card(outcome: EvaluationOutcome, card: str) -> EvaluationOutcome:
     # would have gone missing here is the one describing how much data the
     # verdict rests on.
     return replace(outcome, card_markdown=card)
+
+
+async def read_optional(reader: object, method: str, tickers: Sequence[str]) -> dict[str, Any]:
+    """Call an optional panel-series reader, degrading to nothing.
+
+    The same contract as ``_read_shares``: a reader without the method, or one
+    that fails, yields an empty mapping and a logged exception rather than a
+    failed evaluation, because a strategy that never asked for the series must
+    not be taken down by its absence. Shared with the live Runner so both build
+    their panels from the same optional inputs.
+    """
+
+    read = getattr(reader, method, None)
+    if read is None:
+        return {}
+    try:
+        return dict(await read(tickers))
+    except Exception:
+        log.exception("strategy_evaluator.optional_series_read_failed", method=method)
+        return {}
 
 
 def _params(spec: object) -> Mapping[str, Any]:
@@ -1439,6 +1453,7 @@ __all__ = [
     "RegistryPort",
     "SpecHygieneError",
     "StrategyFactory",
+    "read_optional",
     "render_evaluation_card",
     "write_evaluation_card",
 ]
