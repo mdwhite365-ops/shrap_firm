@@ -59,6 +59,7 @@ from shrap.research.strategy_evaluator.engine import (
 )
 from shrap.research.strategy_evaluator.factors import CrossSectionalFactorStrategy
 from shrap.research.strategy_evaluator.reference_strategy import ReferenceTrendStrategy
+from shrap.research.strategy_evaluator.signals import SignalSpecStrategy
 from shrap.research.strategy_evaluator.strategy import (
     BarSample,
     PanelCoverage,
@@ -165,6 +166,8 @@ RULE_CROSS_SECTIONAL_TREND = "cross-sectional-trend"
 RULE_CROSS_SECTIONAL_MOMENTUM = "cross-sectional-momentum"
 RULE_CROSS_SECTIONAL_FACTOR = "cross-sectional-factor"
 RULE_CROSS_SECTIONAL_REVERSAL = "cross-sectional-reversal"
+# A strategy defined by an expression rather than a class (see `signals.py`).
+RULE_SIGNAL_SPEC = "signal-spec"
 
 # Rules that consume exactly one ticker. Declared rather than inferred.
 #
@@ -237,6 +240,8 @@ def _default_strategy_factory(record: StrategyRecord, tickers: list[str]) -> Str
         return CrossSectionalFactorStrategy.from_spec(params)
     if rule == RULE_CROSS_SECTIONAL_REVERSAL:
         return CrossSectionalReversalStrategy.from_spec(params)
+    if rule == RULE_SIGNAL_SPEC:
+        return SignalSpecStrategy.from_spec(params)
     if rule != RULE_REFERENCE_TREND:
         known = ", ".join(sorted({RULE_REFERENCE_TREND, *_CROSS_SECTIONAL_RULES}))
         raise SpecHygieneError(f"spec names unknown rule {rule!r}; known rules are {known}")
@@ -261,6 +266,7 @@ _CROSS_SECTIONAL_RULES: frozenset[str] = frozenset(
         RULE_CROSS_SECTIONAL_MOMENTUM,
         RULE_CROSS_SECTIONAL_REVERSAL,
         RULE_CROSS_SECTIONAL_FACTOR,
+        RULE_SIGNAL_SPEC,
     }
 )
 
@@ -1420,6 +1426,7 @@ __all__ = [
     "RULE_CROSS_SECTIONAL_MOMENTUM",
     "RULE_CROSS_SECTIONAL_TREND",
     "RULE_REFERENCE_TREND",
+    "RULE_SIGNAL_SPEC",
     "SCHEMA_VERSION",
     "SINGLE_TICKER_RULES",
     "STREAM_STRATEGY_VERDICT",
