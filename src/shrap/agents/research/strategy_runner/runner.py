@@ -136,6 +136,12 @@ ACTIVE_PAPER_STAGES: tuple[str, ...] = (
 # stopped reading as open before the rule may fire on it again.
 DEFAULT_EXIT_SUPPRESS_SECONDS = 900.0
 
+# How old the Risk Officer's recorded buy scale may be before resizing stops
+# trusting it. Two weeks spans a normal run of entries; older than that, a stage
+# ruling or regime change may have moved the scale further than one resize can
+# absorb.
+BUY_SCALE_MAX_AGE = timedelta(days=14)
+
 
 class RedisStreamClient(Protocol):
     async def xadd(self, stream: str, fields: dict[str, str]) -> str: ...
@@ -180,6 +186,8 @@ class StateStore(Protocol):
     ) -> tuple[list[PositionPnL], datetime | None]: ...
 
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]: ...
+
+    async def latest_buy_scale(self, account_id: str) -> tuple[float | None, datetime | None]: ...
 
     async def upsert(self, write: PlannedStateWrite) -> None: ...
 
@@ -451,6 +459,13 @@ async def run_pass(
             deferred.extend(r.strategy_id for r in account_records)
             continue
 
+        # The Officer's recorded buy scale, for resizing held positions. Older
+        # than BUY_SCALE_MAX_AGE it may predate a stage or regime change by long
+        # enough to mislead, so it is treated as absent and nothing is resized.
+        buy_scale, scale_at = await state_store.latest_buy_scale(account_id)
+        if buy_scale is not None and (scale_at is None or now - scale_at > BUY_SCALE_MAX_AGE):
+            buy_scale = None
+
         inputs = [
             await _build_input(
                 record,
@@ -477,6 +492,7 @@ async def run_pass(
             regime_label=regime_label,
             equity=equity,
             account_id=account_id,
+            buy_scale=buy_scale,
         )
 
         for plan in plans:

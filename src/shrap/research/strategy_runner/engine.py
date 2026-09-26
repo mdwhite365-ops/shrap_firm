@@ -117,6 +117,22 @@ DEFAULT_MAX_QUANTITY = 100
 # decision to make once those exist, and it is one config value away.
 DEFAULT_MAX_GROSS_EXPOSURE = 1.0
 
+# **Held positions are resized toward target (2026-09-23).** Until this the
+# engine acted only on a flat <-> invested transition, so a position kept the
+# size it was bought at for as long as the strategy held it. When Mike raised
+# the paper stage fraction from 0.25 to 0.80 on 2026-09-18, only new buys got
+# the new size: the momentum account sat ~29% invested five sessions later, six
+# positions at ~$190 (0.25 x 0.75 of a $1,000 slot) beside three at ~$600
+# (0.80 x 0.75). Momentum trades only when a name enters or leaves its top ten,
+# so the old ones would have stayed small for weeks.
+#
+# A position is resized when it has drifted from its effective target by more
+# than RESIZE_BAND of that target AND by at least RESIZE_MIN_NOTIONAL dollars.
+# The band stops a daily strategy trading every session on price noise; the
+# dollar floor stops it trading pennies.
+DEFAULT_RESIZE_BAND = 0.25
+DEFAULT_RESIZE_MIN_NOTIONAL = 25.0
+
 
 @dataclass(frozen=True, slots=True)
 class RunnerSignalConfig:
@@ -126,6 +142,8 @@ class RunnerSignalConfig:
     confidence: float = DEFAULT_CONFIDENCE  # must clear the Decision Maker threshold
     urgency: str = DEFAULT_URGENCY
     max_gross_exposure: float = DEFAULT_MAX_GROSS_EXPOSURE  # firm-wide, not per strategy
+    resize_band: float | None = DEFAULT_RESIZE_BAND  # None disables resizing
+    resize_min_notional: float = DEFAULT_RESIZE_MIN_NOTIONAL
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,9 +267,13 @@ def _justification(
 
     prev = "invested" if prev_invested else "flat"
     now = "invested" if now_invested else "flat"
+    change = (
+        f"stays invested and is resized; {quantity:g} share(s): {sizing}"
+        if prev_invested and now_invested
+        else f"changed {prev} -> {now}; {quantity:g} share(s) {sizing}"
+    )
     return (
-        f"Strategy '{strategy_name}' ({strategy_id}) target for {ticker} changed "
-        f"{prev} -> {now}; {quantity:g} share(s) {sizing}. "
+        f"Strategy '{strategy_name}' ({strategy_id}) target for {ticker} {change}. "
         "Paper-stage strategy runner; not investment advice."
     )
 
@@ -355,6 +377,73 @@ def _latest_close(window: PanelWindow, ticker: str) -> float:
     return float(closes[-1])
 
 
+@dataclass(frozen=True, slots=True)
+class Resize:
+    """A top-up or trim of a position the strategy already holds."""
+
+    side: str
+    quantity: float
+    basis: str
+
+
+def plan_resize(
+    *,
+    full_scale_quantity: float,
+    held: float,
+    price: float,
+    buy_scale: float,
+    band: float,
+    min_notional: float,
+) -> Resize | None:
+    """Decide whether a held position should be topped up or trimmed.
+
+    ``full_scale_quantity`` is what the strategy's weight buys *before* the Risk
+    Officer scales it, the same number an entry would request. The Officer then
+    scales every buy by stage x regime (and sizes sells unscaled), so what the
+    account is meant to hold is ``full_scale_quantity x buy_scale``.
+
+    **``buy_scale`` is read, not computed.** It is the ratio the Officer recorded
+    on this account's most recent approved buy (``risk.decisions``). The Runner
+    could derive it from the stage table and the regime band instead, but that
+    would be a second copy of a rule the Officer owns — and this project's
+    recurring defect is a component reconstructing a recorded fact and
+    disagreeing with it. If the scale has changed since that buy (a regime
+    move), one resize lands off by the ratio and the next corrects it.
+
+    A top-up requests ``gap / buy_scale`` shares, so that the Officer's scaling
+    brings the fill to the gap. A trim sells the excess directly: sells are not
+    scaled, and it can never exceed what is held.
+    """
+
+    if buy_scale <= 0.0 or price <= 0.0 or full_scale_quantity <= 0.0 or held <= 0.0:
+        return None
+    target = full_scale_quantity * buy_scale
+    gap = target - held
+    gap_value = abs(gap) * price
+    if gap_value < min_notional or abs(gap) < band * target:
+        return None
+    if gap > 0.0:
+        request = min(gap / buy_scale, full_scale_quantity)
+        return Resize(
+            side=SIDE_BUY,
+            quantity=request,
+            basis=(
+                f"topping up: holds {held:g}, target {target:g} "
+                f"({full_scale_quantity:g} x recorded buy scale {buy_scale:g}); "
+                f"requesting {request:g} so the scaled fill is the {gap:g} gap"
+            ),
+        )
+    trim = min(-gap, held)
+    return Resize(
+        side=SIDE_SELL,
+        quantity=trim,
+        basis=(
+            f"trimming: holds {held:g}, target {target:g} "
+            f"({full_scale_quantity:g} x recorded buy scale {buy_scale:g}); selling {trim:g}"
+        ),
+    )
+
+
 def already_ran(
     strategy_id: str,
     tickers: Sequence[str],
@@ -408,6 +497,7 @@ def _plan_strategy(
     regime_label: str | None,
     equity: float,
     account_id: str,
+    buy_scale: float | None = None,
 ) -> StrategyPlan:
     strategy_id = item.record.strategy_id
     # Each strategy resolves its OWN slot from its OWN declared cadence, so one
@@ -552,6 +642,29 @@ def _plan_strategy(
                 emit_quantity = float(position)
                 stored_quantity = 0.0
                 sizing_basis = f"closing the {emit_quantity:g} share(s) the account holds"
+            elif now_inv and prev_inv and config.resize_band is not None:
+                if buy_scale is None:
+                    notes.append(f"{ticker}: not resized — no recorded buy scale for this account")
+                else:
+                    price = _latest_close(window, ticker)
+                    full = size_position(
+                        target_weight=weight,
+                        equity=equity,
+                        price=price,
+                        max_quantity=config.max_quantity,
+                    )
+                    resize = plan_resize(
+                        full_scale_quantity=full.quantity if full.is_tradeable else 0.0,
+                        held=position,
+                        price=price,
+                        buy_scale=buy_scale,
+                        band=config.resize_band,
+                        min_notional=config.resize_min_notional,
+                    )
+                    if resize is not None:
+                        side = resize.side
+                        emit_quantity = resize.quantity
+                        sizing_basis = resize.basis
 
             if side is not None:
                 payload = build_payload(
@@ -620,6 +733,7 @@ def plan_session(
     regime_label: str | None,
     equity: float,
     account_id: str,
+    buy_scale: float | None = None,
 ) -> list[StrategyPlan]:
     """Plan one session: fabricated strategies + bars + state -> signals to emit.
 
@@ -649,6 +763,7 @@ def plan_session(
             regime_label=regime_label,
             equity=budget,
             account_id=account_id,
+            buy_scale=buy_scale,
         )
         for item in strategies
     ]
@@ -658,6 +773,8 @@ __all__ = [
     "DEFAULT_CONFIDENCE",
     "DEFAULT_MAX_GROSS_EXPOSURE",
     "DEFAULT_MAX_QUANTITY",
+    "DEFAULT_RESIZE_BAND",
+    "DEFAULT_RESIZE_MIN_NOTIONAL",
     "DEFAULT_URGENCY",
     "FLAT_TARGET",
     "PRODUCED_BY",
@@ -668,6 +785,7 @@ __all__ = [
     "UNKNOWN_REGIME",
     "PlannedSignal",
     "PlannedStateWrite",
+    "Resize",
     "RunnerSignalConfig",
     "StrategyInput",
     "StrategyPlan",
@@ -675,5 +793,6 @@ __all__ = [
     "allocate_equity",
     "already_ran",
     "build_payload",
+    "plan_resize",
     "plan_session",
 ]
