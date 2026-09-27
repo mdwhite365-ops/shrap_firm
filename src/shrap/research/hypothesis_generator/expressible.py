@@ -244,10 +244,15 @@ _SERIES_SYNONYMS: Mapping[str, str] = {
 }
 
 # `normalise_input` keys, not display wordings: `_key` folds hyphens and case.
+#
+# Each metric's own name is a wording too. The prompt lists the metrics by name,
+# so the model echoes them back — `rd expense` for `rd_expense` — and on the
+# 374-paper q-fin run (2026-09-27) two papers were marked `missing-data` for
+# naming a figure the firm stores, because only `r&d expense` was listed.
 _FILED_FIGURE_SYNONYMS: Mapping[str, str] = {
     " ".join(w.lower().replace("-", " ").replace("_", " ").split()): metric
     for metric, wordings in FILED_FIGURES.items()
-    for w in wordings
+    for w in (metric, *wordings)
 }
 
 # What the proposer is asked to do about each outcome.
