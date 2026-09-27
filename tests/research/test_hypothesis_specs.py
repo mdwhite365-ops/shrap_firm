@@ -17,6 +17,7 @@ import pytest
 
 from shrap.research.hypothesis_generator.expressible import (
     FEATURE_DESCRIPTIONS,
+    FILED_FIGURES,
     OUTCOME_EXPRESSIBLE,
     OUTCOME_MISSING_DATA,
     OUTCOME_MISSING_SCORER,
@@ -96,6 +97,12 @@ def test_the_prompt_describes_every_feature_the_library_has() -> None:
 )
 def test_filed_figures_are_available_inputs(wording: str, metric: str) -> None:
     assert normalise_input(wording) == metric
+
+
+def test_every_metric_name_the_prompt_lists_resolves_to_itself() -> None:
+    for metric in FILED_FIGURES:
+        assert normalise_input(metric) == metric
+        assert normalise_input(metric.replace("_", " ")) == metric
 
 
 def test_derived_and_unstored_figures_stay_missing() -> None:
