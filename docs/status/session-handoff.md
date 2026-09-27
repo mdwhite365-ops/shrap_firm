@@ -63,7 +63,7 @@ its first cards:
 `fundamental`/`fundamental_growth` features over filed figures, a spec
 `"universe": "equities"` option (the benchmark fix below), filed figures in the
 shadow ledger's panel, and the 13 specs in `docs/strategies/specs/`. **Account rotation
-is #TBD**: `shrap-shadow-ledger rotation` compares each challenger with each
+is #283**: `shrap-shadow-ledger rotation` compares each challenger with each
 slot's incumbent on the *paired* daily active return (same sessions, so shared
 market noise cancels) and prints the `shrap-strategy-stage` commands for a swap
 that clears 1 SE over 60+ shared sessions. It never moves anything, and a killed
