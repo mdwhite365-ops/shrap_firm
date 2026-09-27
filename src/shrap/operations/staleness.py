@@ -285,6 +285,35 @@ DEFAULT_TARGETS: tuple[FreshnessTarget, ...] = (
         ),
     ),
     FreshnessTarget(
+        name="market_data.shares_outstanding",
+        schema="market_data",
+        table="shares_outstanding",
+        timestamp_column="fetched_at",
+        producer="sec-facts-refresh",
+        max_age=timedelta(days=8),
+        rationale=(
+            "Filed share counts, refreshed weekly from SEC companyfacts. The upsert sets "
+            "fetched_at=now() on conflict, so every pass moves it whether or not anything "
+            "new was filed — this measures the refresh, not the filing calendar. Eight "
+            "days is one missed week plus a day. Before the weekly service it was a "
+            "one-shot, last run by hand 2026-09-20, and market cap aged silently with it."
+        ),
+    ),
+    FreshnessTarget(
+        name="market_data.fundamentals",
+        schema="market_data",
+        table="fundamentals",
+        timestamp_column="fetched_at",
+        producer="sec-facts-refresh",
+        max_age=timedelta(days=8),
+        rationale=(
+            "Filed accounting figures (#280), refreshed weekly in the same pass as the "
+            "share counts and with the same fetched_at-on-conflict upsert, so the same "
+            "eight days. Stale here means every spec over filed figures is ranking on "
+            "last quarter's accounts while believing they are current."
+        ),
+    ),
+    FreshnessTarget(
         name="research.evaluations",
         schema="research",
         table="evaluations",

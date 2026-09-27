@@ -77,9 +77,10 @@ Hypothesis Generator**. The shadow ledger decided its first session (09-25, 16
 strategies; the intraday one skips by design). The corpus index resumed and is
 catching up. arXiv answered 406 once and the #272 cooldown held off both
 sources for two hours, as designed. **The fundamentals backfill ran: 19,487
-figures, all 36 operating companies**; the 14 funds are excluded. It is a
-one-shot and is **not scheduled** yet, so new 10-K/10-Q figures arrive only
-when it is re-run. A weekly schedule is a small follow-up card.
+figures, all 36 operating companies**; the 14 funds are excluded. It was a
+one-shot, **and so was the share-count backfill behind market cap** (last run
+by hand 2026-09-20). Both now refresh weekly in the always-on
+`sec-facts-refresh` service, with eight-day freshness targets on each table.
 
 **The first spec batches, backtested read-only on the Dell (2026-09-24).** 13
 specs (7 price/volume, 6 from SEC fundamentals) run through the real
