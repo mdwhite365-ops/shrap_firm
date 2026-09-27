@@ -259,8 +259,16 @@ as fragile and does not promote.
 
 ## 6. Trade-count gate (spec step 6)
 
-Fewer than **150 trades** across the full walk-forward → `kill`, regardless of
-headline metrics. No exceptions, and **the gate stays universal** — it is the
+Fewer than **150 trades** across the full walk-forward → `hold-for-data`
+(`insufficient-trades`), regardless of headline metrics. **This was `kill` until
+2026-09-27 (Mike's ruling).** The reasoning below still stands: a thin walk-forward
+is noise and must never promote. But noise is no evidence of harm either, and a
+kill is terminal. Monthly-rebalanced factors re-decide their book sixty times in
+five years while trading well under 150 times. The gate killed the three highest
+backtest IRs the firm had recorded (gross profitability 0.81, book-to-market
+0.71, size 0.51) on a count. With the shadow forward test (#279) there is now a
+second source of evidence, so a thin strategy stays at `hypothesis` and its
+forward record decides. No exceptions, and **the gate stays universal** — it is the
 one Framework #1 construct this card deliberately does *not* make
 archetype-conditional.
 
@@ -279,7 +287,7 @@ leniently; it would report noise with more confidence. The open question is
 therefore **not** "what floor for `infra-graph-play`" but "what protocol
 evaluates a multi-year thesis at all" — an event-study or realized-vs-thesis
 comparison rather than a Sharpe walk-forward. That is a separate card, and
-until it exists `infra-graph-play` strategies will keep dying here, correctly.
+until it exists `infra-graph-play` strategies will keep being held here, unpromotable.
 
 For `technical-catalyst` — the archetype the vision assigns most of the firm's
 trading, "fast loops, many trades" — 150 is the floor it was calibrated for and
@@ -379,7 +387,7 @@ never measures of skill, and should not be cited as if they were.
 A pure function of the metrics — no human tuning — applied in strict priority:
 
 1. anchor required and not live → `kill` (`anchor-not-live`)
-2. trades < 150 → `kill` (`insufficient-trades`)
+2. trades < 150 → `hold-for-data` (`insufficient-trades`; `kill` until 2026-09-27)
 3. aggregate Sharpe ≤ 0 → `kill` (`no-edge`)
 4. stressed Sharpe ≤ 0 → `kill` (`fails-friction-stress`)
 5. aggregate Sharpe < the promote floor → `hold-for-data` (`below-sharpe-floor`)

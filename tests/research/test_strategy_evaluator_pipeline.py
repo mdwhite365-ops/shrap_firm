@@ -31,6 +31,7 @@ from shrap.research.strategy_evaluator.verdict import (
     REASON_ANCHOR_NOT_LIVE,
     REASON_INSUFFICIENT_TRADES,
     REASON_PROMOTE,
+    VERDICT_HOLD,
     VERDICT_KILL,
     VERDICT_PROMOTE,
 )
@@ -339,7 +340,7 @@ async def test_anchor_not_live_kills_without_running_engine(tmp_path: Path) -> N
 # --- trade-count kill (real reference strategy, end to end) -------------------
 
 
-async def test_low_trade_strategy_is_killed(tmp_path: Path) -> None:
+async def test_low_trade_strategy_is_held_not_killed(tmp_path: Path) -> None:
     registry = FakeRegistry(_record())
     reader = FakeReader(bars=_uptrend_bars())
     store, redis = FakeStore(), FakeRedis()
@@ -349,12 +350,14 @@ async def test_low_trade_strategy_is_killed(tmp_path: Path) -> None:
     outcome = await pipeline.evaluate("01STRAT")
     assert outcome.engine_ran is True
     assert outcome.total_trades < 150
-    assert outcome.verdict == VERDICT_KILL
+    assert outcome.verdict == VERDICT_HOLD
     assert outcome.reason == REASON_INSUFFICIENT_TRADES
 
     result = await pipeline.commit(outcome)
-    assert registry.transitions == [("01STRAT", STATUS_KILLED, STATUS_HYPOTHESIS)]
-    assert redis.streams == [STREAM_STRATEGY_VERDICT, STREAM_STRATEGY_KILLED]
+    # A hold changes no stage: the strategy stays at `hypothesis`, where the
+    # shadow ledger keeps forward-testing it and rotation can still reach it.
+    assert registry.transitions == []
+    assert STREAM_STRATEGY_KILLED not in redis.streams
     assert Path(result.card_path).is_file()
 
 
@@ -705,7 +708,9 @@ async def test_the_review_gate_does_not_touch_kills(tmp_path: Path) -> None:
     redis = FakeRedis()
     pipeline = _pipeline(
         registry=registry,
-        reader=FakeReader(bars=_uptrend_bars()),
+        # A dead anchor, because it still kills: the low-trade fixture this test
+        # used to use now holds (2026-09-27).
+        reader=FakeReader(wc_status="at-risk"),
         store=FakeStore(),
         redis=redis,
         card_root=tmp_path,

@@ -165,9 +165,11 @@ yields a kill verdict and the pipeline stops.
    period.
 6. **Trade-count gate.** A strategy must produce **at least 150 trades**
    across the full walk-forward (target 200) to be eligible for promotion.
-   Fewer = kill, regardless of headline metrics. No exceptions during the
-   sprint. Long-horizon infra-graph plays that cannot meet this gate are
-   killed — there is no special case.
+   Fewer = `hold-for-data` (`insufficient-trades`), regardless of headline
+   metrics: never promoted, and since 2026-09-27 not killed either (Mike's
+   ruling). A thin walk-forward is evidence of nothing, and the shadow forward
+   test (#279) now collects the evidence it cannot. There is no special case per
+   archetype.
 7. **Overfitting controls.**
    - **PBO (Bailey–López de Prado):** ≤ 0.5 for paper, ≤ 0.4 for small-size,
      ≤ 0.3 for live-paper.
@@ -399,7 +401,8 @@ Phase scope (relative to Framework #1 completion, not calendar months):
   Blocks: handling of strategies that turn out to have orthogonal edge.
   Owner: Mike, after first thesis-broken event in live operation.
 - **Trade-count gate vs long-horizon infra-graph plays:** 150-trade floor
-  kills most multi-quarter horizon strategies. This is intentional for the
+  holds most multi-quarter horizon strategies unpromotable (it killed them until
+  2026-09-27). This is intentional for the
   sprint but is a known tension with the new thesis. Blocks: ever promoting
   a slow-burn infra-graph play. Owner: Mike + Hypothesis Generator owner,
   post-sprint.

@@ -51,11 +51,24 @@ def test_dead_anchor_kills_regardless_of_metrics() -> None:
     )
 
 
-def test_trade_count_gate_kills_even_with_great_sharpe() -> None:
+def test_too_few_trades_holds_even_with_great_sharpe() -> None:
+    """Never promoted on thin evidence, and since 2026-09-27 not killed for it."""
+
     assert _v(total_trades=149, base_sharpe=4.0, stress_sharpe=3.0) == (
-        VERDICT_KILL,
+        VERDICT_HOLD,
         REASON_INSUFFICIENT_TRADES,
     )
+
+
+def test_too_few_trades_holds_even_when_the_metrics_look_bad() -> None:
+    """An unpowered test is not evidence of harm either; the forward record decides."""
+
+    assert _v(total_trades=20, base_sharpe=-0.5) == (VERDICT_HOLD, REASON_INSUFFICIENT_TRADES)
+    assert _v(total_trades=20, stress_sharpe=-0.1) == (VERDICT_HOLD, REASON_INSUFFICIENT_TRADES)
+
+
+def test_a_dead_anchor_still_kills_before_the_trade_count() -> None:
+    assert _v(anchor_fresh=False, total_trades=20) == (VERDICT_KILL, REASON_ANCHOR_NOT_LIVE)
 
 
 def test_no_edge_is_killed() -> None:

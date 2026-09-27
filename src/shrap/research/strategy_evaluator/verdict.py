@@ -2,14 +2,28 @@
 
 Three outcomes, in strict priority order (spec Processing steps 6, 9-10):
 
-1. ``kill`` — the strategy fails a hard gate: too few trades, no measurable
-   edge, edge that does not survive the realistic-friction stress, or a dead
-   anchor. Killing dominates: *kill more aggressively than you promote*.
+1. ``kill`` — the strategy fails a hard gate: no measurable edge, losing to the
+   benchmark, edge that does not survive the realistic-friction stress, or a
+   dead anchor. Killing dominates: *kill more aggressively than you promote*.
 2. ``promote`` — every promotion condition holds: the anchor is live, trades
    clear the count gate, Sharpe clears the configured floor, and Sharpe stays
    positive under +50% costs and +1 day of execution lag.
 3. ``hold-for-data`` — a real-looking but sub-floor edge that survives friction:
-   not enough to promote, not zero enough to kill. Wait for more data.
+   not enough to promote, not zero enough to kill. Wait for more data. Also
+   the verdict for **too few trades to judge at all**.
+
+**Too few trades holds; it no longer kills (Mike's ruling, 2026-09-27).** The
+trade-count gate exists because a Sharpe computed from one decision is not
+evidence (fold 5 of the first verdict, 2026-07-27: 1.71 from a single trade).
+An unpowered test is evidence of nothing — not of edge, and not of its absence —
+so the gate still outranks every metric gate, and it still blocks every
+promotion. What changed is its verdict. A monthly-rebalanced factor re-decides
+its whole book sixty times in five years while trading far fewer than 150
+times, so the gate killed the three highest backtest IRs the firm had recorded
+(gross profitability 0.81, book-to-market 0.71, size 0.51, 2026-09-27) on a
+count rather than on evidence, and a kill is terminal. Since the shadow forward
+test (#279) the firm has a second way to collect evidence, so "not enough yet"
+is the honest verdict, and the forward record decides.
 
 ``information_ratio`` is the strategy's active return over tracking error
 against equal-weight buy-and-hold of its own panel. It defaults to ``None``,
@@ -126,9 +140,9 @@ def map_verdict(
 ) -> Verdict:
     """Map measured metrics to a verdict. Pure; deterministic; no tuning.
 
-    Priority: dead anchor and the trade-count gate kill first (regardless of
-    headline metrics), then absence of edge, then failure to survive friction,
-    then the sub-floor hold, then promote.
+    Priority: a dead anchor kills first and the trade-count gate holds next
+    (both regardless of headline metrics), then absence of edge, then failure to
+    survive friction, then the sub-floor hold, then promote.
 
     ``anchor_required`` defaults to ``True`` so the anchor-bearing archetypes
     keep their existing behaviour unchanged; only an archetype whose policy
@@ -138,7 +152,7 @@ def map_verdict(
     if anchor_required and not anchor_fresh:
         return Verdict(VERDICT_KILL, REASON_ANCHOR_NOT_LIVE)
     if total_trades < min_trades:
-        return Verdict(VERDICT_KILL, REASON_INSUFFICIENT_TRADES)
+        return Verdict(VERDICT_HOLD, REASON_INSUFFICIENT_TRADES)
     if base_sharpe <= 0.0:
         return Verdict(VERDICT_KILL, REASON_NO_EDGE)
     # Losing to buy-and-hold is a kill, not a hold. A strategy that trades all
