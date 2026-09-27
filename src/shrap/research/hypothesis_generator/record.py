@@ -28,6 +28,7 @@ from typing import Any
 
 from ulid import ULID
 
+from shrap.research.hypothesis_generator.expressible import spec_needs_companies
 from shrap.research.hypothesis_generator.literature import LiteratureItem
 from shrap.research.hypothesis_generator.proposer import (
     PROPOSER_PROMPT_VERSION,
@@ -47,7 +48,9 @@ from shrap.research.strategy_evaluator.pipeline import (
     RULE_CROSS_SECTIONAL_FACTOR,
     RULE_CROSS_SECTIONAL_MOMENTUM,
     RULE_CROSS_SECTIONAL_REVERSAL,
+    RULE_SIGNAL_SPEC,
 )
+from shrap.research.strategy_evaluator.signals import PARAM_BOUNDS as SPEC_PARAM_BOUNDS
 from shrap.research.strategy_registry import STATUS_HYPOTHESIS, StrategyRecord
 from shrap.research.strategy_runner.cadence import (
     CADENCE_INTRADAY,
@@ -56,6 +59,11 @@ from shrap.research.strategy_runner.cadence import (
     bars_per_session,
 )
 from shrap.research.strategy_seed.factor_strategies import COMMON_KILL_CRITERIA
+from shrap.research.strategy_seed.spec_strategies import (
+    UNIVERSE_EQUITIES,
+    UNIVERSE_LAUNCH,
+    universe_tickers,
+)
 from shrap.research.strategy_seed.technical_strategies import (
     _MOMENTUM_TICKERS,
     ANCHOR,
@@ -133,6 +141,18 @@ def _params_for(raw: RawProposal) -> tuple[dict[str, Any], dict[str, list[float]
         )
     if raw.rule == RULE_CROSS_SECTIONAL_FACTOR:
         return {**common, "factor": raw.factor}, _bounds(FACTOR_PARAM_BOUNDS, per_session)
+    if raw.rule == RULE_SIGNAL_SPEC:
+        # Windows are inside the formula, in sessions, and specs are daily-only
+        # (the parser has no intraday grain), so nothing here is scaled.
+        spec_params: dict[str, Any] = {
+            "signal": dict(raw.signal or {}),
+            "select": raw.select,
+            "rebalance": raw.rebalance,
+            "gross_exposure": FIXED_GROSS_EXPOSURE,
+        }
+        if raw.select != "positive":
+            spec_params["top_n"] = FIXED_TOP_N
+        return spec_params, _bounds(SPEC_PARAM_BOUNDS)
     raise ValueError(f"no parameter template for rule {raw.rule!r}")
 
 
@@ -148,7 +168,23 @@ def proposal_name(raw: RawProposal) -> str:
 
     words = raw.effect_name.replace("-", " ").strip()
     title = (words[:1].upper() + words[1:]) if words else "Unnamed effect"
+    if raw.rule == RULE_SIGNAL_SPEC:
+        held = "positive scores" if raw.select == "positive" else f"{raw.select} {FIXED_TOP_N}"
+        return f"{title} ({held}, {raw.rebalance})"[:120]
     return f"{title} ({raw.lookback}d, top {FIXED_TOP_N})"[:120]
+
+
+def universe_for(raw: RawProposal) -> str:
+    """Companies only, when the formula reads market cap or a filed figure (#281).
+
+    A spec over filed figures can never hold a fund, so registered over the
+    launch list it would be benchmarked against bonds, gold and crypto it could
+    not own — worth ~0.3 of IR in the first batch's dry run.
+    """
+
+    if raw.rule == RULE_SIGNAL_SPEC and raw.signal is not None:
+        return UNIVERSE_EQUITIES if spec_needs_companies(raw.signal) else UNIVERSE_LAUNCH
+    return UNIVERSE_LAUNCH
 
 
 def deviation_text(raw: RawProposal) -> str:
@@ -217,7 +253,7 @@ def build_spec(raw: RawProposal, item: LiteratureItem) -> dict[str, Any]:
     return spec
 
 
-def compute_spec_hash(name: str, spec: dict[str, Any]) -> str:
+def compute_spec_hash(name: str, spec: dict[str, Any], tickers: tuple[str, ...] = _UNIVERSE) -> str:
     """Dedup key, same material as every hand-written seed family."""
 
     material = json.dumps(
@@ -225,7 +261,7 @@ def compute_spec_hash(name: str, spec: dict[str, Any]) -> str:
             "name": name,
             "archetype": ARCHETYPE_TECHNICAL_CATALYST,
             "anchor": ANCHOR,
-            "tickers": {"long": list(_UNIVERSE), "short": []},
+            "tickers": {"long": list(tickers), "short": []},
             "spec": spec,
         },
         sort_keys=True,
@@ -246,6 +282,7 @@ def build_record(raw: RawProposal, item: LiteratureItem) -> StrategyRecord:
 
     name = proposal_name(raw)
     spec = build_spec(raw, item)
+    tickers = tuple(universe_tickers(universe_for(raw)))
     return StrategyRecord(
         strategy_id=str(ULID()),
         name=name,
@@ -255,9 +292,9 @@ def build_record(raw: RawProposal, item: LiteratureItem) -> StrategyRecord:
         source=SOURCE,
         thesis=thesis_text(raw, item),
         anchor=dict(ANCHOR),
-        tickers={"long": list(_UNIVERSE), "short": []},
+        tickers={"long": list(tickers), "short": []},
         spec=spec,
-        spec_hash=compute_spec_hash(name, spec),
+        spec_hash=compute_spec_hash(name, spec, tickers),
         regime_sizing_modifier=dict(REGIME_SIZING_MODIFIER),
         kill_criteria=[*raw.kill_criteria, *COMMON_KILL_CRITERIA],
         code_ref=CODE_REF,
@@ -282,4 +319,5 @@ __all__ = [
     "deviation_text",
     "proposal_name",
     "thesis_text",
+    "universe_for",
 ]

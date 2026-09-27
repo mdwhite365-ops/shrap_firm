@@ -89,6 +89,7 @@ def items_from_file(path: Path) -> list[LiteratureItem]:
                     url=None if entry.get("url") is None else str(entry["url"]),
                     published_at=(datetime.fromisoformat(str(published)) if published else None),
                     category=None if entry.get("category") is None else str(entry["category"]),
+                    authors=tuple(str(a) for a in entry.get("authors") or ()),
                 )
             )
         except KeyError as e:

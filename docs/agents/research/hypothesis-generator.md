@@ -193,17 +193,35 @@ Each literature item ends in exactly one of three places:
 | `capability-gap` | cited and real, but the engine cannot run it | `research.capability_gaps` |
 | `refused` | no citation, not an effect, already held, out of bounds | recorded on the item with its reason; **never retried** |
 
-**The capability gap is the point.** `PanelWindow` exposes closes and volumes;
-`FACTOR_SCORERS` implements four effects on top of them. A proposer reading a
-thousand papers therefore cannot produce a thousand strategies — it produces a
-handful, plus a ranked, cited list of the scorers it would need built to produce
-the rest. Two kinds, kept apart because they cost differently:
+**The capability gap is the point.** A proposer reading a thousand papers
+cannot produce a thousand strategies. It produces the ones the engine can
+express, plus a ranked, cited list of what it would need built to express the
+rest. Two kinds, kept apart because they cost differently:
 
-- `missing-scorer` — computable from close and volume, nobody wrote the
-  function. An afternoon of work. This is the queue worth working.
-- `missing-data` — needs fundamentals, shares outstanding, intraday bars,
-  options, short interest. A feed to acquire. The count of these is the honest
-  argument for buying data.
+- `missing-scorer` — computable from what the firm stores, but not expressible
+  in any rule. An afternoon of work.
+- `missing-data` — needs something the firm does not store: order flow, news or
+  filing text, options, short interest. A feed to acquire. The count of these is
+  the honest argument for buying data.
+
+**Since 2026-09-27 a paper whose score is a formula is a strategy, not a gap.**
+The fourth rule the model may name is `signal-spec` (#278): a formula over a
+fixed feature library, which covers price and volume features, market cap, and
+filed SEC figures read from their filing date (#280). The model writes the
+formula, the paper's `select` (top, bottom or positive) and its `rebalance`
+period. **The Evaluator's own parser judges the formula**, so the proposer and
+the engine cannot disagree about what is well-formed. Three rules keep this from
+becoming a search:
+
+1. **Identity is the formula's shape.** Lookbacks, windows and constants are
+   excluded, so RSI(2) below 10 and RSI(3) below 20 are one hypothesis.
+2. **A spec that equals a named rule answers to that rule.** Momentum written as
+   `top:return` is refused as already held, in both directions.
+3. **A formula may not approximate a missing input.** An effect needing order
+   flow stays a `missing-data` gap. It is not recast as a volume formula.
+
+A spec that reads market cap or a filed figure registers over the operating
+companies only, because that set is also its benchmark (#281).
 
 Ranked by how many **distinct** papers cited each gap, so the build order comes
 from the field rather than from whoever is at the keyboard.
@@ -212,7 +230,7 @@ from the field rather than from whoever is at the keyboard.
 because of a specific past failure:
 
 1. **Construction is fixed.** `top_n`, `gross_exposure` and `long_short` are not
-   in the model's schema. Held identical, a comparison between two proposals
+   in the model's schema, and a spec may select only long-only books. Held identical, a comparison between two proposals
    measures the two effects; free to vary, it measures two implementations.
 2. **The deviation always names the long-only 50-name universe.** The firm's
    momentum strategy dropped the short leg of Jegadeesh-Titman and nothing

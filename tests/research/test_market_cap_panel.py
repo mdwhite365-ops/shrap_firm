@@ -193,7 +193,9 @@ def test_near_neighbours_that_mean_something_else_stay_out_of_reach() -> None:
         "free float market cap",
         "float",
         "enterprise value",
-        "book value",
         "book-to-market",
     ):
         assert normalise_input(wording) is None, wording
+    # Book value became a filed figure with #280 — stockholders' equity, read
+    # point in time — and it is still not market cap.
+    assert normalise_input("book value") == "stockholders_equity"
