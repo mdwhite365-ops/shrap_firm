@@ -60,7 +60,31 @@ from shrap.research.strategy_runner.cadence import (
 # Bump on any behaviour-relevant prompt change. Stamped onto every proposal's
 # spec so a later review knows which prompt produced it — the same discipline
 # the Tech Watcher filter learned the hard way (KI-007).
-PROPOSER_PROMPT_VERSION = 4
+PROPOSER_PROMPT_VERSION = 5
+
+# The operation grammar, shown to the model as real trees rather than described.
+# v4 described every op as `{"op", "args": [...]}`, but the parser takes a
+# one-operand op under `of`, so every formula using `abs`, `neg`, `log`, `rank`
+# or `zscore` was refused as `invalid-signal-spec`. Found by a hand-written spec
+# (2026-09-27), not by the model. A test parses each of these with the
+# Evaluator's own parser, so the prompt cannot show a form the engine refuses.
+GRAMMAR_EXAMPLES: Mapping[str, Mapping[str, object]] = {
+    "one-operand": {"op": "rank", "of": {"feature": "volatility", "lookback": 21}},
+    "two-operand": {
+        "op": "div",
+        "args": [
+            {"feature": "fundamental", "metric": "gross_profit"},
+            {"feature": "fundamental", "metric": "total_assets"},
+        ],
+    },
+    "nested": {
+        "op": "sub",
+        "args": [
+            {"op": "zscore", "of": {"feature": "return", "lookback": 252, "skip": 21}},
+            {"op": "zscore", "of": {"feature": "volatility", "lookback": 63}},
+        ],
+    },
+}
 
 # The selections a proposal may name. `long_short` is excluded for the reason
 # `FIXED_LONG_SHORT` is False in `record.py`: every proposal is long-only.
@@ -107,9 +131,14 @@ def _rules_block() -> str:
     )
     lines.append('      a constant: {"const": <number>}')
     lines.append(
-        '      an operation: {"op": "<op>", "args": [<tree>, ...]} — one arg: '
-        f"{', '.join(sorted(UNARY_OPS))}; two: {', '.join(sorted(NARY_OPS))}"
+        f"      a one-operand operation ({', '.join(sorted(UNARY_OPS))}) takes its operand "
+        f'under "of": {json.dumps(GRAMMAR_EXAMPLES["one-operand"])}'
     )
+    lines.append(
+        f"      a two-operand operation ({', '.join(sorted(NARY_OPS))}) takes a list under "
+        f'"args": {json.dumps(GRAMMAR_EXAMPLES["two-operand"])}'
+    )
+    lines.append(f"      nested: {json.dumps(GRAMMAR_EXAMPLES['nested'])}")
     lines.append("    Features:")
     lines.extend(f"      {n} — {d}" for n, d in sorted(FEATURE_DESCRIPTIONS.items()))
     lines.append(
@@ -473,6 +502,7 @@ def known_rules() -> Sequence[str]:
 
 
 __all__ = [
+    "GRAMMAR_EXAMPLES",
     "MAX_ABSTRACT_CHARS",
     "PROPOSAL_SELECTIONS",
     "PROPOSER_PROMPT_VERSION",

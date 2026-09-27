@@ -407,7 +407,15 @@ def signal_shape(signal: object, select: str) -> str:
     Raises :class:`SignalSpecError` for an expression the parser refuses.
     """
 
-    return f"{select}:{_shape(parse(signal))}"
+    node = parse(signal)
+    # Holding the top of `-x` is holding the bottom of `x`: one strategy with two
+    # spellings. Folded here or it is a second door past `already-held` — the
+    # live model wrote `top` of `neg(abs_return)` for an effect the firm would
+    # hold as `bottom` of `abs_return` (2026-09-27). Stacked negations cancel.
+    flips = {"top": "bottom", "bottom": "top"}
+    while node.kind == "op" and node.name == "neg" and select in flips:
+        node, select = node.children[0], flips[select]
+    return f"{select}:{_shape(node)}"
 
 
 # Spec shapes that ARE one of the named rules. A spec is a second door to every

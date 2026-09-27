@@ -10,6 +10,7 @@ rules or a spec.
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 from typing import Any
 
@@ -32,13 +33,19 @@ from shrap.research.hypothesis_generator.literature import (
     OUTCOME_PROPOSED,
     OUTCOME_REFUSED,
 )
-from shrap.research.hypothesis_generator.proposer import PROPOSER_SYSTEM_PROMPT
+from shrap.research.hypothesis_generator.proposer import GRAMMAR_EXAMPLES, PROPOSER_SYSTEM_PROMPT
 from shrap.research.strategy_evaluator.pipeline import (
     RULE_CROSS_SECTIONAL_MOMENTUM,
     RULE_SIGNAL_SPEC,
     _default_strategy_factory,
 )
-from shrap.research.strategy_evaluator.signals import ACCOUNTING_FEATURES, FEATURES
+from shrap.research.strategy_evaluator.signals import (
+    ACCOUNTING_FEATURES,
+    FEATURES,
+    NARY_OPS,
+    UNARY_OPS,
+    parse,
+)
 from shrap.research.strategy_seed.spec_strategies import universe_tickers
 from tests.research.test_hypothesis_generator import (
     _existing,
@@ -85,6 +92,41 @@ def test_the_prompt_describes_every_feature_the_library_has() -> None:
     assert set(FEATURE_DESCRIPTIONS) == set(FEATURES) | set(ACCOUNTING_FEATURES)
     for name in FEATURE_DESCRIPTIONS:
         assert name in PROPOSER_SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize("form", sorted(GRAMMAR_EXAMPLES))
+def test_every_grammar_example_in_the_prompt_parses(form: str) -> None:
+    """The prompt shows real trees, and the Evaluator's parser accepts each one.
+
+    v4 described one-operand ops under `args`; the parser takes them under `of`.
+    """
+
+    parse(GRAMMAR_EXAMPLES[form])
+    assert json.dumps(GRAMMAR_EXAMPLES[form]) in PROPOSER_SYSTEM_PROMPT
+
+
+def test_the_prompt_teaches_both_operand_forms_for_every_op() -> None:
+    for op in UNARY_OPS:
+        parse({"op": op, "of": {"feature": "volatility", "lookback": 21}})
+    for op in NARY_OPS:
+        parse({"op": op, "args": [{"const": 1}, {"feature": "volatility", "lookback": 21}]})
+    assert '"of"' in PROPOSER_SYSTEM_PROMPT and '"args"' in PROPOSER_SYSTEM_PROMPT
+
+
+def test_a_one_operand_formula_from_the_model_is_proposed() -> None:
+    signal = {"op": "rank", "of": {"feature": "abs_return", "lookback": 1}}
+    outcome, reg = _run(
+        _spec_response(
+            effect_name="magnitude-shrinkage",
+            signal=signal,
+            select="bottom",
+            rebalance="daily",
+            required_inputs=["close"],
+        )
+    )
+
+    assert outcome.outcome == OUTCOME_PROPOSED
+    assert reg.registered[0].spec["params"]["signal"] == signal
 
 
 @pytest.mark.parametrize(
@@ -172,6 +214,16 @@ def test_numbers_are_not_identity() -> None:
 
     assert signal_shape(rsi2, "positive") == signal_shape(rsi3, "positive")
     assert signal_shape(rsi2, "positive") != signal_shape(rsi2, "top")
+
+
+def test_top_of_a_negation_is_the_bottom_of_the_signal() -> None:
+    x = {"feature": "abs_return", "lookback": 1}
+    neg = {"op": "neg", "of": x}
+
+    assert signal_shape(neg, "top") == signal_shape(x, "bottom")
+    assert signal_shape({"op": "neg", "of": neg}, "top") == signal_shape(x, "top")
+    # `positive` is a threshold at zero, so negation genuinely changes it.
+    assert signal_shape(neg, "positive") != signal_shape(x, "positive")
 
 
 def test_a_held_spec_blocks_the_same_formula_at_new_windows() -> None:
