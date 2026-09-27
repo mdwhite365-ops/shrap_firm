@@ -1317,6 +1317,41 @@ services:
     networks:
       - shrap_net
 
+  # Weekly SEC XBRL refresh (#TBD): filed share counts (market cap, #258) and
+  # accounting figures (#280). Both backfills were one-shots, so every 10-K and
+  # 10-Q filed after the last hand run was invisible to the panel, and market
+  # cap drifted on stale share counts. Two companyfacts reads per operating
+  # company per week (~72 requests, paced), idempotent upserts that move
+  # `fetched_at`, so the freshness targets see each pass. SEC's fair-access
+  # policy asks for a real contact in the User-Agent, so it reuses the Filing
+  # Processor's rather than the CLIs' placeholder default.
+  sec-facts-refresh:
+    build:
+      context: ../
+      dockerfile: infra/market-data.Dockerfile
+    container_name: shrap_sec_facts_refresh
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - >-
+        while true;
+        do shrap-market-data-shares-backfill --launch-list || echo "shares refresh failed, exit $$?";
+        shrap-market-data-fundamentals-backfill --launch-list || echo "fundamentals refresh failed, exit $$?";
+        sleep $${SEC_FACTS_INTERVAL_SECONDS:-604800};
+        done
+    env_file:
+      - .env
+    environment:
+      MARKET_DATA_POSTGRES_DSN: "postgresql://${SHRAP_DB_USER}:${SHRAP_DB_PASSWORD}@postgres:5432/${SHRAP_DB_NAME}"
+      MARKET_DATA_LOG_LEVEL: "INFO"
+      SEC_USER_AGENT: "${FILING_PROCESSOR_SEC_USER_AGENT:-shrap-firm/0.1 filing-processor (mdwhite365@gmail.com)}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shrap_net
+
   market-data:
     build:
       context: ../
