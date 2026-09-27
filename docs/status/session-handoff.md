@@ -62,10 +62,14 @@ its first cards:
 **All four merged 2026-09-27. Card 3, the first spec batches, is #281**:
 `fundamental`/`fundamental_growth` features over filed figures, a spec
 `"universe": "equities"` option (the benchmark fix below), filed figures in the
-shadow ledger's panel, and the 13 specs in `docs/strategies/specs/`. **Still
-to come:** account rotation from the shadow leaderboard (**the third account
-stays empty until the ledger shows something worth trying**, Mike 2026-09-23),
-and the Hypothesis Generator emitting specs.
+shadow ledger's panel, and the 13 specs in `docs/strategies/specs/`. **Account rotation
+is #283**: `shrap-shadow-ledger rotation` compares each challenger with each
+slot's incumbent on the *paired* daily active return (same sessions, so shared
+market noise cancels) and prints the `shrap-strategy-stage` commands for a swap
+that clears 1 SE over 60+ shared sessions. It never moves anything, and a killed
+winner is reported as a protocol ruling, because `killed` is terminal. **The
+third account stays empty until the ledger shows something worth trying**
+(Mike, 2026-09-23). **Still to come:** the Hypothesis Generator emitting specs.
 
 **Deployed 2026-09-27 (Sunday, market closed), `main` at #279.** All 26
 app services rebuilt and `--force-recreate`d, each container verified on its

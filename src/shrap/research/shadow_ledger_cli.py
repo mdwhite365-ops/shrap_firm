@@ -19,12 +19,14 @@ import asyncio
 import os
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
 
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.logging import configure_logging
+from shrap.research.rotation import DEFAULT_MIN_SESSIONS, DEFAULT_Z, Slot, recommend, render
 from shrap.research.shadow_ledger import (
     ENROLLED_STATUSES,
     LedgerRow,
@@ -45,6 +47,8 @@ from shrap.research.strategy_evaluator.store import PostgresEvaluatorReader
 from shrap.research.strategy_evaluator.strategy import BarSample, PricePanel
 from shrap.research.strategy_registry import PostgresStrategyRegistry, StrategyRecord
 from shrap.research.strategy_runner.cadence import read_cadence
+from shrap.research.strategy_runner.store import PostgresStrategyRunnerStateStore
+from shrap.research.strategy_stage_cli import TRADING_STAGES
 
 log = structlog.get_logger(service="shadow-ledger")
 
@@ -180,11 +184,68 @@ async def report(pool: object) -> str:
     return render_report(scores, names, now=datetime.now(UTC))
 
 
-async def _main(action: str, interval: float, dry_run: bool = False) -> str:
+# The accounts are the ones the Reconciliation Agent has reported recently: an
+# empty slot has no strategy row to find it by, but its agent still snapshots it.
+SELECT_ACCOUNTS_SQL = """
+SELECT DISTINCT account_id
+FROM ops.account_snapshots
+WHERE account_id IS NOT NULL AND at > now() - interval '7 days'
+ORDER BY account_id
+""".strip()
+
+
+async def rotation(
+    pool: Any, *, min_sessions: int = DEFAULT_MIN_SESSIONS, z: float = DEFAULT_Z
+) -> str:
+    registry = PostgresStrategyRegistry(pool)
+    store = PostgresShadowLedger(pool)
+    await store.ensure_schema()
+    series = await store.settled_series()
+    records = await registry.list_all()
+    names = {r.strategy_id: r.name for r in records}
+
+    holding = {r.account_id: r for r in records if r.account_id and r.status in TRADING_STAGES}
+    async with pool.acquire() as conn:
+        accounts = [str(r["account_id"]) for r in await conn.fetch(SELECT_ACCOUNTS_SQL)]
+    for account in holding:
+        if account not in accounts:
+            accounts.append(account)
+    slots = [Slot(a, holding[a].strategy_id if a in holding else None) for a in sorted(accounts)]
+    candidates = [
+        r.strategy_id
+        for r in records
+        if r.status in ENROLLED_STATUSES
+        and r.status not in TRADING_STAGES
+        and not read_cadence(r.spec).is_intraday
+    ]
+    recs = recommend(slots, series, candidates, min_sessions=min_sessions, z=z)
+
+    by_id = {r.strategy_id: r for r in records}
+    runner_store = PostgresStrategyRunnerStateStore(pool)
+    orphaned: dict[str, list[str]] = {}
+    for rec in recs:
+        if not rec.swap or rec.challenger_id is None:
+            continue
+        universe = {t.upper() for t in _extract_tickers(by_id[rec.challenger_id].tickers)}
+        held, _ = await runner_store.latest_positions(rec.account_id)
+        orphaned[rec.account_id] = sorted(t for t in held if t.upper() not in universe)
+    statuses = {r.strategy_id: r.status for r in records}
+    return render(recs, names, orphaned=orphaned, statuses=statuses)
+
+
+async def _main(
+    action: str,
+    interval: float,
+    dry_run: bool = False,
+    min_sessions: int = DEFAULT_MIN_SESSIONS,
+    z: float = DEFAULT_Z,
+) -> str:
     pool = await create_asyncpg_pool(_dsn())
     try:
         if action == "report":
             return await report(pool)
+        if action == "rotation":
+            return await rotation(pool, min_sessions=min_sessions, z=z)
         if action == "run":
             results = await run_pass(pool, dry_run=dry_run)
             decided = sum(1 for r in results if r.decided)
@@ -204,7 +265,7 @@ async def _main(action: str, interval: float, dry_run: bool = False) -> str:
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Shadow forward test for every strategy")
-    parser.add_argument("action", choices=["run", "loop", "report"])
+    parser.add_argument("action", choices=["run", "loop", "report", "rotation"])
     parser.add_argument(
         "--interval",
         type=float,
@@ -213,9 +274,21 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--dry-run", action="store_true", help="run: compute every decision, write nothing"
     )
+    parser.add_argument(
+        "--min-sessions",
+        type=int,
+        default=DEFAULT_MIN_SESSIONS,
+        help="rotation: settled shared sessions a challenger needs before it is compared",
+    )
+    parser.add_argument(
+        "--z",
+        type=float,
+        default=DEFAULT_Z,
+        help="rotation: standard errors the paired IR must clear",
+    )
     args = parser.parse_args(argv)
     configure_logging("shadow-ledger", os.environ.get("SHADOW_LEDGER_LOG_LEVEL", "INFO"))
-    print(asyncio.run(_main(args.action, args.interval, args.dry_run)))
+    print(asyncio.run(_main(args.action, args.interval, args.dry_run, args.min_sessions, args.z)))
 
 
 if __name__ == "__main__":
