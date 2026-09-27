@@ -67,6 +67,20 @@ to come:** account rotation from the shadow leaderboard (**the third account
 stays empty until the ledger shows something worth trying**, Mike 2026-09-23),
 and the Hypothesis Generator emitting specs.
 
+**Deployed 2026-09-27 (Sunday, market closed), `main` at #279.** All 26
+app services rebuilt and `--force-recreate`d, each container verified on its
+new image ID, the new code confirmed importable inside the containers
+(`plan_resize`, `install_url_redaction`, the Decimal quantity fix, the arXiv
+cooldown), plus the on-demand `strategy-evaluator`, `hypothesis-generator` and
+`market-data` images. So **#259's retrieval is finally live in the hourly
+Hypothesis Generator**. The shadow ledger decided its first session (09-25, 16
+strategies; the intraday one skips by design). The corpus index resumed and is
+catching up. arXiv answered 406 once and the #272 cooldown held off both
+sources for two hours, as designed. **The fundamentals backfill ran: 19,487
+figures, all 36 operating companies**; the 14 funds are excluded. It is a
+one-shot and is **not scheduled** yet, so new 10-K/10-Q figures arrive only
+when it is re-run. A weekly schedule is a small follow-up card.
+
 **The first spec batches, backtested read-only on the Dell (2026-09-24).** 13
 specs (7 price/volume, 6 from SEC fundamentals) run through the real
 `EvaluationPipeline` in dry-run, from a scratch merge of #278+#279+#280, with
