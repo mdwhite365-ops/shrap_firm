@@ -11,6 +11,8 @@ from shrap.research.strategy_runner.engine import (
     DEFAULT_CONFIDENCE,
     DEFAULT_MAX_GROSS_EXPOSURE,
     DEFAULT_MAX_QUANTITY,
+    DEFAULT_RESIZE_BAND,
+    DEFAULT_RESIZE_MIN_NOTIONAL,
     RunnerSignalConfig,
 )
 from shrap.risk_compliance.risk_officer.exits import ExitRule
@@ -48,6 +50,12 @@ class Settings(BaseSettings):
     # levers the whole book and should wait for drawdown/loss limits and an
     # intraday-margin-deficit model (ADR-0016).
     max_gross_exposure: float = DEFAULT_MAX_GROSS_EXPOSURE
+    # Resize held positions toward target once they drift past this fraction
+    # of it (see engine.DEFAULT_RESIZE_BAND). Unset -> the default; set
+    # STRATEGY_RUNNER_RESIZE_ENABLED=false to turn resizing off.
+    resize_enabled: bool = True
+    resize_band: float = DEFAULT_RESIZE_BAND
+    resize_min_notional: float = DEFAULT_RESIZE_MIN_NOTIONAL
 
     # Bar read + price adjustment (matches the Evaluator's default mode).
     adjustment: str = "all"
@@ -113,6 +121,8 @@ class Settings(BaseSettings):
             max_quantity=self.max_quantity,
             confidence=self.confidence,
             max_gross_exposure=self.max_gross_exposure,
+            resize_band=self.resize_band if self.resize_enabled else None,
+            resize_min_notional=self.resize_min_notional,
         )
 
     def redacted(self) -> dict[str, object]:

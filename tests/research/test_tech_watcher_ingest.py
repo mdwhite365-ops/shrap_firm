@@ -139,9 +139,11 @@ def _no_real_arxiv_sleeps() -> Any:
     original = ARXIV_THROTTLE._min_interval
     ARXIV_THROTTLE._min_interval = 0.0
     ARXIV_THROTTLE._last = None
+    ARXIV_THROTTLE.accepted()
     yield
     ARXIV_THROTTLE._min_interval = original
     ARXIV_THROTTLE._last = None
+    ARXIV_THROTTLE.accepted()
 
 
 # --- sources -------------------------------------------------------------------
@@ -602,23 +604,19 @@ async def test_usaspending_still_scopes_by_window_agency_and_floor() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_a_406_on_the_combined_query_falls_back_without_retrying_it() -> None:
-    """406 buys a split, not a second knock.
-
-    The combined query is refused and the per-category pass succeeds — one extra
-    request, not three. Retrying the 406 first would have made it four.
-    """
+async def test_a_406_is_answered_once_not_retried_and_not_split() -> None:
+    """One refused request, one request. No second knock, no fan-out."""
 
     http = FakeHTTP([FakeResponse(406, ""), FakeResponse(200, ARXIV_FEED)])
     source = ArxivSource(
         categories=("q-fin.PM",),
         retry=RetryPolicy(attempts=3, backoff_seconds=0, statuses=ARXIV_RETRY.statuses),
+        throttle=RequestThrottle(0.0),
     )
 
-    items = await source.fetch(http)
-
-    assert len(http.requests) == 2
-    assert [i.source for i in items] == ["arxiv"]
+    with pytest.raises(SourceError, match="406"):
+        await source.fetch(http)
+    assert len(http.requests) == 1
 
 
 def test_arxiv_source_treats_406_as_transient_without_being_told_to() -> None:
@@ -664,15 +662,14 @@ async def test_a_403_is_never_retried() -> None:
 
 
 async def test_retry_gives_up_rather_than_looping_forever() -> None:
-    """Bounded overall: attempts on the combined query, then on each category."""
+    """Bounded: the policy's attempts on the one query, and then it stops."""
 
     http = FakeHTTP([FakeResponse(503, "")] * 9)
     source = ArxivSource(categories=("q-fin.PM",), retry=RetryPolicy(attempts=2, backoff_seconds=0))
 
-    with pytest.raises(SourceError, match="every category failed"):
+    with pytest.raises(SourceError, match="after 2 attempts"):
         await source.fetch(http)
-    # 2 on the combined query + 2 on the single category. Never unbounded.
-    assert len(http.requests) == 4
+    assert len(http.requests) == 2
 
 
 def test_406_is_never_retried_because_it_means_slow_down() -> None:
@@ -793,7 +790,7 @@ async def test_a_retry_also_waits_rather_than_hammering() -> None:
 
     clock = _FakeClock()
     throttle = RequestThrottle(3.0, clock=clock, sleep=clock.sleep)
-    http = FakeHTTP([FakeResponse(406, ""), FakeResponse(200, ARXIV_FEED)])
+    http = FakeHTTP([FakeResponse(503, ""), FakeResponse(200, ARXIV_FEED)])
     source = ArxivSource(
         categories=("cs.AI",),
         throttle=throttle,
@@ -816,70 +813,77 @@ async def test_arxiv_names_a_format_and_a_client() -> None:
 
 
 # ---------------------------------------------------------------------------
-# One refused arXiv category must not cost the whole feed
+# A 406 is aimed at the host, not at a category
 #
-# Measured 2026-09-19, three clean rounds 8s apart, deterministic every time:
-#
-#     cs.AI               200
-#     cs.LG               200
-#     q-bio.NC            406
-#     cond-mat            406
-#     cond-mat.stat-mech  406
-#
-# The `arxiv` source asked for cs.AI OR cs.LG OR cond-mat OR q-bio.NC in one
-# query, so two refused categories took the two healthy ones down with them —
-# 46 consecutive passes ingesting nothing from a feed that was half fine.
+# #251 read 406s for cond-mat and q-bio.NC as arXiv refusing those categories,
+# and split every failed query per category. On 2026-09-23 the Dell got 406 for
+# every category and every combined query, while another IP got 200 for all of
+# them in the same hour. The fan-out made ten requests a pass at a host whose
+# refusal is prolonged by each request.
 # ---------------------------------------------------------------------------
 
 
-async def test_a_refused_category_does_not_lose_the_healthy_ones() -> None:
-    """The live failure: cs.AI and cs.LG work, cond-mat and q-bio.NC 406."""
-
-    http = FakeHTTP(
-        [
-            FakeResponse(406, ""),  # the combined query, poisoned by the bad two
-            FakeResponse(200, ARXIV_FEED),  # cs.AI
-            FakeResponse(200, ARXIV_FEED),  # cs.LG
-            FakeResponse(406, ""),  # cond-mat
-            FakeResponse(406, ""),  # q-bio.NC
-        ]
-    )
+async def test_a_refused_query_is_not_split_into_more_requests() -> None:
+    http = FakeHTTP([FakeResponse(406, "")] * 5)
     source = ArxivSource(
         categories=("cs.AI", "cs.LG", "cond-mat", "q-bio.NC"),
-        retry=RetryPolicy(attempts=1, backoff_seconds=0, statuses=ARXIV_RETRY.statuses),
+        throttle=RequestThrottle(0.0, cooldown_seconds=7200.0),
     )
 
-    items = await source.fetch(http)
-
-    # 1 combined attempt, then the four-way split it falls back to.
-    assert len(http.requests) == 5
-    assert len(items) == 1  # the healthy categories still produced their paper
-
-
-async def test_every_category_failing_is_still_a_source_failure() -> None:
-    """A wholly dead feed must still raise, or the cursor advances over nothing."""
-
-    http = FakeHTTP([FakeResponse(406, "")] * 3)
-    source = ArxivSource(
-        categories=("cond-mat", "q-bio.NC"),
-        retry=RetryPolicy(attempts=1, backoff_seconds=0, statuses=ARXIV_RETRY.statuses),
-    )
-
-    with pytest.raises(SourceError, match="every category failed"):
+    with pytest.raises(SourceError, match="406"):
         await source.fetch(http)
 
+    assert len(http.requests) == 1
 
-async def test_items_are_deduped_across_categories() -> None:
-    """A paper cross-listed in cs.AI and cs.LG is one row, not two."""
 
-    http = FakeHTTP([FakeResponse(503, "")] * 3 + [FakeResponse(200, ARXIV_FEED)] * 3)
-    source = ArxivSource(
-        categories=("cs.AI", "cs.LG", "q-bio.NC"),
-        retry=RetryPolicy(attempts=3, backoff_seconds=0),
+async def test_after_a_refusal_the_host_is_left_alone() -> None:
+    """The next pass raises without a request until the cooldown has run."""
+
+    clock = _FakeClock()
+    throttle = RequestThrottle(
+        0.0, cooldown_seconds=7200.0, max_cooldown_seconds=43200.0, clock=clock, sleep=clock.sleep
+    )
+    http = FakeHTTP([FakeResponse(406, ""), FakeResponse(200, ARXIV_FEED)])
+    source = ArxivSource(categories=("cs.AI",), throttle=throttle)
+
+    with pytest.raises(SourceError, match="406"):
+        await source.fetch(http)
+    clock.now += 3600.0  # the next hourly pass
+    with pytest.raises(SourceError, match="cooling down"):
+        await source.fetch(http)
+    assert len(http.requests) == 1
+
+    clock.now += 3601.0  # past the two-hour cooldown
+    assert len(await source.fetch(http)) == 1
+    assert len(http.requests) == 2
+
+
+async def test_the_cooldown_doubles_on_repeated_refusals_and_clears_on_success() -> None:
+    clock = _FakeClock()
+    throttle = RequestThrottle(
+        0.0, cooldown_seconds=7200.0, max_cooldown_seconds=43200.0, clock=clock, sleep=clock.sleep
     )
 
-    items = await source.fetch(http)
+    assert [throttle.refused() for _ in range(5)] == [7200.0, 14400.0, 28800.0, 43200.0, 43200.0]
+    throttle.accepted()
+    assert throttle.refused() == 7200.0
 
-    # 3 failed attempts at the combined query, then one per category.
-    assert len(http.requests) == 6
-    assert len(items) == 1
+
+async def test_both_arxiv_sources_share_one_cooldown() -> None:
+    """arxiv-qfin must not ask a host arxiv was just refused by, in the same pass."""
+
+    throttle = RequestThrottle(0.0, cooldown_seconds=7200.0)
+    http = FakeHTTP([FakeResponse(406, ""), FakeResponse(200, ARXIV_FEED)])
+    world = ArxivSource(categories=("cs.AI",), throttle=throttle)
+    qfin = ArxivSource(categories=DEFAULT_QFIN_CATEGORIES, throttle=throttle)
+
+    with pytest.raises(SourceError):
+        await world.fetch(http)
+    with pytest.raises(SourceError, match="cooling down"):
+        await qfin.fetch(http)
+
+    assert len(http.requests) == 1
+
+
+def test_the_production_throttle_has_a_cooldown() -> None:
+    assert ARXIV_THROTTLE._cooldown > 0.0

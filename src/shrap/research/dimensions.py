@@ -69,8 +69,10 @@ from shrap.research.strategy_evaluator.pipeline import (
     RULE_CROSS_SECTIONAL_REVERSAL,
     RULE_CROSS_SECTIONAL_TREND,
     RULE_REFERENCE_TREND,
+    RULE_SIGNAL_SPEC,
 )
 from shrap.research.strategy_evaluator.reference_strategy import ReferenceTrendStrategy
+from shrap.research.strategy_evaluator.signals import SignalSpecStrategy
 
 # The rule → implementation binding, mirroring `_default_strategy_factory`'s
 # dispatch. Authored, and the only authored thing left here — a name in a dict
@@ -85,6 +87,7 @@ RULE_IMPLEMENTATIONS: Mapping[str, type] = {
     RULE_CROSS_SECTIONAL_MOMENTUM: CrossSectionalMomentumStrategy,
     RULE_CROSS_SECTIONAL_REVERSAL: CrossSectionalReversalStrategy,
     RULE_CROSS_SECTIONAL_FACTOR: CrossSectionalFactorStrategy,
+    RULE_SIGNAL_SPEC: SignalSpecStrategy,
 }
 
 # Axes whose value space is a closed set the code enumerates, so "which values

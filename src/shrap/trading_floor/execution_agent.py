@@ -11,6 +11,7 @@ import asyncio
 import math
 import signal
 from dataclasses import dataclass
+from decimal import ROUND_DOWN, Decimal
 from typing import Any, Protocol, cast
 
 import httpx
@@ -31,6 +32,9 @@ STREAM_EXECUTION_ORDER_FILLED = "execution.order.filled"
 PRODUCED_BY = "trading-floor/execution-agent"
 SCHEMA_VERSION = "1.0.0"
 CONSUMER_GROUP = "execution-agent"
+
+# Alpaca accepts nine decimal places on a fractional quantity.
+_BROKER_QUANTUM = Decimal("1e-9")
 
 
 class RedisStreamClient(Protocol):
@@ -268,9 +272,19 @@ def _format_quantity(quantity: float) -> str:
 
     # Floored, not rounded: rounding up ships a hair more than the Risk Officer
     # approved, and the direction that cannot breach a limit is down.
-    floored = math.floor(quantity * 1_000_000_000) / 1_000_000_000
-    text = f"{floored:.9f}".rstrip("0").rstrip(".")
-    return text or "0"
+    #
+    # **Floored in decimal, not in float.** This was
+    # `math.floor(quantity * 1e9) / 1e9`, and the multiply is not exact:
+    # 0.531726136 * 1e9 is 531726135.99999994, which floors a whole nano-share
+    # low. Every exit of such a position sold one nano-share less than was held
+    # and stranded it — TSLA bought 0.531726136 on 2026-09-08, sold 0.531726135
+    # the next day, and AVGO, GD, QQQ and TSLA each sat at 1e-09 shares
+    # afterwards, vetoed daily as BELOW_BROKER_MINIMUM. `repr` is the shortest
+    # decimal that round-trips the float — the string the broker sent — so
+    # truncating *that* loses nothing that was really there.
+    floored = Decimal(repr(quantity)).quantize(_BROKER_QUANTUM, rounding=ROUND_DOWN)
+    text = f"{floored:f}".rstrip("0").rstrip(".")
+    return text if text not in ("", "-0") else "0"
 
 
 def build_paper_order(event: ReceivedEvent, *, fractionable: bool = True) -> dict[str, Any]:

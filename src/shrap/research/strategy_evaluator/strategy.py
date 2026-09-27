@@ -24,6 +24,12 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol
 
+from shrap.market_data.fundamentals import (
+    Observation,
+    prior_year_value_as_of,
+    value_as_of,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class BarSample:
@@ -92,6 +98,16 @@ class PanelWindow:
     def dates(self) -> tuple[date, ...]:
         return self._panel.dates[: self._index + 1]
 
+    def rewind(self, index: int) -> PanelWindow:
+        """The same panel as of an earlier bar. Never a later one.
+
+        For rules that rebalance on a schedule: between rebalances they hold what
+        they chose on the last rebalance date, which is the window at that date.
+        Clamped to the current bar, so rewinding cannot become a way to peek.
+        """
+
+        return PanelWindow(self._panel, max(0, min(index, self._index)))
+
     def closes(self, ticker: str) -> tuple[float, ...]:
         return self._panel.history_cached(ticker, "closes", self._index)
 
@@ -115,6 +131,25 @@ class PanelWindow:
 
     def volumes(self, ticker: str) -> tuple[float, ...]:
         return self._panel.history_cached(ticker, "volumes", self._index)
+
+    def fundamental(self, ticker: str, metric: str) -> float | None:
+        """The latest figure for ``metric`` filed on or before the current bar.
+
+        Point in time on the filing date (see ``market_data.fundamentals``), so a
+        fiscal year is invisible until its 10-K is public. ``None`` means nothing
+        had been filed — unknown, never zero.
+        """
+
+        return value_as_of(
+            self._panel.fundamentals.get(ticker, {}).get(metric, ()), self.current_date
+        )
+
+    def fundamental_prior(self, ticker: str, metric: str) -> float | None:
+        """The same figure one fiscal year earlier, as visible on the current bar."""
+
+        return prior_year_value_as_of(
+            self._panel.fundamentals.get(ticker, {}).get(metric, ()), self.current_date
+        )
 
     def market_caps(self, ticker: str) -> tuple[float, ...]:
         """``close x shares outstanding`` up to and including the current bar.
@@ -301,6 +336,12 @@ class PricePanel:
     volumes: dict[str, tuple[float, ...]]
     live: dict[str, tuple[bool, ...]]
     market_caps: dict[str, tuple[float, ...]] = field(default_factory=dict)
+    fundamentals: dict[str, dict[str, tuple[Observation, ...]]] = field(default_factory=dict)
+    """Filed accounting figures per ticker and metric, ``(filed_at, period_end, value)``.
+
+    Read point in time by :meth:`PanelWindow.fundamental`. Defaulted empty, so a
+    panel built without them is valid and simply answers ``None``.
+    """
     """``close x shares``, point-in-time on ``filed_at``. See :func:`_market_cap_series`.
 
     Defaulted so every existing construction of a panel keeps working and
@@ -440,6 +481,7 @@ class PricePanel:
         cls,
         bars_by_ticker: Mapping[str, Sequence[BarSample]],
         shares_by_ticker: Mapping[str, Sequence[tuple[date, float]]] | None = None,
+        fundamentals_by_ticker: Mapping[str, Mapping[str, Sequence[Observation]]] | None = None,
     ) -> PricePanel:
         """Build a panel over every date any ticker traded.
 
@@ -504,6 +546,11 @@ class PricePanel:
             volumes=volumes,
             live=live,
             market_caps=market_caps,
+            fundamentals={
+                ticker: {metric: tuple(obs) for metric, obs in by_metric.items()}
+                for ticker, by_metric in (fundamentals_by_ticker or {}).items()
+                if ticker in tickers
+            },
         )
 
 

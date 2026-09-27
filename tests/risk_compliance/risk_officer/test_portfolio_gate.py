@@ -311,3 +311,7 @@ def test_the_bisection_returns_a_fraction_not_a_whole_share() -> None:
     # And a book with no room lands on noise, not on a clean zero. Without this
     # the veto reads as an approval for a hundred-billionth of a share.
     assert quantize_down(1.8189894035458565e-11) == 0.0
+    # A quantity already at broker precision must survive untouched. Flooring
+    # in float took 0.531726136 to 0.531726135 (the multiply is not exact).
+    assert quantize_down(0.531726136) == 0.531726136
+    assert quantize_down(0.261677878) == 0.261677878

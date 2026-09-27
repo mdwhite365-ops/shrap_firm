@@ -44,6 +44,11 @@ from shrap.research.strategy_seed.probe_strategies import (
     PROBE_SEEDS_BY_KEY,
     probe_record,
 )
+from shrap.research.strategy_seed.spec_strategies import (
+    SpecDocumentError,
+    load_documents,
+    spec_record,
+)
 from shrap.research.strategy_seed.technical_strategies import (
     MOMENTUM_SEEDS,
     MOMENTUM_SEEDS_BY_KEY,
@@ -360,6 +365,36 @@ def render_probe_catalogue() -> str:
     return "\n".join(lines)
 
 
+async def load_specs(registry: RegistryPort, text: str) -> str:
+    """Insert every ``signal-spec`` document in ``text``; all are validated first.
+
+    All-or-nothing on validation: one bad document refuses the file before any
+    row is written, so a batch cannot land half-loaded.
+    """
+
+    try:
+        records = [spec_record(doc) for doc in load_documents(text)]
+    except (SpecDocumentError, ValueError) as exc:
+        raise SystemExit(f"refused: {exc}") from exc
+    lines = []
+    for record in records:
+        existing = await registry.get_by_spec_hash(record.spec_hash)
+        if existing is not None:
+            lines.append(
+                f"already present: {existing.strategy_id} ({existing.name}) "
+                f"status={existing.status} — skipped"
+            )
+            continue
+        await registry.register(
+            record,
+            reason="seeded from a signal-spec document",
+            actor=SEED_ACTOR,
+            trigger_kind=SEED_TRIGGER_KIND,
+        )
+        lines.append(f"loaded: {record.strategy_id} ({record.name}) at status={record.status}")
+    return "\n".join(lines)
+
+
 async def _run(args: argparse.Namespace) -> str:
     if args.action == "list-probes":
         return render_probe_catalogue()
@@ -388,6 +423,9 @@ async def _run(args: argparse.Namespace) -> str:
             return await load_factor(registry, args.key)
         if args.action == "load-reversal":
             return await load_reversal(registry, args.key)
+        if args.action == "load-spec":
+            with open(args.file, encoding="utf-8") as handle:
+                return await load_specs(registry, handle.read())
         # list
         return render_list(await registry.list_all())
     finally:
@@ -443,6 +481,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     reversal.add_argument("key", choices=sorted(REVERSAL_SEEDS_BY_KEY), help="Reversal seed key")
     sub.add_parser("list-reversal", help="Show available reversal seeds (no database access)")
+    spec = sub.add_parser(
+        "load-spec",
+        help="Insert signal-spec strategies from a JSON document or list (idempotent)",
+    )
+    spec.add_argument("file", help="Path to a JSON object, or a list of them")
     sub.add_parser("list", help="Show research.strategies rows (id, name, archetype, status)")
     return parser
 

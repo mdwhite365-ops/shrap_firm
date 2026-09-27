@@ -156,6 +156,24 @@ WHERE p.account_id = $1
 # per-ticker latest can mix two passes and report a position the newer pass
 # shows as closed — which is precisely the class of error this whole card
 # exists to remove.
+# The scale the Risk Officer applied to this account's most recent approved buy:
+# the sizing step alone (stage x regime, or the Kelly posterior), before any
+# portfolio-limit bisection. Read so the Runner can resize held positions
+# without keeping its own copy of the Officer's sizing rule.
+SELECT_LATEST_BUY_SCALE_SQL = """
+SELECT (detail->'portfolio'->'sizing'->>'approved_quantity')::double precision
+         / NULLIF((detail->'portfolio'->'sizing'->>'requested_quantity')::double precision, 0)
+         AS scale,
+       at
+FROM risk.decisions
+WHERE account_id = $1
+  AND side = 'buy'
+  AND approved
+  AND (detail->'portfolio'->'sizing'->>'requested_quantity') IS NOT NULL
+ORDER BY at DESC
+LIMIT 1
+""".strip()
+
 SELECT_LATEST_POSITIONS_SQL = """
 WITH newest AS (
     SELECT event_id, at
@@ -300,6 +318,20 @@ class PostgresStrategyRunnerStateStore:
             )
         return positions, observed_at
 
+    async def latest_buy_scale(self, account_id: str) -> tuple[float | None, datetime | None]:
+        """The Risk Officer's scale on this account's newest approved buy, and when.
+
+        ``(None, None)`` when the account has never had one approved — the
+        Runner then leaves held positions alone rather than guessing a scale.
+        """
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(SELECT_LATEST_BUY_SCALE_SQL, account_id)
+        if row is None or row["scale"] is None:
+            return None, None
+        at = row["at"]
+        return float(row["scale"]), at if isinstance(at, datetime) else None
+
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]:
         """Most recent equity for ``account_id``, and when it was observed.
 
@@ -356,6 +388,7 @@ __all__ = [
     "ALTER_RUNNER_STATE_ADD_SLOT_SQL",
     "ALTER_RUNNER_STATE_FRACTIONAL_QUANTITY_SQL",
     "CREATE_RUNNER_STATE_TABLE_SQL",
+    "SELECT_LATEST_BUY_SCALE_SQL",
     "SELECT_LATEST_EQUITY_SQL",
     "SELECT_RUNNER_STATE_SQL",
     "UPSERT_RUNNER_STATE_SQL",

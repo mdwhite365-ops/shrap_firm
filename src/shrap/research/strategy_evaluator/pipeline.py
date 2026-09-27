@@ -59,6 +59,7 @@ from shrap.research.strategy_evaluator.engine import (
 )
 from shrap.research.strategy_evaluator.factors import CrossSectionalFactorStrategy
 from shrap.research.strategy_evaluator.reference_strategy import ReferenceTrendStrategy
+from shrap.research.strategy_evaluator.signals import SignalSpecStrategy
 from shrap.research.strategy_evaluator.strategy import (
     BarSample,
     PanelCoverage,
@@ -165,6 +166,8 @@ RULE_CROSS_SECTIONAL_TREND = "cross-sectional-trend"
 RULE_CROSS_SECTIONAL_MOMENTUM = "cross-sectional-momentum"
 RULE_CROSS_SECTIONAL_FACTOR = "cross-sectional-factor"
 RULE_CROSS_SECTIONAL_REVERSAL = "cross-sectional-reversal"
+# A strategy defined by an expression rather than a class (see `signals.py`).
+RULE_SIGNAL_SPEC = "signal-spec"
 
 # Rules that consume exactly one ticker. Declared rather than inferred.
 #
@@ -237,6 +240,8 @@ def _default_strategy_factory(record: StrategyRecord, tickers: list[str]) -> Str
         return CrossSectionalFactorStrategy.from_spec(params)
     if rule == RULE_CROSS_SECTIONAL_REVERSAL:
         return CrossSectionalReversalStrategy.from_spec(params)
+    if rule == RULE_SIGNAL_SPEC:
+        return SignalSpecStrategy.from_spec(params)
     if rule != RULE_REFERENCE_TREND:
         known = ", ".join(sorted({RULE_REFERENCE_TREND, *_CROSS_SECTIONAL_RULES}))
         raise SpecHygieneError(f"spec names unknown rule {rule!r}; known rules are {known}")
@@ -261,6 +266,7 @@ _CROSS_SECTIONAL_RULES: frozenset[str] = frozenset(
         RULE_CROSS_SECTIONAL_MOMENTUM,
         RULE_CROSS_SECTIONAL_REVERSAL,
         RULE_CROSS_SECTIONAL_FACTOR,
+        RULE_SIGNAL_SPEC,
     }
 )
 
@@ -938,10 +944,11 @@ class EvaluationPipeline:
             bars = await self._reader.read_bars(ticker, start, today, self._config.adjustment)
             bars_by_ticker[ticker] = bars
         shares = await self._read_shares(tickers)
+        fundamentals = await read_optional(self._reader, "read_fundamentals", tickers)
         # Measured from the same dict the panel aligns, so coverage can never
         # describe a different fetch than the one that produced the verdict.
         return (
-            PricePanel.from_bars(bars_by_ticker, shares),
+            PricePanel.from_bars(bars_by_ticker, shares, fundamentals),
             PanelCoverage.from_bars(bars_by_ticker),
         )
 
@@ -959,14 +966,7 @@ class EvaluationPipeline:
         of quiet wrong answer this project keeps finding.
         """
 
-        read = getattr(self._reader, "read_shares", None)
-        if read is None:
-            return {}
-        try:
-            return dict(await read(tickers))
-        except Exception:
-            log.exception("strategy_evaluator.shares_read_failed", tickers=len(tickers))
-            return {}
+        return await read_optional(self._reader, "read_shares", tickers)
 
     def _build_outcome(
         self,
@@ -1040,6 +1040,26 @@ def _with_card(outcome: EvaluationOutcome, card: str) -> EvaluationOutcome:
     # would have gone missing here is the one describing how much data the
     # verdict rests on.
     return replace(outcome, card_markdown=card)
+
+
+async def read_optional(reader: object, method: str, tickers: Sequence[str]) -> dict[str, Any]:
+    """Call an optional panel-series reader, degrading to nothing.
+
+    The same contract as ``_read_shares``: a reader without the method, or one
+    that fails, yields an empty mapping and a logged exception rather than a
+    failed evaluation, because a strategy that never asked for the series must
+    not be taken down by its absence. Shared with the live Runner so both build
+    their panels from the same optional inputs.
+    """
+
+    read = getattr(reader, method, None)
+    if read is None:
+        return {}
+    try:
+        return dict(await read(tickers))
+    except Exception:
+        log.exception("strategy_evaluator.optional_series_read_failed", method=method)
+        return {}
 
 
 def _params(spec: object) -> Mapping[str, Any]:
@@ -1420,6 +1440,7 @@ __all__ = [
     "RULE_CROSS_SECTIONAL_MOMENTUM",
     "RULE_CROSS_SECTIONAL_TREND",
     "RULE_REFERENCE_TREND",
+    "RULE_SIGNAL_SPEC",
     "SCHEMA_VERSION",
     "SINGLE_TICKER_RULES",
     "STREAM_STRATEGY_VERDICT",
@@ -1432,6 +1453,7 @@ __all__ = [
     "RegistryPort",
     "SpecHygieneError",
     "StrategyFactory",
+    "read_optional",
     "render_evaluation_card",
     "write_evaluation_card",
 ]

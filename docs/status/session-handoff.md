@@ -1,4 +1,4 @@
-# Session handoff — 2026-09-22 (`main` at #269)
+# Session handoff — 2026-09-23 (`main` at #270, audit PRs #271–#276 open)
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -14,7 +14,138 @@ them, and `git log` has the history.
 
 ---
 
-## Pick up here (reconciled at #263, deployed 2026-09-20)
+## Pick up here: the 2026-09-23 audit (#271–#276)
+
+A full audit through #270: code, git, docs, and the live Dell. **The code was
+clean** (2,172 tests, ruff, mypy --strict), **and the order path works** (fills
+every session 09-14 → 09-23, no kill switch active). What it found was silent:
+
+| PR | Finding | Deploy |
+|---|---|---|
+| #271 | Every exit sold **one nano-share less than held** (`floor(q*1e9)` in float). AVGO, GD, QQQ and TSLA sit at 1e-09 shares, vetoed daily as `BELOW_BROKER_MINIMUM` | `execution-agent` ×3, `pre-trade-checker` |
+| #272 | arXiv's 406 is aimed at **the Dell**, not at categories (every query returned 200 from the MacBook), and #251's fan-out made 10 requests/pass at a throttled host. `arxiv-qfin` dark since 07:13 UTC 09-23 | `tech-watcher` |
+| #273 | **#250's last three commits never reached `main`**: `main` indexed EDGAR only. The live index had papers only because the image was built from the branch. The index was also manual-only and 4 days stale | `corpus-index` (now always-on), `health-monitor` |
+| #274 | The Health Monitor logged the **Discord webhook token** into `docker logs` (httpx INFO) | `health-monitor` |
+| #275 | #26's regime floor never reached `main`. **Your ruling**: merge to adjoin the bands at 0.18, close to keep the gap. No effect today (vol_20d 0.108) | `regime-classifier` |
+| #276 | This doc set | — |
+
+All deploys use `--build --force-recreate`, and are verified by image ID (KI-039).
+
+**Mike's actions, none of which code can do:**
+
+- **Rotate the Discord webhook** (#274 stops new leaks, not old ones).
+- **Disarm the Strategy Fixture.** The Dell's `infra/.env` sets
+  `STRATEGY_FIXTURE_ENABLED=true` three times, so the "disarmed" fixture has
+  sent an SPY buy every night at 00:03 UTC, stopped only by the Risk Officer's
+  `UNKNOWN_STRATEGY` veto. The audit's attempt to edit `.env` was blocked by the
+  permission classifier.
+- **Clear the dust by hand** in Alpaca for `PA3KQN57WVXY`: AVGO, GD, QQQ, TSLA
+  (1e-09 each) and U (0.012648483). Positions under $1 cannot be sold via the API.
+- **Decide where backups live.** They run nightly and restore (verified 09-19),
+  but `/mnt/backups` is on `boot-pool/ROOT/25.10.4` — the TrueNAS *boot
+  environment*, on the OS disk — and nothing is copied off the box. Whether a
+  TrueNAS upgrade carries that directory into the new boot environment is
+  **not verified**.
+
+### The strategy factory (2026-09-23/24, #277–#280): make and test strategies at volume
+
+Mike asked for the best way to make the firm actually research. The plan and
+its first cards:
+
+| PR | Card | Why |
+|---|---|---|
+| #277 | Held positions resize toward target | The 09-18 raise to 0.80 reached new buys only; momentum sat ~29% invested |
+| #278 | **Strategies as specs** (`signal-spec`) | A new idea is a JSON document, not a PR. Reproduces momentum bar-for-bar |
+| #279 | **Shadow forward test** | Every strategy, killed ones too, decided and settled daily with no broker; out-of-sample by construction |
+| #280 | **SEC XBRL fundamentals** | Value/profitability/investment become computable; 40/50 names, 20,297 figures |
+
+**Next, blocked only on merges (no stacking, KI-001):** the first spec batch
+(needs #278; fundamentals specs need #280), account rotation from the shadow
+leaderboard (needs #279; **the third account stays empty until the ledger shows
+something worth trying**, Mike 2026-09-23), and the Hypothesis Generator
+emitting specs (needs #278).
+
+**The first spec batches, backtested read-only on the Dell (2026-09-24).** 13
+specs (7 price/volume, 6 from SEC fundamentals) run through the real
+`EvaluationPipeline` in dry-run, from a scratch merge of #278+#279+#280, with
+fundamentals held in memory (nothing written). IR against a benchmark of the
+names each strategy can actually hold:
+
+| Spec | IR | Folds | Verdict |
+|---|---|---|---|
+| Gross profitability (Novy-Marx 2013) | **+0.81** | **6/6** | kill: insufficient-trades |
+| MACD histogram leaders | **+0.88** | 5/6 | promote |
+| Book-to-market (Fama-French 1992) | +0.72 | 4/6 | kill: insufficient-trades |
+| Size (Banz 1981) | +0.51 | 4/6 | kill: insufficient-trades |
+| Asset growth (Cooper et al. 2008) | +0.50 | 3/6 | promote |
+| Faber trend, accruals, R&D, LT reversal, earnings yield, RSI(2), Bollinger, inverse-vol | ≤ +0.12 | | kill / hold |
+
+The firm's best IR before this was 0.448. **Read it with three discounts:**
+the IR standard error is ±0.47 (KI-036); these are 13 draws; and **the
+universe was chosen in 2026**, so every backtest here is survivorship-biased,
+value-style strategies most of all. MACD is not momentum in disguise: 18% book
+overlap, active-return correlation −0.08 with 126/21.
+
+**Two protocol findings from it:**
+
+- **The benchmark includes names a strategy cannot hold.** Measured against all
+  50 (TLT, UUP, GLD, index ETFs), the fundamental strategies read ~0.3 IR
+  higher. Stocks beating bonds over 2020–2026 is not selection. Specs must
+  declare the universe they can score.
+- **`min_trades` kills every monthly-rebalanced anomaly**, which is how
+  academic factors are traded: four of the five best died on trade count, not
+  evidence. Per the 2026-07-27 finding this is a protocol-fit question, not a
+  constant to lower. The shadow ledger enrols killed strategies, so it tests
+  them anyway.
+
+**Found while building, each needs a decision or a deploy:**
+
+- **Four live images predate #258/#259** (`strategy-evaluator`, `-trigger`,
+  `strategy-runner`, `hypothesis-generator-trigger`, all built 09-18). **#259's
+  retrieval is not running** in the hourly Hypothesis Generator.
+  `check-deploy-drift.sh` compares containers to images, never images to code.
+- **The live Runner's panel never had market caps** (bars only), while the
+  Evaluator's did. Fixed in #280.
+- **`daily_bars` holds a partial bar for the session in progress**, and anything
+  that reads "the latest bar" mid-session reads a price that is not a close. The
+  shadow ledger now reads only completed sessions; nothing else was checked.
+- **The −10% stop fights momentum.** AFRM was stopped out at −11.3% on 09-23 and
+  re-bought 09-24 because it still ranks top-ten. **Mike's ruling:** a re-entry
+  cooldown after a stop, or no stop on rank-based strategies.
+
+### Is the firm researching? Barely — measured 2026-09-23
+
+- **New strategies:** 16 ever. **15 were seeded by Mike**, 1 by the Hypothesis
+  Generator (2026-07-30, killed). Nothing new has entered the pipeline since
+  09-18, and nothing from the autonomous loop since 07-30.
+- **Backtests:** the Evaluator ran **zero evaluations from 2026-07-31 to
+  2026-09-14**. Since then it re-evaluates one strategy (the 15-minute
+  momentum variant) daily: `hold / below-sharpe-floor` each time. A HOLD
+  never expires, and #242 already measured that variant at IR 0.003.
+- **Forward tests:** the two `paper` strategies, running since 08-04. Momentum
+  +1.56% and high-volume +0.32%, against SPY −0.17% (price only). Seven weeks
+  is not evidence. The third account is exactly $10,066.19 on both dates.
+- **Funnel:** 7 days to 09-23, **0 of 1,284 arXiv items admitted**, EDGAR 12 of
+  962. `literature_items` holds 14 rows ever (11 `capability-gap`, 2 `refused`,
+  1 `proposed`). The Hypothesis Generator logs `sweep_empty` hourly.
+
+The machinery runs; the input is empty. The lever is still the filter bar
+(the Bar B ruling below) and the capability-gap build list — not more
+measurement.
+
+### Smaller findings, not yet cards
+
+- **SIP daily bars have no schedule.** They were a one-off for #247, so
+  `--feed alpaca-sip` gets a panel ending 2026-09-17.
+- **Filing Processor matched 2 of 442 EDGAR items** over three business days
+  against ~6 expected for a 42-name roster. Borderline (Poisson p ≈ 0.06), so
+  watch it rather than act.
+- Ollama quota healthy (session 3.3%, weekly 38.2%). The filter is on `kimi-k3`,
+  so the `qwen3.5:397b` retirement on 09-25 does not touch it.
+
+---
+
+## Previously: reconciled at #263, deployed 2026-09-20
 
 ### The archetype bar experiment has an answer: Bar B (#264–#270)
 
@@ -198,11 +329,9 @@ tomorrow that is the mechanism working, not a surprise.
 
 ### The three rulings Mike still owns
 
-1. **Exposure.** The accounts are **84% cash** (stage 0.25 x regime 0.75 =
-   0.1875). Holding selection constant, **IR is `-Sharpe(benchmark)` at every
-   exposure below 1.0** — −1.152 here, independent of the level. The deadlock:
-   exposure is low because edge is unproven, and a $70 return cannot prove
-   edge. Raising it is one line and is not a tuning decision.
+1. ~~**Exposure.**~~ **Ruled 2026-09-18: `paper` 0.25 → 0.80**, so new buys
+   size at 0.60 in this regime. As measured on 2026-09-23 it applies to new buys
+   only, so held positions stayed at the old ~18.75% size until a resize step.
 2. **Whether to cap simultaneous exits.** Nothing limits how many positions may
    exit in one pass. A market-wide drop that breaches the stop everywhere
    liquidates the book at once. That is arguably what a stop is for, and it is
@@ -273,8 +402,8 @@ Run against the Dell, not inferred. **KI-035** has the full working.
 | `hypothesis-generator` | **1** |
 
 That one proposal scored IR **−0.006**. The Hypothesis Generator is not broken —
-it logs `sweep_empty` hourly because `research.literature_items` has **nine rows
-in total** and all nine are processed. Lifetime funnel yield: ~111 papers → 9
+it logs `sweep_empty` hourly because `research.literature_items` had **nine rows
+in total** (14 by 2026-09-23) and all are processed. Lifetime funnel yield: ~111 papers → 9
 items → 1 strategy.
 
 Everything else the firm has ever tested is a textbook factor (momentum,

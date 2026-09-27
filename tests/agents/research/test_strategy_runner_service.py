@@ -106,9 +106,11 @@ class FakeStateStore:
         self,
         equity_by_account: dict[str, tuple[float | None, datetime | None]],
         positions: dict[str, tuple[dict[str, float], datetime | None]] | None = None,
+        buy_scales: dict[str, tuple[float | None, datetime | None]] | None = None,
     ) -> None:
         self._equity = equity_by_account
         self._positions = positions or {}
+        self._buy_scales = buy_scales or {}
         self.writes: list[PlannedStateWrite] = []
         self.equity_lookups: list[str] = []
 
@@ -128,6 +130,9 @@ class FakeStateStore:
     async def latest_equity(self, account_id: str) -> tuple[float | None, datetime | None]:
         self.equity_lookups.append(account_id)
         return self._equity.get(account_id, (None, None))
+
+    async def latest_buy_scale(self, account_id: str) -> tuple[float | None, datetime | None]:
+        return self._buy_scales.get(account_id, (None, None))
 
     async def upsert(self, write: PlannedStateWrite) -> None:
         self.writes.append(write)

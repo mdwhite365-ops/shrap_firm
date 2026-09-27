@@ -465,6 +465,20 @@ def test_quantity_is_floored_to_broker_precision_never_rounded_up() -> None:
     assert order["qty"] == "1.999999999"
 
 
+@pytest.mark.parametrize("held", [0.531726136, 0.261677878, 0.12345679, 3.141592654])
+def test_a_quantity_already_at_broker_precision_is_sent_whole(held: float) -> None:
+    """Flooring in float sold one nano-share less than was held, every exit.
+
+    ``math.floor(0.531726136 * 1e9)`` is 531726135, because the multiply lands
+    on 531726135.99999994. Live on 2026-09-08/09: TSLA bought 0.531726136, sold
+    0.531726135, and 1e-09 shares of TSLA, QQQ, AVGO and GD were stranded below
+    the broker's $1 minimum where no API order can reach them.
+    """
+
+    order = build_paper_order(_intent_event(held), fractionable=True)
+    assert order["qty"] == repr(held)
+
+
 # --- Fractionable cache provenance -------------------------------------------
 #
 # A cached False from a transient lookup failure and a legitimately

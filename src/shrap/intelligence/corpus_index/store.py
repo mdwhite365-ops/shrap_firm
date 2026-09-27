@@ -3,8 +3,15 @@
 Two sources, both text the firm already stores and has never been able to search
 by meaning:
 
-``intelligence.filings.full_text``          169 rows, 69 MB — 8-K bodies
-``research.raw_source_items.document_text`` 15,318 rows, 87 MB — arXiv + EDGAR
+``intelligence.filings.full_text``    169 rows — 8-K bodies
+``research.raw_source_items``         21,518 rows — EDGAR full text, plus
+                                      arXiv / Federal Register / DOE abstracts
+
+**``document_text`` is populated for ``sec-edgar`` and for nothing else.** An
+index built on that column alone holds 15,487 EDGAR filings and zero research
+literature, which the first full run proved by returning bank-earnings 8-Ks for
+a query about momentum factors. The body is therefore
+``coalesce(document_text, summary)`` and every point records which it got.
 
 **Read-only over both.** They have other owners (the Filing Processor and the
 Tech Watcher), and the tier-3 rule in this repo is that a reader which creates
@@ -70,11 +77,30 @@ ORDER BY fetched_at, accession
 LIMIT $3
 """.strip()
 
+# **`coalesce(document_text, summary)`, and this was found by querying, not by
+# counting.** The first full index returned only bank-earnings 8-Ks for the
+# query "cross-sectional momentum factor predicts equity returns" — no papers at
+# all. `document_text` is populated for `sec-edgar` and for NOTHING else:
+#
+#     sec-edgar   15,318 rows   15,318 with document_text
+#     arxiv        5,556 rows        0   (5,556 have a summary)
+#     arxiv-qfin     287 rows        0     (287 have a summary)
+#
+# So an index built on `document_text` alone contains 15,487 EDGAR filings and
+# zero research literature — precisely the corpus that would serve the
+# Hypothesis Generator, absent. The abstract is the standard retrieval unit for
+# a paper and is what the Tech Watcher's filter reads, so it is the document
+# here.
+#
+# `body_kind` travels with every point so a retrieved abstract cannot pass for
+# full text. A reader judging a hit needs to know whether they are seeing a
+# paper's whole argument or its advertisement.
 SELECT_RAW_ITEMS_SQL = """
 SELECT item_id AS ref, source AS feed, title, url, external_ts, fetched_at,
-       document_text AS body
+       coalesce(document_text, summary) AS body,
+       CASE WHEN document_text IS NOT NULL THEN 'full-text' ELSE 'abstract' END AS body_kind
 FROM research.raw_source_items
-WHERE document_text IS NOT NULL
+WHERE coalesce(document_text, summary) IS NOT NULL
   AND fetched_at IS NOT NULL
   AND ($1::timestamptz IS NULL OR (fetched_at, item_id) > ($1::timestamptz, $2::text))
 ORDER BY fetched_at, item_id
@@ -87,8 +113,8 @@ FROM intelligence.filings WHERE full_text IS NOT NULL
 """.strip()
 
 COUNT_RAW_ITEMS_SQL = """
-SELECT count(*) AS n, coalesce(sum(length(document_text)), 0) AS chars
-FROM research.raw_source_items WHERE document_text IS NOT NULL
+SELECT count(*) AS n, coalesce(sum(length(coalesce(document_text, summary))), 0) AS chars
+FROM research.raw_source_items WHERE coalesce(document_text, summary) IS NOT NULL
 """.strip()
 
 SOURCE_FILINGS = "filings"
@@ -113,6 +139,13 @@ class CorpusDocument:
     symbol: str | None = None
     feed: str | None = None
     doc_ts: datetime | None = None
+    body_kind: str = "full-text"
+    """``full-text`` or ``abstract``.
+
+    An arXiv row carries only its abstract, and a hit on an abstract must not
+    read as a hit on the paper. Without this a retrieval result silently
+    overstates what the firm has actually read.
+    """
 
     def payload(self) -> dict[str, Any]:
         """What travels with every vector from this document."""
@@ -122,6 +155,7 @@ class CorpusDocument:
             "ref": self.ref,
             "title": self.title[:500],
             "url": self.url,
+            "body_kind": self.body_kind,
         }
         if self.symbol:
             out["symbol"] = self.symbol
@@ -233,6 +267,7 @@ class CorpusStore:
                 fetched_at=_as_utc(r["fetched_at"]) or datetime.now(UTC),
                 feed=str(r["feed"]) if r["feed"] else None,
                 doc_ts=_as_utc(r["external_ts"]),
+                body_kind=str(r["body_kind"]),
             )
             for r in rows
         ]
