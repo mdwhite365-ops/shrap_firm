@@ -1,0 +1,3 @@
+### The third spec batch, from the anomaly catalogue (#288)
+
+Nine specs from Chen & Zimmermann's Open Source Asset Pricing catalogue, the first batch drawn from the anomaly literature rather than from arXiv. Each cites its paper and catalogue acronym and states its deviation. In a read-only dry run, book equity growth promoted (IR 0.76, 4/6 folds) but is very likely the asset-growth draw again, and low book leverage (0.61) would hold under #287. Four were negative. Excluded with reasons: RDcap (small firms only), ShareIss1Y (needs a share-growth feature), and signals needing data the firm does not store.
