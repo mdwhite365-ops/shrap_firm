@@ -36,7 +36,11 @@ from shrap.research.shadow_ledger import (
     score,
 )
 from shrap.research.strategy_evaluator.costs import CostModel
-from shrap.research.strategy_evaluator.pipeline import _default_strategy_factory, _extract_tickers
+from shrap.research.strategy_evaluator.pipeline import (
+    _default_strategy_factory,
+    _extract_tickers,
+    read_optional,
+)
 from shrap.research.strategy_evaluator.store import PostgresEvaluatorReader
 from shrap.research.strategy_evaluator.strategy import BarSample, PricePanel
 from shrap.research.strategy_registry import PostgresStrategyRegistry, StrategyRecord
@@ -85,8 +89,11 @@ async def _panel(
         rows = await reader.read_bars(ticker, start, today, ADJUSTMENT)
         if rows:
             bars[ticker] = rows
-    shares = await reader.read_shares(list(bars))
-    return PricePanel.from_bars(bars, shares)
+    # The same optional series the Evaluator's and Runner's panels carry, so a
+    # spec over filed figures is forward-tested on what it was backtested on.
+    shares = await read_optional(reader, "read_shares", list(bars))
+    fundamentals = await read_optional(reader, "read_fundamentals", list(bars))
+    return PricePanel.from_bars(bars, shares, fundamentals)
 
 
 class _DryRunLedger:

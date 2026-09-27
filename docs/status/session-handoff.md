@@ -59,11 +59,13 @@ its first cards:
 | #279 | **Shadow forward test** | Every strategy, killed ones too, decided and settled daily with no broker; out-of-sample by construction |
 | #280 | **SEC XBRL fundamentals** | Value/profitability/investment become computable; 40/50 names, 20,297 figures |
 
-**Next, blocked only on merges (no stacking, KI-001):** the first spec batch
-(needs #278; fundamentals specs need #280), account rotation from the shadow
-leaderboard (needs #279; **the third account stays empty until the ledger shows
-something worth trying**, Mike 2026-09-23), and the Hypothesis Generator
-emitting specs (needs #278).
+**All four merged 2026-09-27. Card 3, the first spec batches, is #281**:
+`fundamental`/`fundamental_growth` features over filed figures, a spec
+`"universe": "equities"` option (the benchmark fix below), filed figures in the
+shadow ledger's panel, and the 13 specs in `docs/strategies/specs/`. **Still
+to come:** account rotation from the shadow leaderboard (**the third account
+stays empty until the ledger shows something worth trying**, Mike 2026-09-23),
+and the Hypothesis Generator emitting specs.
 
 **The first spec batches, backtested read-only on the Dell (2026-09-24).** 13
 specs (7 price/volume, 6 from SEC fundamentals) run through the real
@@ -91,7 +93,9 @@ overlap, active-return correlation −0.08 with 126/21.
 - **The benchmark includes names a strategy cannot hold.** Measured against all
   50 (TLT, UUP, GLD, index ETFs), the fundamental strategies read ~0.3 IR
   higher. Stocks beating bonds over 2020–2026 is not selection. Specs must
-  declare the universe they can score.
+  declare the universe they can score — **fixed in #281**: a spec over filed
+  figures or market cap registers with `"universe": "equities"`, and a test
+  refuses a committed batch that forgets.
 - **`min_trades` kills every monthly-rebalanced anomaly**, which is how
   academic factors are traded: four of the five best died on trade count, not
   evidence. Per the 2026-07-27 finding this is a protocol-fit question, not a

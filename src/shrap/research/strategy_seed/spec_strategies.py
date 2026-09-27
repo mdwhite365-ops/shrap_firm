@@ -6,17 +6,27 @@ strategy a PR. A document looks like::
     {"name": "Short-horizon magnitude, bottom 10",
      "thesis": "... what effect, who found it, why it should exist here ...",
      "kill_criteria": ["... how this specific effect is known to die ..."],
-     "params": {"signal": {...}, "select": "bottom", "top_n": 10}}
+     "params": {"signal": {...}, "select": "bottom", "top_n": 10},
+     "universe": "equities"}
 
 The document is validated by building the strategy (so a bad expression is
 refused before anything is written), the firm's common falsifiers are appended
 to its own, and it is registered at ``hypothesis`` as a lineage root over the
-launch universe. Idempotent on ``spec_hash``: loading the same document twice
+launch universe, or its operating companies alone with ``"universe": "equities"``.
+Idempotent on ``spec_hash``: loading the same document twice
 writes one row.
 
 A thesis and at least one effect-specific kill criterion are required. A spec
 with neither is a formula, not a hypothesis, and the Evaluator's report would
 have nothing to hold the result against.
+
+**The universe is also the benchmark.** The Evaluator measures a strategy against
+equal-weight buy-and-hold of the names it was registered over, so a strategy that
+can only ever hold companies (anything over filed accounts, or market cap) must be
+registered over companies. Registered over the whole launch list, it is measured
+against a benchmark that includes the bond, gold, dollar and crypto funds it could
+never have held, and the first fundamental batch scored about 0.3 of IR higher
+that way than against the names it could actually hold (2026-09-24 dry run).
 """
 
 from __future__ import annotations
@@ -28,6 +38,7 @@ from typing import Any
 
 from ulid import ULID
 
+from shrap.market_data.fundamentals_backfill import fund_tickers
 from shrap.research.strategy_evaluator.pipeline import (
     ARCHETYPE_TECHNICAL_CATALYST,
     RULE_SIGNAL_SPEC,
@@ -44,6 +55,22 @@ from shrap.research.strategy_seed.technical_strategies import (
 
 CODE_REF = "src/shrap/research/strategy_evaluator/signals.py"
 MIN_THESIS_CHARS = 80
+
+UNIVERSE_LAUNCH = "launch"
+UNIVERSE_EQUITIES = "equities"
+
+
+def universe_tickers(name: str) -> list[str]:
+    """The registered (and so benchmark) names for a spec's ``universe``."""
+
+    if name == UNIVERSE_LAUNCH:
+        return list(_MOMENTUM_TICKERS)
+    if name == UNIVERSE_EQUITIES:
+        funds = fund_tickers()
+        return [t for t in _MOMENTUM_TICKERS if t not in funds]
+    raise SpecDocumentError(
+        f"unknown universe {name!r}; use {UNIVERSE_LAUNCH!r} or {UNIVERSE_EQUITIES!r}"
+    )
 
 
 class SpecDocumentError(ValueError):
@@ -82,7 +109,11 @@ def spec_record(doc: Mapping[str, Any], *, strategy_id: str | None = None) -> St
         raise SpecDocumentError(f"'{name}': {exc}") from exc
 
     spec = _spec(params)
-    tickers = {"long": list(_MOMENTUM_TICKERS), "short": []}
+    try:
+        long = universe_tickers(str(doc.get("universe", UNIVERSE_LAUNCH)))
+    except SpecDocumentError as exc:
+        raise SpecDocumentError(f"'{name}': {exc}") from exc
+    tickers = {"long": long, "short": []}
     material = json.dumps(
         {
             "name": name,
@@ -131,7 +162,10 @@ def load_documents(text: str) -> list[Mapping[str, Any]]:
 __all__ = [
     "CODE_REF",
     "MIN_THESIS_CHARS",
+    "UNIVERSE_EQUITIES",
+    "UNIVERSE_LAUNCH",
     "SpecDocumentError",
     "load_documents",
     "spec_record",
+    "universe_tickers",
 ]
