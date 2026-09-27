@@ -43,6 +43,7 @@ from shrap.research.hypothesis_generator.literature import (
     LiteratureItem,
 )
 from shrap.research.hypothesis_generator.proposer import (
+    PROPOSER_PROMPT_VERSION,
     PROPOSER_SYSTEM_PROMPT,
     build_prompt,
     parse_proposal,
@@ -505,7 +506,7 @@ async def test_provenance_records_which_prompt_and_model_produced_this() -> None
 
     provenance = registry.registered[0].spec["provenance"]
     assert provenance["model"] == "qwen3:32b"
-    assert provenance["prompt_version"] == 3
+    assert provenance["prompt_version"] == PROPOSER_PROMPT_VERSION
     assert provenance["literature_item_id"] == "arxiv:2401.00001"
     assert provenance["prior"]["year"] == 2006
 

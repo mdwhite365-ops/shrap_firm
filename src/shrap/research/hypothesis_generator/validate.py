@@ -34,8 +34,9 @@ from dataclasses import dataclass
 from shrap.research.hypothesis_generator.expressible import (
     EXPRESSIBLE_RULES,
     hypothesis_key,
+    spec_identity,
 )
-from shrap.research.hypothesis_generator.proposer import RawProposal
+from shrap.research.hypothesis_generator.proposer import PROPOSAL_SELECTIONS, RawProposal
 from shrap.research.strategy_evaluator.cross_sectional import (
     MOMENTUM_PARAM_BOUNDS,
     REVERSAL_PARAM_BOUNDS,
@@ -45,6 +46,12 @@ from shrap.research.strategy_evaluator.pipeline import (
     RULE_CROSS_SECTIONAL_FACTOR,
     RULE_CROSS_SECTIONAL_MOMENTUM,
     RULE_CROSS_SECTIONAL_REVERSAL,
+    RULE_SIGNAL_SPEC,
+)
+from shrap.research.strategy_evaluator.signals import (
+    REBALANCES,
+    SignalSpecError,
+    SignalSpecStrategy,
 )
 
 REASON_UNPARSEABLE = "unparseable-response"
@@ -58,6 +65,7 @@ REASON_LOOKBACK_OUT_OF_BOUNDS = "lookback-out-of-bounds"
 REASON_ALREADY_HELD = "already-held"
 REASON_THIN_KILL_CRITERIA = "thin-kill-criteria"
 REASON_THIN_THESIS = "thin-thesis"
+REASON_INVALID_SIGNAL = "invalid-signal-spec"
 
 # Per-rule lookback windows, taken from the engine's own bounds rather than
 # restated. Momentum and reversal are disjoint on purpose (21 sessions is the
@@ -126,6 +134,11 @@ def check_spec(raw: RawProposal, held: Mapping[str, str]) -> Refusal | None:
     if raw.rule not in EXPRESSIBLE_RULES:
         known = ", ".join(sorted(EXPRESSIBLE_RULES))
         return Refusal(REASON_UNKNOWN_RULE, f"rule {raw.rule!r} is not one of: {known}")
+    if raw.rule == RULE_SIGNAL_SPEC:
+        refusal = _check_signal(raw, held)
+        if refusal is not None:
+            return refusal
+        return _check_argument(raw)
     if raw.lookback is None:
         return Refusal(REASON_NO_LOOKBACK, "no formation window in trading sessions")
     low, high = _LOOKBACK_BOUNDS[raw.rule]
@@ -145,6 +158,47 @@ def check_spec(raw: RawProposal, held: Mapping[str, str]) -> Refusal | None:
             "effect the firm holds is attempt N of that lineage, not a new "
             "hypothesis, and registering it as a root would understate the search",
         )
+    return _check_argument(raw)
+
+
+def _check_signal(raw: RawProposal, held: Mapping[str, str]) -> Refusal | None:
+    """A spec is judged by the Evaluator's own parser, then by its identity.
+
+    Windows live inside the formula and the parser bounds them (1-756 sessions),
+    so there is no rule-level lookback to check. Construction the model does not
+    choose is still fixed: long-only selections, the default ``top_n``.
+    """
+
+    if raw.signal is None:
+        return Refusal(REASON_INVALID_SIGNAL, "rule is signal-spec but no formula was given")
+    if raw.select not in PROPOSAL_SELECTIONS:
+        return Refusal(
+            REASON_INVALID_SIGNAL,
+            f"select {raw.select!r} is not one of {sorted(PROPOSAL_SELECTIONS)}",
+        )
+    if raw.rebalance not in REBALANCES:
+        return Refusal(
+            REASON_INVALID_SIGNAL, f"rebalance {raw.rebalance!r} is not one of {sorted(REBALANCES)}"
+        )
+    try:
+        SignalSpecStrategy.from_spec(
+            {"signal": raw.signal, "select": raw.select, "rebalance": raw.rebalance}
+        )
+        keys = spec_identity(raw.signal, raw.select)
+    except (SignalSpecError, ValueError) as exc:
+        return Refusal(REASON_INVALID_SIGNAL, str(exc))
+    for key in keys:
+        owner = held.get(key)
+        if owner is not None:
+            return Refusal(
+                REASON_ALREADY_HELD,
+                f"{key} is already held by {owner}; the same formula at other windows "
+                "or thresholds is attempt N of that lineage, not a new hypothesis",
+            )
+    return None
+
+
+def _check_argument(raw: RawProposal) -> Refusal | None:
     if len(raw.kill_criteria) < MIN_KILL_CRITERIA:
         return Refusal(
             REASON_THIN_KILL_CRITERIA,
@@ -163,6 +217,7 @@ __all__ = [
     "MIN_KILL_CRITERIA",
     "MIN_THESIS_CHARS",
     "REASON_ALREADY_HELD",
+    "REASON_INVALID_SIGNAL",
     "REASON_LOOKBACK_OUT_OF_BOUNDS",
     "REASON_NOT_A_MARKET_EFFECT",
     "REASON_NO_EFFECT_NAME",

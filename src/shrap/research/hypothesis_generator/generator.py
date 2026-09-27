@@ -50,6 +50,7 @@ from shrap.research.hypothesis_generator.expressible import (
     hypothesis_key,
     missing_inputs,
     rank_gaps,
+    spec_identity,
 )
 from shrap.research.hypothesis_generator.literature import (
     OUTCOME_CAPABILITY_GAP,
@@ -72,6 +73,7 @@ from shrap.research.hypothesis_generator.validate import (
     check_citable,
     check_spec,
 )
+from shrap.research.strategy_evaluator.pipeline import RULE_SIGNAL_SPEC
 from shrap.research.strategy_registry import StrategyRecord
 
 log = structlog.get_logger(__name__)
@@ -118,10 +120,28 @@ def held_identities(records: Sequence[StrategyRecord]) -> dict[str, str]:
         if not isinstance(rule, str) or not rule:
             continue
         params = spec.get("params")
+        if rule == RULE_SIGNAL_SPEC and isinstance(params, Mapping):
+            # A spec answers to its shape and to any named rule it equals, so a
+            # held `top:return` spec blocks a momentum proposal and vice versa.
+            try:
+                keys = spec_identity(params.get("signal"), str(params.get("select", "top")))
+            except ValueError:
+                continue  # unparseable spec: the Evaluator refuses it anyway
+            for key in keys:
+                out.setdefault(key, record.strategy_id)
+            continue
         factor_raw = params.get("factor") if isinstance(params, Mapping) else None
         factor = str(factor_raw) if isinstance(factor_raw, str) and factor_raw else None
         out.setdefault(hypothesis_key(rule, factor), record.strategy_id)
     return out
+
+
+def proposal_keys(raw: RawProposal) -> tuple[str, ...]:
+    """The identities a validated proposal claims, for the rest of its batch."""
+
+    if raw.rule == RULE_SIGNAL_SPEC and raw.signal is not None:
+        return spec_identity(raw.signal, raw.select)
+    return (hypothesis_key(raw.rule, raw.factor),)
 
 
 @dataclass(slots=True)
@@ -297,7 +317,8 @@ class HypothesisGenerator:
         # Claim the identity for the rest of this batch. Two papers describing
         # one effect in a single run would otherwise both pass, because the
         # registry was read once before either was written.
-        corpus.held[hypothesis_key(raw.rule, raw.factor)] = record.strategy_id
+        for key in proposal_keys(raw):
+            corpus.held[key] = record.strategy_id
         corpus.names.add(record.name)
         corpus.hashes.add(record.spec_hash)
         log.info(
@@ -361,4 +382,5 @@ __all__ = [
     "ItemOutcome",
     "StrategyRegistry",
     "held_identities",
+    "proposal_keys",
 ]

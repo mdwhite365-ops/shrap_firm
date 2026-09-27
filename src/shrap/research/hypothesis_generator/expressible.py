@@ -44,6 +44,12 @@ from shrap.research.strategy_evaluator.pipeline import (
     RULE_CROSS_SECTIONAL_FACTOR,
     RULE_CROSS_SECTIONAL_MOMENTUM,
     RULE_CROSS_SECTIONAL_REVERSAL,
+    RULE_SIGNAL_SPEC,
+)
+from shrap.research.strategy_evaluator.signals import (
+    ACCOUNTING_FEATURES,
+    Node,
+    parse,
 )
 
 # The only series a strategy can read. Read off `PanelWindow`, which exposes
@@ -64,11 +70,20 @@ AVAILABLE_SERIES: frozenset[str] = frozenset({"close", "volume", "market cap"})
 # effect behind it. A proposer that could name them would be proposing
 # strategies nobody has a prior for, which is the freelancing this whole agent
 # exists to stop.
+#
+# **`signal-spec` joined on 2026-09-27 and it changes what a gap is.** Before it,
+# an effect was expressible only if it WAS one of four hand-written scorers, so
+# nearly every paper became a `missing-scorer` gap and waited for a human to
+# write the function. A spec (#278) is a formula over a fixed feature library,
+# validated by the same parser the Evaluator runs, so an effect that is a
+# formula over those features is now a strategy the same evening. What stays a
+# gap is what the library genuinely cannot compute.
 EXPRESSIBLE_RULES: frozenset[str] = frozenset(
     {
         RULE_CROSS_SECTIONAL_FACTOR,
         RULE_CROSS_SECTIONAL_MOMENTUM,
         RULE_CROSS_SECTIONAL_REVERSAL,
+        RULE_SIGNAL_SPEC,
     }
 )
 
@@ -91,6 +106,59 @@ FACTOR_DESCRIPTIONS: Mapping[str, str] = {
         "rank by how weakly a name's market-adjusted returns correlate with the rest of "
         "the universe, hold the least connected"
     ),
+}
+
+# Filed accounting figures (#280), point in time on the SEC filing date. Keyed by
+# the metric name a spec uses; the values are the wordings that unambiguously
+# mean that figure. Deliberately absent: anything derived (`book-to-market`,
+# `ROE`, `accruals`) — those are formulas a spec builds with `div`/`sub`, and
+# naming the ratio as an input would hide the construction from the classifier —
+# and anything the firm does not store (`EBITDA`, `free cash flow`, `dividends`,
+# `analyst forecasts`, `insider holdings`), which stay `missing-data`.
+FILED_FIGURES: Mapping[str, tuple[str, ...]] = {
+    "revenue": ("revenue", "revenues", "sales", "net sales", "total revenue"),
+    "gross_profit": ("gross profit", "gross profits"),
+    "operating_income": ("operating income", "operating profit", "ebit"),
+    "net_income": ("net income", "earnings", "net earnings", "net profit"),
+    "operating_cash_flow": (
+        "operating cash flow",
+        "cash flow from operations",
+        "cash from operations",
+    ),
+    "rd_expense": ("r&d", "r&d expense", "research and development", "r and d"),
+    "total_assets": ("total assets", "assets", "book assets"),
+    "stockholders_equity": (
+        "book equity",
+        "book value of equity",
+        "book value",
+        "stockholders equity",
+        "stockholders' equity",
+        "shareholders equity",
+        "shareholders' equity",
+        "common equity",
+    ),
+    "long_term_debt": ("long term debt", "long-term debt"),
+}
+
+# One line per spec feature, shown to the proposer. A test holds this in step
+# with the library: a feature the prompt does not describe is one the model
+# cannot choose, and a description of a removed feature is a spec that fails.
+FEATURE_DESCRIPTIONS: Mapping[str, str] = {
+    "return": "trailing return over `lookback` sessions, skipping the latest `skip` (default 0)",
+    "abs_return": "absolute trailing return over `lookback` sessions",
+    "volatility": "standard deviation of daily returns over `lookback` sessions",
+    "volume_ratio": (
+        "mean volume over the latest `recent` sessions divided by mean volume over `lookback`"
+    ),
+    "high_proximity": "close divided by the highest close over `lookback` sessions",
+    "sma_ratio": "`fast`-session moving average of close divided by the `slow`-session one",
+    "bollinger_z": "(close - `lookback` moving average) / `lookback` standard deviation",
+    "rsi": "relative strength index over `lookback` sessions (default 14), 0-100",
+    "macd": "MACD histogram (12/26/9) divided by price",
+    "donchian": "position of close within the `lookback`-session high-low channel, 0-1",
+    "market_cap": "close x filed shares outstanding",
+    "fundamental": "the latest filed annual/instant value of `metric`",
+    "fundamental_growth": "year-on-year growth of `metric`, both years as filed by then",
 }
 
 # Wordings that unambiguously mean one of the available series AT A FINER GRAIN.
@@ -159,11 +227,11 @@ _SERIES_SYNONYMS: Mapping[str, str] = {
     #
     # Deliberately absent, and each for a reason: `float` and `free float market
     # cap` exclude insider and restricted holdings, which the firm does not
-    # store; `enterprise value` adds debt and subtracts cash, which are
-    # fundamentals; `book value` and `book-to-market` are accounting figures, not
-    # price times a share count. All four are genuinely `missing-data` and must
-    # stay that way rather than be quietly served a market cap that means
-    # something else.
+    # store; `enterprise value` adds debt and subtracts cash; `book value` and
+    # `book-to-market` are accounting figures, not price times a share count.
+    # None of them may be served a market cap. Book value is now reachable
+    # another way — as the filed figure `stockholders_equity` (#280) — and
+    # book-to-market as a spec formula over it; neither goes through here.
     "market cap": "market cap",
     "market caps": "market cap",
     "market capitalization": "market cap",
@@ -173,6 +241,13 @@ _SERIES_SYNONYMS: Mapping[str, str] = {
     "size": "market cap",
     "firm size": "market cap",
     "company size": "market cap",
+}
+
+# `normalise_input` keys, not display wordings: `_key` folds hyphens and case.
+_FILED_FIGURE_SYNONYMS: Mapping[str, str] = {
+    " ".join(w.lower().replace("-", " ").replace("_", " ").split()): metric
+    for metric, wordings in FILED_FIGURES.items()
+    for w in wordings
 }
 
 # What the proposer is asked to do about each outcome.
@@ -212,7 +287,11 @@ def normalise_input(name: str) -> str | None:
     """
 
     key = _key(name)
-    return _SERIES_SYNONYMS.get(key) or _INTRADAY_SERIES_SYNONYMS.get(key)
+    return (
+        _SERIES_SYNONYMS.get(key)
+        or _INTRADAY_SERIES_SYNONYMS.get(key)
+        or _FILED_FIGURE_SYNONYMS.get(key)
+    )
 
 
 def needs_intraday(required: Iterable[str]) -> bool:
@@ -277,6 +356,10 @@ def classify(
         return OUTCOME_MISSING_DATA
     if rule not in EXPRESSIBLE_RULES:
         return OUTCOME_MISSING_SCORER
+    # Only a spec can read a filed figure; the four named scorers read prices.
+    # A factor proposal citing book equity would be built on closes alone.
+    if rule != RULE_SIGNAL_SPEC and any(_key(n) in _FILED_FIGURE_SYNONYMS for n in required):
+        return OUTCOME_MISSING_SCORER
     if rule in FACTOR_BEARING_RULES and (factor is None or factor not in IMPLEMENTED_FACTORS):
         return OUTCOME_MISSING_SCORER
     return OUTCOME_EXPRESSIBLE
@@ -299,6 +382,66 @@ def hypothesis_key(rule: str, factor: str | None) -> str:
     """
 
     return f"{rule}:{factor}" if factor else rule
+
+
+def _shape(node: Node) -> str:
+    if node.kind == "const":
+        return "c"
+    if node.kind == "feature":
+        return f"{node.name}({node.metric})" if node.metric else node.name
+    return f"{node.name}({','.join(_shape(c) for c in node.children)})"
+
+
+def signal_shape(signal: object, select: str) -> str:
+    """A spec's identity: its selection and the shape of its expression.
+
+    **Numbers are not part of it** — lookbacks, windows and constants — for the
+    reason ``hypothesis_key`` ignores ``lookback``: RSI(2) below 10 and RSI(3)
+    below 20 are one hypothesis at two parameterisations, and letting the second
+    in as a fresh root is a parameter search past the multiple-testing gate.
+    Raises :class:`SignalSpecError` for an expression the parser refuses.
+    """
+
+    return f"{select}:{_shape(parse(signal))}"
+
+
+# Spec shapes that ARE one of the named rules. A spec is a second door to every
+# effect the firm already holds, and without these a model could propose
+# momentum again by writing it as `top:return`. Registered alongside the named
+# identity so either spelling finds the other.
+NAMED_RULE_SHAPES: Mapping[str, str] = {
+    "top:return": RULE_CROSS_SECTIONAL_MOMENTUM,
+    "bottom:return": RULE_CROSS_SECTIONAL_REVERSAL,
+    "positive:return": hypothesis_key(RULE_CROSS_SECTIONAL_FACTOR, "time-series"),
+    "bottom:volatility": hypothesis_key(RULE_CROSS_SECTIONAL_FACTOR, "low-volatility"),
+    "top:high_proximity": hypothesis_key(RULE_CROSS_SECTIONAL_FACTOR, "high-proximity"),
+    "top:volume_ratio": hypothesis_key(RULE_CROSS_SECTIONAL_FACTOR, "volume-shock"),
+}
+
+
+def spec_identity(signal: object, select: str) -> tuple[str, ...]:
+    """Every key a spec answers to: its own shape, and the named rule it equals."""
+
+    shape = signal_shape(signal, select)
+    keys = [hypothesis_key(RULE_SIGNAL_SPEC, shape)]
+    if shape in NAMED_RULE_SHAPES:
+        keys.append(NAMED_RULE_SHAPES[shape])
+    return tuple(keys)
+
+
+def spec_needs_companies(signal: object) -> bool:
+    """True when the expression reads market cap or a filed figure.
+
+    Such a spec can never hold a fund (``nan`` market cap, no filings), so it
+    registers over companies and is benchmarked against them (#281).
+    """
+
+    def walk(node: Node) -> bool:
+        if node.kind == "feature":
+            return node.name == "market_cap" or node.name in ACCOUNTING_FEATURES
+        return any(walk(c) for c in node.children)
+
+    return walk(parse(signal))
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,7 +525,10 @@ __all__ = [
     "AVAILABLE_SERIES",
     "EXPRESSIBLE_RULES",
     "FACTOR_DESCRIPTIONS",
+    "FEATURE_DESCRIPTIONS",
+    "FILED_FIGURES",
     "IMPLEMENTED_FACTORS",
+    "NAMED_RULE_SHAPES",
     "OUTCOME_EXPRESSIBLE",
     "OUTCOME_MISSING_DATA",
     "OUTCOME_MISSING_SCORER",
@@ -395,4 +541,7 @@ __all__ = [
     "needs_intraday",
     "normalise_input",
     "rank_gaps",
+    "signal_shape",
+    "spec_identity",
+    "spec_needs_companies",
 ]

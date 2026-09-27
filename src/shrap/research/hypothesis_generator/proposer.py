@@ -38,9 +38,20 @@ from shrap.research.hypothesis_generator.expressible import (
     EXPRESSIBLE_RULES,
     FACTOR_BEARING_RULES,
     FACTOR_DESCRIPTIONS,
+    FEATURE_DESCRIPTIONS,
+    FILED_FIGURES,
 )
 from shrap.research.hypothesis_generator.literature import LiteratureItem
 from shrap.research.hypothesis_generator.retrieval import RelatedPassage, render_related
+from shrap.research.strategy_evaluator.pipeline import RULE_SIGNAL_SPEC
+from shrap.research.strategy_evaluator.signals import (
+    NARY_OPS,
+    REBALANCES,
+    SELECT_BOTTOM,
+    SELECT_POSITIVE,
+    SELECT_TOP,
+    UNARY_OPS,
+)
 from shrap.research.strategy_runner.cadence import (
     MAX_INTERVAL_MINUTES,
     MIN_INTERVAL_MINUTES,
@@ -49,7 +60,11 @@ from shrap.research.strategy_runner.cadence import (
 # Bump on any behaviour-relevant prompt change. Stamped onto every proposal's
 # spec so a later review knows which prompt produced it — the same discipline
 # the Tech Watcher filter learned the hard way (KI-007).
-PROPOSER_PROMPT_VERSION = 3
+PROPOSER_PROMPT_VERSION = 4
+
+# The selections a proposal may name. `long_short` is excluded for the reason
+# `FIXED_LONG_SHORT` is False in `record.py`: every proposal is long-only.
+PROPOSAL_SELECTIONS: frozenset[str] = frozenset({SELECT_TOP, SELECT_BOTTOM, SELECT_POSITIVE})
 
 # How much of an abstract the model sees. arXiv abstracts run ~1500 characters;
 # the cap is a guard against a pathological item, not a summarisation step.
@@ -80,6 +95,32 @@ def _rules_block() -> str:
         "the top. Horizon must be 20-504 sessions. Implemented factors:",
     ]
     lines.extend(f"      {name} — {desc}" for name, desc in sorted(FACTOR_DESCRIPTIONS.items()))
+    lines.append(
+        "  signal-spec — a FORMULA over the features below, then a selection. Use it "
+        "when the effect is not exactly one of the rules above but IS a formula over "
+        "these features. The formula is a JSON tree:"
+    )
+    lines.append('      a feature: {"feature": "<name>", <its arguments>}, arguments in sessions')
+    lines.append(
+        '      an accounting feature: {"feature": "fundamental" or "fundamental_growth", '
+        '"metric": "<metric>"}'
+    )
+    lines.append('      a constant: {"const": <number>}')
+    lines.append(
+        '      an operation: {"op": "<op>", "args": [<tree>, ...]} — one arg: '
+        f"{', '.join(sorted(UNARY_OPS))}; two: {', '.join(sorted(NARY_OPS))}"
+    )
+    lines.append("    Features:")
+    lines.extend(f"      {n} — {d}" for n, d in sorted(FEATURE_DESCRIPTIONS.items()))
+    lines.append(
+        f"    Metrics (filed with the SEC, used only from their filing date): "
+        f"{', '.join(sorted(FILED_FIGURES))}"
+    )
+    lines.append(
+        "    `select`: top (hold the 10 highest scores), bottom (the 10 lowest), or "
+        "positive (every name scoring above zero). `rebalance`: "
+        f"{', '.join(sorted(REBALANCES))} — the paper's own holding period."
+    )
     return "\n".join(lines)
 
 
@@ -139,12 +180,21 @@ PROPOSER_SYSTEM_PROMPT = (
     "coarser) when you say so — see `cadence_minutes` below.\n"
     f"{_rules_block()}\n"
     "\n"
+    "Prefer a named rule when the effect IS that rule. Use `signal-spec` when the "
+    "paper's score is a formula over the listed features — including ratios such as "
+    "earnings over market cap, or gross profit over total assets. Write the formula "
+    "the paper uses, with the paper's windows; do not tune it.\n"
+    "\n"
     "Name an implemented factor ONLY if the paper's effect is that exact effect. "
     "If it is anything else — including a close cousin — invent a new kebab-case "
     "`effect_name`, still set `rule` to the closest structural fit, and describe "
     "the computation in `scorer_sketch`. Forcing a paper onto the nearest "
     "implemented factor is the worst outcome available: the firm would then hold "
     "a strategy citing a paper it does not implement.\n"
+    "If the effect needs an input the features cannot compute, do NOT approximate "
+    "it with a formula — name the input in `required_inputs` and leave `signal` "
+    "null. A formula that approximates a missing input is a strategy citing a paper "
+    "it does not implement.\n"
     "\n"
     "CONTEXT FROM THE FIRM'S OWN CORPUS. The item may be followed by other "
     "items the firm already holds, retrieved by meaning. Use them to judge "
@@ -167,7 +217,8 @@ PROPOSER_SYSTEM_PROMPT = (
     "- `prior`: the authors (given to you in the item metadata), the year, and "
     "the claim in one sentence. The claim is yours to read from the abstract.\n"
     "- `required_inputs`: every data series the effect needs, using the words "
-    "`close`, `volume` and `market cap` where those suffice and plain English "
+    "`close`, `volume`, `market cap` and the metric names above (in plain words, "
+    "such as `gross profit` or `book equity`) where those suffice and plain English "
     "otherwise (for example `signed order flow`, `filing text`, `short interest`). "
     "Name an "
     "intraday series as `intraday returns`, `intraday volume`, `5-minute closes` "
@@ -201,6 +252,9 @@ PROPOSER_SYSTEM_PROMPT = (
     '"effect_name": "<kebab-case>", '
     '"prior": {"authors": "<names>", "year": <int>, "claim": "<one sentence>"}, '
     '"rule": "<one of the rules above>", "factor": "<implemented factor or null>", '
+    '"signal": <formula tree, only for signal-spec, else null>, '
+    '"select": "<top|bottom|positive, only for signal-spec>", '
+    '"rebalance": "<daily|weekly|monthly, only for signal-spec>", '
     '"lookback": <int sessions>, "cadence_minutes": <int minutes or null>, '
     '"required_inputs": ["<series>", ...], '
     '"scorer_sketch": "<1-2 sentences>", '
@@ -250,6 +304,14 @@ class RawProposal:
     thesis: str
     model: str
     """Which model said it. Part of a verdict's identity (KI-007)."""
+
+    signal: Mapping[str, object] | None = None
+    """The formula, for ``signal-spec`` only. Unvalidated here: the Evaluator's own
+    parser judges it in ``validate.py``, so the proposer and the engine cannot
+    disagree about what is well-formed."""
+
+    select: str = ""
+    rebalance: str = ""
 
     corroboration: str = ""
     """What the retrieved corpus context said about this effect, in the model's
@@ -352,6 +414,9 @@ def parse_proposal(item: LiteratureItem, content: str, model: str) -> RawProposa
     ):
         cadence_minutes = None
 
+    signal_raw = data.get("signal")
+    signal = signal_raw if rule == RULE_SIGNAL_SPEC and isinstance(signal_raw, dict) else None
+
     return RawProposal(
         item_id=item.item_id,
         is_market_effect=data.get("is_market_effect") is True,
@@ -369,6 +434,9 @@ def parse_proposal(item: LiteratureItem, content: str, model: str) -> RawProposa
         thesis=_clean(data.get("thesis"), 3000),
         model=model,
         corroboration=_clean(data.get("corroboration"), 600),
+        signal=signal,
+        select=_clean(data.get("select"), 20).lower() if signal is not None else "",
+        rebalance=_clean(data.get("rebalance"), 20).lower() if signal is not None else "",
     )
 
 
@@ -406,6 +474,7 @@ def known_rules() -> Sequence[str]:
 
 __all__ = [
     "MAX_ABSTRACT_CHARS",
+    "PROPOSAL_SELECTIONS",
     "PROPOSER_PROMPT_VERSION",
     "PROPOSER_SYSTEM_PROMPT",
     "CompletionClient",
