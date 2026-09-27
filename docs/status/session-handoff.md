@@ -69,7 +69,16 @@ market noise cancels) and prints the `shrap-strategy-stage` commands for a swap
 that clears 1 SE over 60+ shared sessions. It never moves anything, and a killed
 winner is reported as a protocol ruling, because `killed` is terminal. **The
 third account stays empty until the ledger shows something worth trying**
-(Mike, 2026-09-23). **Still to come:** the Hypothesis Generator emitting specs.
+(Mike, 2026-09-23). **The Hypothesis Generator writes specs as of #284.** On
+44 real items it proposed 1 (a former gap), and 17 of its 18 gaps need data the
+firm lacks. **The funnel's constraint is now the corpus:** arXiv q-fin rarely
+publishes an equity anomaly that is a formula over prices and filings. The
+classic anomaly literature the first 13 specs came from is never ingested.
+
+**All six factory cards shipped and deployed 2026-09-27 (#277–#284).** The
+weekly `sec-facts-refresh` is live. `shrap-shadow-ledger rotation` has its
+first settled sessions after Monday's close, and needs 60 before it will
+recommend anything.
 
 **Deployed 2026-09-27 (Sunday, market closed), `main` at #279.** All 26
 app services rebuilt and `--force-recreate`d, each container verified on its
