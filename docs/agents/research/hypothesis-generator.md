@@ -214,7 +214,9 @@ the engine cannot disagree about what is well-formed. Three rules keep this from
 becoming a search:
 
 1. **Identity is the formula's shape.** Lookbacks, windows and constants are
-   excluded, so RSI(2) below 10 and RSI(3) below 20 are one hypothesis.
+   excluded, so RSI(2) below 10 and RSI(3) below 20 are one hypothesis. A
+   leading negation folds into the selection, because `top` of `-x` is `bottom`
+   of `x`.
 2. **A spec that equals a named rule answers to that rule.** Momentum written as
    `top:return` is refused as already held, in both directions.
 3. **A formula may not approximate a missing input.** An effect needing order
@@ -222,6 +224,13 @@ becoming a search:
 
 A spec that reads market cap or a filed figure registers over the operating
 companies only, because that set is also its benchmark (#281).
+
+**The model is not stable on a formula's direction (measured 2026-09-27).** One
+paper, three runs at temperature 0.2: no proposal, then "hold the smallest
+movers", then "hold the largest movers". Both formulas parse and are opposite
+strategies. Whichever lands first is registered, and the identity check then
+refuses the other. Until proposals are checked for self-consistency, read HG
+spec proposals rather than trust them.
 
 Ranked by how many **distinct** papers cited each gap, so the build order comes
 from the field rather than from whoever is at the keyboard.
