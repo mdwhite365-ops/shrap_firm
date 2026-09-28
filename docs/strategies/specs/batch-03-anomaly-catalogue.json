@@ -1,0 +1,127 @@
+[
+  {
+    "name": "Assets-to-market (top 10 by total assets / market cap, monthly)",
+    "thesis": "Firms with high total assets relative to market value earn higher subsequent returns (Fama & French 1992, Journal of Finance), a value measure that uses the whole balance sheet rather than book equity. Chen & Zimmermann's Open Source Asset Pricing catalogue (signal AM) replicates it with t = 5.69. Total assets is the latest instant filed with the SEC; market cap is close x filed shares, both point in time.",
+    "kill_criteria": [
+      "it selects the same names as book-to-market (batch 2) and is that strategy again with leverage added, so the two results are one draw, not two",
+      "the top ten by assets-to-market are the most levered balance sheets in the universe, and the result is a leverage bet that tracks credit conditions rather than value"
+    ],
+    "universe": "equities",
+    "params": {
+      "signal": {"op": "div", "args": [{"feature": "fundamental", "metric": "total_assets"}, {"feature": "market_cap"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Low book leverage (bottom 10 by total assets / book equity, monthly)",
+    "thesis": "Firms with lower book leverage, total assets over book equity, earn higher subsequent returns once market leverage is held apart (Fama & French 1992, Journal of Finance; catalogue signal BookLeverage, sign negative, t = 5.34). The published equity adds deferred taxes and preferred stock to shareholder equity; here it is filed stockholders' equity alone, which is the catalogue's first-choice definition.",
+    "kill_criteria": [
+      "negative book equity makes the ratio negative and sorts a distressed firm as the least levered, so any name the book holds with negative equity invalidates the result",
+      "the effect is the mirror of the assets-to-market spec and moves with it, making the pair one hypothesis measured twice"
+    ],
+    "universe": "equities",
+    "params": {
+      "signal": {"op": "div", "args": [{"feature": "fundamental", "metric": "total_assets"}, {"feature": "fundamental", "metric": "stockholders_equity"}]},
+      "select": "bottom", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Market leverage (top 10 by total liabilities / market cap, monthly)",
+    "thesis": "Firms with high total liabilities relative to market equity earn higher subsequent returns beyond what beta explains (Bhandari 1988, Journal of Finance; catalogue signal Leverage, t = 3.93). The firm does not store total liabilities, so it is taken as total assets minus stockholders' equity, the balance-sheet identity; this counts minority interest as a liability, which is the one deviation.",
+    "kill_criteria": [
+      "the most levered names are banks-adjacent and utilities, so the result is a rate-sensitivity bet that turns with the yield curve rather than a leverage premium",
+      "it holds nearly the same names as assets-to-market, since both divide a balance-sheet total by market cap"
+    ],
+    "universe": "equities",
+    "params": {
+      "signal": {"op": "div", "args": [
+        {"op": "sub", "args": [{"feature": "fundamental", "metric": "total_assets"}, {"feature": "fundamental", "metric": "stockholders_equity"}]},
+        {"feature": "market_cap"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Cash flow to price (top 10 by operating cash flow / market cap, monthly)",
+    "thesis": "Firms with high operating cash flow relative to market value outperform, and cash flow is a cleaner value signal than earnings because accruals do not inflate it (Desai, Rajgopal & Venkatachalam 2004, The Accounting Review; catalogue signal cfp, t = 2.77). Operating cash flow is the latest annual figure filed with the SEC.",
+    "kill_criteria": [
+      "it selects the same names as earnings yield (batch 2), which failed with IR -0.57, and fails with it for the same reason",
+      "the cash-rich top ten are mature mega-caps whose run is the index's run, so the active return is near zero across folds"
+    ],
+    "universe": "equities",
+    "params": {
+      "signal": {"op": "div", "args": [{"feature": "fundamental", "metric": "operating_cash_flow"}, {"feature": "market_cap"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Book equity growth (bottom 10 by year-on-year growth, monthly)",
+    "thesis": "Firms whose book equity grows slowest subsequently outperform those whose equity grows fastest, the equity-side counterpart of the asset-growth effect (Lockwood & Prombutr 2010, Journal of Financial Research; catalogue signal ChEQ, sign negative, t = 5.38). The paper includes a firm only when book equity is positive in both years; the growth feature drops a non-positive prior year, but a firm whose equity turned negative this year is still ranked, which is the deviation.",
+    "kill_criteria": [
+      "it holds the same names as asset growth (batch 2) because equity and assets grow together, so the two are one investment-factor draw",
+      "the slowest equity growers are firms buying back stock heavily, and the result is a buyback effect rather than an investment one"
+    ],
+    "universe": "equities",
+    "params": {
+      "signal": {"feature": "fundamental_growth", "metric": "stockholders_equity"},
+      "select": "bottom", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Operating leverage (top 10 by operating costs / total assets, monthly)",
+    "thesis": "Firms with high operating costs relative to assets carry more operating leverage and earn higher returns as compensation for that risk (Novy-Marx 2011, Review of Finance; catalogue signal OPLeverage, t = 3.38). The paper uses cost of goods sold plus SG&A. The firm stores neither, so costs are taken as revenue minus operating income, which also counts depreciation and R&D; that is the deviation, and it tilts the score toward R&D-heavy firms.",
+    "kill_criteria": [
+      "the substitute cost measure makes this an R&D-intensity bet in disguise, and it tracks the R&D spec (batch 2) rather than operating leverage",
+      "the high-cost names are low-margin retailers and airlines whose returns follow consumer demand, a cyclical bet with one good fold"
+    ],
+    "universe": "equities",
+    "params": {
+      "signal": {"op": "div", "args": [
+        {"op": "sub", "args": [{"feature": "fundamental", "metric": "revenue"}, {"feature": "fundamental", "metric": "operating_income"}]},
+        {"feature": "fundamental", "metric": "total_assets"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Change in asset turnover (top 10, monthly)",
+    "thesis": "An improvement in asset turnover, sales per dollar of assets, predicts higher subsequent returns because the market underreacts to changes in operating efficiency (Soliman 2008, The Accounting Review; catalogue signal ChAssetTurnover, t = 5.12). The change is approximated as revenue growth minus asset growth, which equals the proportional change in turnover to first order; the paper uses the level difference, which is the deviation.",
+    "kill_criteria": [
+      "revenue growth dominates the difference and the book is a sales-growth bet, which the literature finds overpriced rather than underpriced",
+      "a single acquisition moves both revenue and assets in one year and puts the acquirer at the top for reasons unrelated to efficiency"
+    ],
+    "universe": "equities",
+    "params": {
+      "signal": {"op": "sub", "args": [
+        {"feature": "fundamental_growth", "metric": "revenue"},
+        {"feature": "fundamental_growth", "metric": "total_assets"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Percent accruals (bottom 10 by (net income - operating cash flow) / |net income|, monthly)",
+    "thesis": "Scaling accruals by the size of earnings rather than by assets identifies the firms whose profits are mostly accounting, and low percent-accrual firms outperform high ones (Hafzalla, Lundholm & Van Winkle 2011, The Accounting Review; catalogue signal PctAcc, sign negative, t = 3.29). Unlike the assets-scaled accrual spec (batch 2), this ranks on how much of each firm's own earnings is accrual.",
+    "kill_criteria": [
+      "near-zero net income makes the ratio explode, so one firm with tiny earnings dominates each rebalance and the result is that name's return",
+      "it selects the same names as the assets-scaled accrual spec, which scored IR 0.11, and adds nothing to it"
+    ],
+    "universe": "equities",
+    "params": {
+      "signal": {"op": "div", "args": [
+        {"op": "sub", "args": [{"feature": "fundamental", "metric": "net_income"}, {"feature": "fundamental", "metric": "operating_cash_flow"}]},
+        {"op": "abs", "of": {"feature": "fundamental", "metric": "net_income"}}]},
+      "select": "bottom", "top_n": 10, "rebalance": "monthly"
+    }
+  },
+  {
+    "name": "Return on assets (top 10 by net income / total assets, monthly)",
+    "thesis": "More profitable firms, by return on assets, earn higher subsequent returns, and the effect is strongest right after the figure is reported (Balakrishnan, Bartov & Faurel 2010, Journal of Accounting and Economics; catalogue signal roaq, t = 6.45). The paper uses quarterly income over lagged quarterly assets. The firm stores annual figures only, so this is annual net income over current total assets, a slower and staler version of the signal; that is the main deviation.",
+    "kill_criteria": [
+      "the annual figure is up to a year old by the time it ranks, and the published effect is concentrated in the weeks after a quarterly report, so the edge is gone in the annual version",
+      "it selects the same profitable mega-caps as gross profitability (batch 2) and is that strategy with a noisier numerator"
+    ],
+    "universe": "equities",
+    "params": {
+      "signal": {"op": "div", "args": [{"feature": "fundamental", "metric": "net_income"}, {"feature": "fundamental", "metric": "total_assets"}]},
+      "select": "top", "top_n": 10, "rebalance": "monthly"
+    }
+  }
+]
