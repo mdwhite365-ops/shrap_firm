@@ -1,0 +1,3 @@
+### A split restates the whole history (#290)
+
+ETHA's 1-for-3 adjustment (2026-10-02 to 10-06) left the table showing a 198% one-day "return" on 09-30, because the daily sweep re-fetched only five days of a history that Alpaca had rescaled in full. The MACD account traded on it (bought, stopped out, bought back), and the live benchmark read four points high. ETHA was repaired by hand. The sweep now compares settled closes before and after it writes, and re-fetches a ticker's whole history when one moved. The same mechanism had left 20 of 50 names up to 1.18% off for dividends, so the deploy re-fetches the launch list once.

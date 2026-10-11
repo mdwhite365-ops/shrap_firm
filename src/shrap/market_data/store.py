@@ -113,6 +113,16 @@ WHERE source = $1
 GROUP BY ticker
 """.strip()
 
+# Stored closes over the sweep's restate window, read before and after the
+# upsert so a restated history is visible as a change to a settled day.
+SELECT_CLOSES_SINCE_SQL = """
+SELECT ticker, session_date, adjustment, close
+FROM market_data.daily_bars
+WHERE source = $1
+  AND session_date >= $2
+  AND ticker = ANY($3::text[])
+""".strip()
+
 UPSERT_DAILY_BAR_SQL = """
 INSERT INTO market_data.daily_bars (
     ticker, session_date, open, high, low, close, volume,
@@ -388,6 +398,22 @@ class PostgresDailyBarStore:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(SELECT_LAST_SESSION_BY_TICKER_SQL, source)
         return {str(row["ticker"]): cast(date, row["last_session"]) for row in rows}
+
+    async def closes_since(
+        self, tickers: Sequence[str], since: date, source: str = DEFAULT_BAR_SOURCE
+    ) -> dict[tuple[str, date, str], float]:
+        """Stored close per ``(ticker, session_date, adjustment)`` from ``since`` on."""
+
+        if not tickers:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(SELECT_CLOSES_SINCE_SQL, source, since, list(tickers))
+        return {
+            (str(r["ticker"]), cast(date, r["session_date"]), str(r["adjustment"])): float(
+                r["close"]
+            )
+            for r in rows
+        }
 
     async def upsert_bars(self, bars: Sequence[DailyBarRow]) -> int:
         """Upsert ``bars`` one row at a time; returns the count handed in.
