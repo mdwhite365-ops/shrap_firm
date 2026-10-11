@@ -30,6 +30,20 @@ written. ``restate_days`` is the width of that correction window; the upsert is
 idempotent and refreshing a handful of rows per ticker is cheaper than being
 subtly wrong about a split.
 
+**But a split restates the whole history, not the last few days (2026-10-11).**
+With ``adjustment=all``, a split or a dividend rescales every earlier bar. The
+restate window rewrote the days inside it and left everything older on the old
+basis. When ETHA was split 1-for-3 (between 2026-10-02 and 10-06), the table
+showed it "rising 198%" on 2026-09-30. The MACD account bought it on that
+signal, the stop-loss sold it, and MACD bought it back. The equal-weight
+benchmark that day was overstated by about four points. So the sweep reads the
+window's stored closes before and after it writes. A settled day whose close
+moved means Alpaca has re-adjusted that ticker, and the ticker's whole history is
+re-fetched in one request. The newest stored day is never compared, because it
+can be a partial mid-session bar that legitimately changes. The tolerance is
+small enough to catch a dividend, which restates history the same way at a
+smaller scale.
+
 **What it deliberately is not.** There is no market-calendar awareness. A sweep
 on a Sunday asks Alpaca for a window containing no sessions and writes nothing,
 which costs one HTTP call per ticker and no correctness. Adding calendar logic
@@ -120,6 +134,37 @@ def plan_windows(
     )
 
 
+# A settled close that moves by more than this between two reads has been
+# restated. 0.1% catches a typical dividend adjustment; float noise in Alpaca's
+# adjusted prices is orders of magnitude smaller. A false positive costs one
+# request for one ticker, a miss leaves a permanent fake return in the panel.
+RESTATE_TOLERANCE = 0.001
+
+
+def restated_tickers(
+    before: Mapping[tuple[str, date, str], float],
+    after: Mapping[tuple[str, date, str], float],
+    last_sessions: Mapping[str, date],
+    *,
+    tolerance: float = RESTATE_TOLERANCE,
+) -> tuple[str, ...]:
+    """Tickers whose already-settled closes changed during a sweep.
+
+    Only days strictly before the ticker's pre-sweep newest session count: that
+    newest bar can be a partial mid-session bar and is expected to change.
+    """
+
+    out: set[str] = set()
+    for key, old in before.items():
+        ticker, day, _ = key
+        last = last_sessions.get(ticker)
+        if last is None or day >= last or key not in after or old == 0.0:
+            continue
+        if abs(after[key] / old - 1.0) > tolerance:
+            out.add(ticker)
+    return tuple(sorted(out))
+
+
 def launch_list_tickers() -> tuple[str, ...]:
     """The Curator's Tier-3 names, the same source ``--launch-list`` resolves.
 
@@ -160,6 +205,21 @@ async def run_sweep(
         bootstrap_days=bootstrap_days,
     )
 
+    held = [t for t in tickers if t in last_sessions]
+    window_start = min(
+        (
+            date.fromisoformat(p.start_day)
+            for p in plans
+            if any(t in last_sessions for t in p.tickers)
+        ),
+        default=None,
+    )
+    before = (
+        await store.closes_since(held, window_start)
+        if window_start is not None and not dry_run
+        else {}
+    )
+
     total_fetched = 0
     total_upserted = 0
     for plan in plans:
@@ -183,6 +243,32 @@ async def run_sweep(
         )
         total_fetched += summary.rows_fetched
         total_upserted += summary.rows_upserted
+
+    if before and window_start is not None:
+        after = await store.closes_since(held, window_start)
+        for ticker in restated_tickers(before, after, last_sessions):
+            # The whole stored history, in one request: the same span a new
+            # ticker is bootstrapped over.
+            start = (today - timedelta(days=bootstrap_days)).isoformat()
+            log.warning(
+                "market_data_trigger.history_restated",
+                ticker=ticker,
+                refetch_from=start,
+                reason="a settled close changed; Alpaca re-adjusted this ticker's history",
+            )
+            summary = await backfill_tickers(
+                store,
+                client,
+                http,
+                [ticker],
+                start,
+                today.isoformat(),
+                dry_run=False,
+                request_limit=request_limit,
+                inter_ticker_delay_seconds=inter_ticker_delay_seconds,
+            )
+            total_fetched += summary.rows_fetched
+            total_upserted += summary.rows_upserted
 
     return BackfillSummary(
         tickers=len(tickers),
