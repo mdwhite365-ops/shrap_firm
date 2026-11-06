@@ -1,4 +1,4 @@
-.PHONY: install test lint fmt typecheck all deploy-drift doc-drift changelog
+.PHONY: install test lint fmt typecheck all deploy-drift doc-drift changelog firm-health
 
 # `.[dev]` is tooling only and cannot collect the test suite: tests import agent
 # modules directly, so 13 files failed on a clean environment while a stale
@@ -39,3 +39,9 @@ doc-drift:
 # anchor made every pair of open PRs conflict (see that directory's README).
 changelog:
 	@./scripts/changelog.sh
+
+# Read-only cross-component health report: latched switches, refused buys,
+# exposure vs target, days since fill, regime flapping, live vs shadow, input
+# freshness. Exit 2 on ALERT, 1 on WARN. See docs/runbooks/firm-health.md.
+firm-health:
+	@./scripts/firm-health.sh
