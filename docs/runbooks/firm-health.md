@@ -14,11 +14,18 @@ outside.
 
 ## Running it
 
+On the Dell, run the script directly. TrueNAS SCALE ships without `make`, and
+an interactive zsh treats a pasted `#` as a command unless
+`setopt interactivecomments` is on, so the lines below carry no comments.
+
 ```bash
 cd /mnt/Archive/shrap/shrap_firm
-make firm-health
-scripts/firm-health.sh -v window_days=20 -v shadow_gap_pts=5   # override thresholds
+./scripts/firm-health.sh
+./scripts/firm-health.sh -v window_days=20 -v shadow_gap_pts=5
 ```
+
+The second line overrides thresholds. `make firm-health` does the same thing on
+a machine that has `make`.
 
 Exit code is 2 if any row is `ALERT`, 1 if any is `WARN`, 0 otherwise, so a
 scheduler or an overseer agent can branch on it without parsing the table. It
