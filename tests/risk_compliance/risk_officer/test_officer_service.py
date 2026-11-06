@@ -23,9 +23,12 @@ from shrap.risk_compliance.risk_officer.officer import (
     REASON_RISK_STATE_UNAVAILABLE,
     REASON_UNKNOWN_STRATEGY,
     RiskOfficer,
+    expire_daily_loss,
 )
 from shrap.risk_compliance.risk_officer.switch_store import SwitchStateUnavailable
 from shrap.risk_compliance.risk_officer.switches import (
+    ACTOR_HUMAN,
+    ACTOR_MONITOR,
     SWITCH_DAILY_LOSS,
     SwitchBoard,
     SwitchState,
@@ -492,6 +495,118 @@ async def test_a_repeated_breach_does_not_write_a_second_transition() -> None:
 
     assert second.transitions == ()
     assert len(store.switches) == 1
+
+
+def _latched(at: datetime, actor: str = ACTOR_MONITOR) -> FakeSwitchStore:
+    return FakeSwitchStore(
+        SwitchBoard(
+            [SwitchState(name=SWITCH_DAILY_LOSS, active=True, actor=actor, reason="r", at=at)]
+        )
+    )
+
+
+async def test_a_daily_loss_switch_from_an_earlier_session_clears() -> None:
+    """The October latch: tripped once, then halted every buy for eight sessions
+    because nothing ever cleared it. A daily limit expires with the day."""
+
+    store = FakeStore(equity=(10_000.0, 10_010.0))
+    switches = _latched(NOW - timedelta(days=8))
+    officer = _officer(store, switches)
+
+    result = await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW)
+
+    cleared = [t for t in result.transitions if t.state.name == SWITCH_DAILY_LOSS]
+    assert len(cleared) == 1 and not cleared[0].was_set
+    assert not switches._board.is_active(SWITCH_DAILY_LOSS)
+    assert store.switches and not store.switches[-1].active  # audit row written
+    assert switches.saved and not switches.saved[-1].active  # Redis updated
+
+
+async def test_the_clear_lets_buys_through_again() -> None:
+    switches = _latched(NOW - timedelta(days=1))
+    officer = _officer(FakeStore(equity=(10_000.0, 10_010.0)), switches)
+
+    await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW)
+    assessment = await _assess(officer, quantity=4, side="buy")
+
+    assert assessment.approved
+
+
+async def test_a_daily_loss_switch_set_today_stays_set() -> None:
+    switches = _latched(NOW - timedelta(hours=1))
+    officer = _officer(FakeStore(equity=(10_000.0, 10_010.0)), switches)
+
+    result = await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW)
+
+    assert result.transitions == ()
+    assert switches._board.is_active(SWITCH_DAILY_LOSS)
+
+
+async def test_a_breach_that_is_still_true_today_resets_the_switch() -> None:
+    """Clear first, then measure: yesterday's switch goes, today's breach sets a
+    fresh one, and both transitions are on the record."""
+
+    store = FakeStore(equity=(10_000.0, 9_700.0))
+    switches = _latched(NOW - timedelta(days=1))
+    officer = _officer(store, switches)
+
+    result = await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW)
+
+    kinds = [t.was_set for t in result.transitions if t.state.name == SWITCH_DAILY_LOSS]
+    assert kinds == [False, True]
+    assert switches._board.is_active(SWITCH_DAILY_LOSS)
+
+
+async def test_a_human_set_daily_loss_switch_is_never_auto_cleared() -> None:
+    """A switch Mike set by hand is a ruling, not a measurement."""
+
+    switches = _latched(NOW - timedelta(days=3), actor=ACTOR_HUMAN)
+    officer = _officer(FakeStore(equity=(10_000.0, 10_010.0)), switches)
+
+    result = await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW)
+
+    assert result.transitions == ()
+    assert switches._board.is_active(SWITCH_DAILY_LOSS)
+
+
+async def test_a_strategy_switch_is_not_touched_by_the_daily_clear() -> None:
+    """Drawdown switches never auto-clear; this card must not change that."""
+
+    board = SwitchBoard(
+        [
+            SwitchState(
+                name=strategy_switch(STRATEGY),
+                active=True,
+                actor=ACTOR_MONITOR,
+                reason="r",
+                at=NOW - timedelta(days=5),
+            )
+        ]
+    )
+    switches = FakeSwitchStore(board)
+    officer = _officer(FakeStore(equity=(10_000.0, 10_010.0)), switches)
+
+    await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW)
+
+    assert switches._board.is_active(strategy_switch(STRATEGY))
+
+
+def test_expire_daily_loss_treats_a_naive_timestamp_as_utc() -> None:
+    board = SwitchBoard(
+        [
+            SwitchState(
+                name=SWITCH_DAILY_LOSS,
+                active=True,
+                actor=ACTOR_MONITOR,
+                reason="r",
+                at=datetime(2026, 7, 28, 19, 0),
+            )
+        ]
+    )
+
+    transition = expire_daily_loss(board, NOW.date(), NOW)
+
+    assert transition is not None and not transition.was_set
 
 
 async def test_the_sweep_does_nothing_when_switch_state_is_unreadable() -> None:

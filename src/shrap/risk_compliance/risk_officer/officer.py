@@ -154,6 +154,36 @@ class SweepResult:
         return tuple(o for o in self.observations if o.is_breach)
 
 
+def expire_daily_loss(board: SwitchBoard, today: date, now: datetime) -> SwitchTransition | None:
+    """Clear a daily-loss switch the monitor set in an earlier session.
+
+    The limit is a *daily* limit: it measures the loss since the session's first
+    reading (:func:`~shrap.risk_compliance.risk_officer.monitor.session_loss`),
+    so a breach yesterday says nothing about today. Leaving it set past the
+    boundary turns a one-day brake into an indefinite halt that nobody decided.
+
+    Sessions are UTC dates, the same convention :meth:`RiskOfficer.sweep` and
+    ``session_loss`` already use. 00:00 UTC falls after the 16:00 New York close
+    in both EST and EDT, so the boundary never splits a trading session.
+
+    Only a switch the monitor itself set is cleared. If a human set
+    ``daily_loss`` by hand, that is a ruling, and a ruling is cleared by a human.
+    """
+
+    state = board.states.get(SWITCH_DAILY_LOSS)
+    if state is None or not state.active or state.actor != ACTOR_MONITOR:
+        return None
+    set_on = (state.at if state.at.tzinfo else state.at.replace(tzinfo=UTC)).astimezone(UTC).date()
+    if set_on >= today:
+        return None
+    return board.clear(
+        SWITCH_DAILY_LOSS,
+        actor=ACTOR_MONITOR,
+        reason=f"session boundary: set {set_on.isoformat()}, cleared for {today.isoformat()}",
+        at=now,
+    )
+
+
 class RiskOfficer:
     """Portfolio risk on the order path and on the heartbeat."""
 
@@ -490,8 +520,17 @@ class RiskOfficer:
         strategy switch: a drawdown limit that un-breached because the account
         bounced is not evidence the strategy is sound, and auto-clearing would
         let a book oscillate across the limit unattended. Only the daily-loss
-        switch clears on its own, at the session boundary — see
-        :meth:`clear_daily_loss`.
+        switch clears on its own, at the session boundary, and it is this sweep
+        that clears it: see :func:`expire_daily_loss`.
+
+        **Until this card, nothing did.** The docstring above promised a clear at
+        the session boundary and :meth:`clear_daily_loss` existed, but no caller
+        ever invoked it. The switch tripped in late October and latched, halting
+        every new buy on all three accounts for over a week while sells kept
+        flowing, so each rebalance became sell-only and the books drained to
+        ~30% invested. No component noticed. The clear now runs first in every
+        sweep, so a breach that is still true today re-sets the switch in the
+        same pass, with its own audit row.
         """
 
         moment = now or datetime.now(UTC)
@@ -504,6 +543,10 @@ class RiskOfficer:
         except SwitchStateUnavailable:
             log.error("risk_officer.sweep_switches_unavailable", exc_info=True)
             return SweepResult()
+
+        expired = expire_daily_loss(board, today, moment)
+        if expired is not None:
+            transitions.append(expired)
 
         for strategy_id, account_id in assignments:
             try:

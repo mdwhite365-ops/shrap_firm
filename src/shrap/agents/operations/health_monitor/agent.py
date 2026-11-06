@@ -21,12 +21,20 @@ from shrap.agents.operations.health_monitor.freshness import (
     is_freshness_check,
 )
 from shrap.agents.operations.health_monitor.state import HealthState
+from shrap.agents.operations.health_monitor.switch_latch import (
+    SwitchLatchSweeper,
+    is_latch_check,
+)
+from shrap.agents.operations.health_monitor.switch_latch import (
+    anomaly_payload as latch_anomaly_payload,
+)
 from shrap.common.db import create_asyncpg_pool
 from shrap.common.envelope import Envelope
 from shrap.common.logging import configure_logging
 from shrap.common.prom_client import PrometheusClient
 from shrap.common.redis_client import RedisStreamClient
 from shrap.operations.staleness import PostgresStalenessStore
+from shrap.operations.switch_latch import PostgresSwitchLatchStore
 
 if TYPE_CHECKING:
     from shrap.agents.operations.health_monitor.config import Settings
@@ -81,6 +89,7 @@ async def tick_once(
     settings: Settings,
     freshness: FreshnessSweeper | None = None,
     now: datetime | None = None,
+    latch: SwitchLatchSweeper | None = None,
 ) -> list[CheckResult]:
     """Run one tick: all checks, publish tick envelope, dispatch any transitions.
 
@@ -90,6 +99,10 @@ async def tick_once(
     cadence and are simply absent from ``results`` on ticks where they are not
     due — the state machine keys on check name, so an absent check holds its
     previous verdict rather than being read as recovered.
+
+    Latched-switch checks (``shrap.operations.switch_latch``) work the same way
+    on their own cadence: they ask whether the firm is *allowed* to trade, which
+    no substrate or freshness check can see.
     """
     infra_results = list(await asyncio.gather(*(_run_check(fn, prom) for fn in ALL_CHECKS)))
     results = list(infra_results)
@@ -97,6 +110,10 @@ async def tick_once(
     if freshness is not None and freshness.due(time.monotonic()):
         results.extend(
             await freshness.run(now if now is not None else datetime.now(UTC), time.monotonic())
+        )
+    if latch is not None and latch.due(time.monotonic()):
+        results.extend(
+            await latch.run(now if now is not None else datetime.now(UTC), time.monotonic())
         )
 
     tick_payload = {
@@ -142,6 +159,15 @@ async def tick_once(
                     STREAM_HEALTH_ANOMALY,
                     settings,
                     anomaly_payload(transition, verdict, settings.service_name),
+                )
+        if latch is not None and is_latch_check(check.name):
+            latch_verdict = latch.verdict_for(check.name)
+            if latch_verdict is not None:
+                await _publish(
+                    redis,
+                    STREAM_HEALTH_ANOMALY,
+                    settings,
+                    latch_anomaly_payload(transition, latch_verdict, settings.service_name),
                 )
         await alerts.dispatch(
             transition,
@@ -189,6 +215,7 @@ async def run(settings: Settings) -> None:
     # is bad, losing the whole monitor is worse.
     pool: Any | None = None
     freshness: FreshnessSweeper | None = None
+    latch: SwitchLatchSweeper | None = None
     if settings.freshness_enabled:
         try:
             pool = await create_asyncpg_pool(settings.postgres_dsn_value())
@@ -201,6 +228,11 @@ async def run(settings: Settings) -> None:
                 interval_seconds=settings.freshness_interval_seconds,
                 targets=[t.name for t in freshness.targets],
             )
+            latch = SwitchLatchSweeper(
+                store=PostgresSwitchLatchStore(pool),
+                interval_seconds=settings.freshness_interval_seconds,
+            )
+            log.info("health_monitor.switch_latch_enabled")
         except Exception:
             log.exception("health_monitor.freshness_pool_failed")
     else:
@@ -220,7 +252,9 @@ async def run(settings: Settings) -> None:
         try:
             while not stop.is_set():
                 try:
-                    await tick_once(prom, redis, state, http_client, settings, freshness)
+                    await tick_once(
+                        prom, redis, state, http_client, settings, freshness, latch=latch
+                    )
                 except Exception:
                     log.exception("health_monitor.tick_failed")
                 try:
