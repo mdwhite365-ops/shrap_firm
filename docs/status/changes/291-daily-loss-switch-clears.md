@@ -1,4 +1,4 @@
-### The daily-loss switch clears at the session boundary; latches now alert (#)
+### The daily-loss switch clears at the session boundary; latches now alert (#291)
 
 **The firm was halted for over a week and nothing noticed.** The Risk
 Officer's `daily_loss` switch tripped in late October on a 2% session loss and
