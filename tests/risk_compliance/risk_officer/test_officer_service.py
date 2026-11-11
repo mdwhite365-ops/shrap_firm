@@ -591,6 +591,75 @@ async def test_a_strategy_switch_is_not_touched_by_the_daily_clear() -> None:
     assert switches._board.is_active(strategy_switch(STRATEGY))
 
 
+def _halved_then_recovered() -> FakeStore:
+    """An account that lost 53.9% and has since made a new high."""
+
+    return FakeStore(equity=(10_000.0, 12_000.0, 5_536.0, 12_500.0, 12_600.0))
+
+
+async def test_a_strategy_switch_a_human_clears_stays_cleared() -> None:
+    """The drawdown is the worst in the account's history, so it is as true
+    after the clear as before it. Measured over the whole lookback, the next
+    sweep set the switch again and the clear had released nothing."""
+
+    store = _halved_then_recovered()
+    switches = FakeSwitchStore()
+    officer = _officer(store, switches)
+
+    await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW - timedelta(minutes=10))
+    assert switches._board.is_active(strategy_switch(STRATEGY))
+
+    await officer.clear_switch(
+        strategy_switch(STRATEGY),
+        actor=ACTOR_HUMAN,
+        reason="reviewed",
+        now=NOW - timedelta(minutes=8),
+    )
+    result = await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW)
+
+    assert result.transitions == ()
+    assert not switches._board.is_active(strategy_switch(STRATEGY))
+    assert (await _assess(officer, quantity=4, side="buy")).approved
+
+
+async def test_a_cleared_strategy_switch_sets_again_on_a_new_drawdown() -> None:
+    """The clear restarts the measurement at the clear. A further 25% from the
+    equity it had then is a new breach, with its own audit row."""
+
+    store = FakeStore(equity=(10_000.0, 5_000.0, 12_000.0, 12_000.0, 8_900.0))
+    cleared_at = NOW - timedelta(minutes=16)  # between the 5,000 and 12,000 readings
+    board = SwitchBoard(
+        [
+            SwitchState(
+                name=strategy_switch(STRATEGY),
+                active=False,
+                actor=ACTOR_HUMAN,
+                reason="reviewed",
+                at=cleared_at,
+            )
+        ]
+    )
+    officer = _officer(store, FakeSwitchStore(board))
+
+    result = await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW)
+
+    # The fake's readings are minutes apart, so the same fall also trips the
+    # daily limit. Only the strategy switch is this test's subject.
+    reset = [t for t in result.transitions if t.state.name == strategy_switch(STRATEGY)]
+    assert len(reset) == 1 and reset[0].was_set
+    assert "25.83%" in reset[0].state.reason
+
+
+async def test_a_strategy_never_switched_is_measured_over_the_whole_lookback() -> None:
+    """No clear, no release: the first breach still sets the switch."""
+
+    officer = _officer(_halved_then_recovered(), FakeSwitchStore())
+
+    result = await officer.sweep([(STRATEGY, ACCOUNT)], now=NOW)
+
+    assert any(t.state.name == strategy_switch(STRATEGY) for t in result.transitions)
+
+
 def test_expire_daily_loss_treats_a_naive_timestamp_as_utc() -> None:
     board = SwitchBoard(
         [

@@ -157,6 +157,50 @@ def test_a_recovering_account_keeps_its_worst_drawdown() -> None:
     assert peak_drawdown(_curve(10_000.0, 6_000.0, 11_000.0)) == 0.4
 
 
+def test_a_drawdown_before_the_release_is_not_measured_again() -> None:
+    """Halved, recovered, cleared by a human. Over the whole series the reading
+    is still 53.9% and always will be; from the clear it is the dip since."""
+
+    points = _curve(10_000.0, 12_000.0, 5_536.0, 12_500.0, 12_400.0)
+    released = points[3].at
+
+    whole = check_strategy_drawdown(points, LIMITS, strategy_id="s")
+    since = check_strategy_drawdown(points, LIMITS, strategy_id="s", since=released)
+
+    assert whole is not None and whole.severity == SEVERITY_BREACH
+    assert since is not None and since.severity == SEVERITY_INFO
+    assert since.observed == pytest.approx(100.0 / 12_500.0)
+
+
+def test_a_fresh_drawdown_after_the_release_still_breaches() -> None:
+    """The release restarts the limit. It does not remove it."""
+
+    points = _curve(10_000.0, 5_000.0, 12_000.0, 12_000.0, 8_900.0)
+
+    observation = check_strategy_drawdown(points, LIMITS, strategy_id="s", since=points[2].at)
+
+    assert observation is not None and observation.severity == SEVERITY_BREACH
+
+
+def test_one_reading_since_the_release_is_not_a_drawdown() -> None:
+    points = _curve(10_000.0, 5_000.0, 12_000.0)
+
+    assert check_strategy_drawdown(points, LIMITS, strategy_id="s", since=points[2].at) is None
+
+
+def test_a_naive_release_time_is_read_as_utc() -> None:
+    """`risk.kill_switches.at` round-trips through Redis as ISO text, and a
+    naive one compared with an aware reading would raise inside the sweep."""
+
+    points = _curve(10_000.0, 5_000.0, 12_000.0, 11_900.0)
+
+    observation = check_strategy_drawdown(
+        points, LIMITS, strategy_id="s", since=points[2].at.replace(tzinfo=None)
+    )
+
+    assert observation is not None and observation.severity == SEVERITY_INFO
+
+
 def test_a_warning_fires_before_the_halt() -> None:
     """So an account approaching a halt is visible before it halts."""
 

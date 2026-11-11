@@ -184,6 +184,21 @@ def expire_daily_loss(board: SwitchBoard, today: date, now: datetime) -> SwitchT
     )
 
 
+def drawdown_released_at(board: SwitchBoard, strategy_id: str) -> datetime | None:
+    """When this strategy's drawdown switch was last cleared, if it stands cleared.
+
+    The sweep never clears a strategy switch, so an inactive one on the board is
+    a human's clear, and its timestamp is where the next drawdown measurement
+    starts. ``None`` for a switch that is active or has never existed: the whole
+    lookback applies.
+    """
+
+    state = board.states.get(strategy_switch(strategy_id))
+    if state is None or state.active:
+        return None
+    return state.at
+
+
 class RiskOfficer:
     """Portfolio risk on the order path and on the heartbeat."""
 
@@ -523,6 +538,11 @@ class RiskOfficer:
         switch clears on its own, at the session boundary, and it is this sweep
         that clears it: see :func:`expire_daily_loss`.
 
+        A strategy switch is cleared by a human (``shrap-risk-switch clear``),
+        and the clear restarts the drawdown measurement at that moment: see
+        :func:`drawdown_released_at`. Before that it could not be released at
+        all, because the next sweep re-set it from the same history.
+
         **Until this card, nothing did.** The docstring above promised a clear at
         the session boundary and :meth:`clear_daily_loss` existed, but no caller
         ever invoked it. The switch tripped in late October and latched, halting
@@ -575,8 +595,16 @@ class RiskOfficer:
                     if transition is not None:
                         transitions.append(transition)
 
+            # Measured from the last human clear, when there is one. Over the
+            # whole lookback the reading is the worst drawdown the account has
+            # had in a year, which a clear cannot change — so the switch came
+            # straight back on the next pass and the clear released nothing.
             drawdown = check_strategy_drawdown(
-                points, self._limits, strategy_id=strategy_id, account_id=account_id
+                points,
+                self._limits,
+                strategy_id=strategy_id,
+                account_id=account_id,
+                since=drawdown_released_at(board, strategy_id),
             )
             if drawdown is not None:
                 observations.append(drawdown)
@@ -669,4 +697,6 @@ __all__ = [
     "RiskOfficer",
     "StrategyLookup",
     "SweepResult",
+    "drawdown_released_at",
+    "expire_daily_loss",
 ]

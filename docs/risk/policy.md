@@ -224,6 +224,35 @@ its documented current state.
 Every set and clear is written to `risk.kill_switches` append-only with its actor and
 reason, so a flag-only override is still a fully audited one.
 
+**The flag is `shrap-risk-switch`**, run where the Pre-Trade Checker runs so it reads the
+same Redis and Postgres:
+
+```bash
+docker compose exec pre-trade-checker shrap-risk-switch show
+docker compose exec pre-trade-checker shrap-risk-switch clear strategy:<id> --reason "..."
+docker compose exec pre-trade-checker shrap-risk-switch set manual --reason "..."
+```
+
+Until this command existed the sentence above described nothing: `set_switch` and
+`clear_switch` had no caller, so a clear was an `INSERT` and an `HSET` by hand and the
+board's `manual` switch could not be set at all. It stamps `actor=human`, writes Postgres
+before Redis, and takes effect on the next intent with no restart.
+
+**Clearing a strategy switch restarts its drawdown measurement at the clear.** The limit
+reads the worst peak-to-trough in the account's last year, and a clear does not change
+history, so measured over the whole year the next five-minute sweep set the switch
+straight back: a strategy halted once was halted for twelve months whatever anyone ruled.
+From the clear onward the peak is the highest equity seen *since*, so the strategy gets
+the full `max_strategy_drawdown` again from where it stands, and a fresh breach sets the
+switch again with its own audit row. A switch nobody has cleared is still measured over
+the whole lookback.
+
+**Not covered, and it is the same shape:** the equity curve belongs to the *account*, and
+an account is a strategy slot (ADR-0017). A strategy rotated into a slot whose previous
+occupant drew down 25% inherits that reading and is halted on its first sweep.
+`research.strategies` records no assignment time to measure from. Until it does, the
+remedy is the clear above, once, after the rotation.
+
 ## What this policy does not do
 
 - It does not prevent losses. It contains them. A strategy with negative edge loses money
