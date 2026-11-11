@@ -1,6 +1,11 @@
 # Implementation timeline
 
-**Last updated:** 2026-09-23 (`main` at #270; audit PRs #271–#276 open)
+**Last updated:** 2026-11-10 (`main` at #293)
+
+**Since the audit: the strategy factory shipped (#277–#289), and then the firm
+stopped trading for a week without noticing (#291).** Both change the order
+below. See "Landed 2026-09-23 to 2026-11-10" near the end, and
+`docs/status/session-handoff.md` for what is unverified.
 
 **The 2026-09-23 audit (#271–#276) changes no priority, but it answers how
 much research is happening: almost none.** Of 16 strategies ever, 15 were
@@ -421,6 +426,70 @@ since-entry take-profit deliberately unarmed because it fights momentum.
 5. **Intraday trading**, gated on something measuring edge at an intraday grain.
    Wiring the Runner's reader is a one-card change; do it when there is a signal
    worth 78x the decisions, not before.
+
+## Landed 2026-09-23 to 2026-11-10: #277–#293, and what it changed about the plan
+
+**The strategy factory is built.** Six cards, all merged by 2026-09-27:
+
+| card | PR | what it made possible |
+|---|---|---|
+| Held positions resize | #277 | A sizing ruling reaches positions already held, not only new buys |
+| Strategies as specs | #278 | A new strategy is a JSON document, not a class and a PR |
+| Shadow forward test | #279 | Every strategy, killed ones included, is decided and settled daily with no broker |
+| SEC XBRL fundamentals | #280, #282 | Value, profitability and investment factors are computable, point in time, refreshed weekly |
+| First spec batches | #281, #288 | 22 specs committed; the benchmark is the names a strategy can hold |
+| Rotation, and HG writes specs | #283, #284, #286, #289 | The ledger recommends account swaps; the proposer can emit a formula |
+
+**That answers item 1 of the previous list, "feed the funnel", in a way the
+list did not anticipate.** The funnel was fed by going around it: the 22 specs
+came from Mike and from the Chen and Zimmermann catalogue, not from the Tech
+Watcher. On 44 real items the Hypothesis Generator proposed one (#284), and 17
+of its 18 gaps need data the firm does not store. The autonomous loop is still
+close to silent. What changed is that it is no longer the only way in.
+
+**`min_trades` no longer kills (#287, Mike's ruling 2026-09-27).** Under 150
+backtest trades is `hold-for-data`. This was item "Track A, evaluation protocol
+for slow strategies"; the shadow ledger is the protocol.
+
+**Then two faults in the data and control planes, both silent:**
+
+- **A split rescaled a whole history and the sweep re-fetched five days of it
+  (#290).** ETHA showed a 198% one-day return and an account traded on it. The
+  same mechanism had 20 of 50 names up to 1.18% off for dividends.
+- **The `daily_loss` switch latched for over a week (#291)** and the same shape
+  was waiting in the strategy drawdown switch (#293). Both had a release that
+  was documented and never called.
+
+### The next cards, in order (supersedes the list above)
+
+1. **Verify the firm is trading again, on the Dell.** `make firm-health`, then
+   the three checks in the handoff. Nothing below matters if #291 is not
+   deployed. This is an hour, not a card.
+2. **An overseer that runs `make firm-health` every session and is itself
+   checked.** #291 wrote the checklist and said an overseer agent runs it.
+   Until something does, on a schedule, with its own freshness target, the
+   week-long halt can recur in any component the Health Monitor does not
+   already watch.
+3. **Give a drawdown a start time.** An assignment timestamp on
+   `research.strategies`, so a strategy rotated into a slot is measured from
+   its own first day (#293's open item). Needed before the first rotation, and
+   the rotation report cannot recommend one before the second half of December.
+4. **Rule on the stop.** A re-entry cooldown after a stop-out, or no stop on
+   rank-based strategies. Open since 2026-09-23.
+5. **Widen what a spec can read**, in the order the gap rows give: the
+   remaining `capability-gap` items, of which a share-growth feature
+   (`ShareIss1Y`, excluded in #288) is the cheapest named one.
+6. **Ingest the anomaly literature as a source**, if the autonomous loop is to
+   propose anything. #284's finding is that arXiv q-fin rarely publishes an
+   equity anomaly as a formula. Do not build this before deciding whether the
+   catalogue-by-hand route is simply good enough.
+7. **Intraday trading.** Unchanged: gated on something measuring edge at an
+   intraday grain.
+
+**Not on the list, deliberately:** another backtest-side gate, and any search
+for a spec variant with a higher IR. KI-036 still holds. 22 specs against a
+standard error of ±0.47 is a multiple-comparisons problem the shadow ledger
+answers and a backtest cannot.
 
 ## Maintenance
 
