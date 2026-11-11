@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from shrap.risk_compliance.risk_officer.limits import PortfolioLimits
 
@@ -156,15 +156,36 @@ def check_daily_loss(
     )
 
 
+def _utc(at: datetime) -> datetime:
+    return at.replace(tzinfo=UTC) if at.tzinfo is None else at.astimezone(UTC)
+
+
 def check_strategy_drawdown(
     points: Sequence[EquityPoint],
     limits: PortfolioLimits,
     *,
     strategy_id: str,
     account_id: str | None = None,
+    since: datetime | None = None,
 ) -> LimitObservation | None:
-    """Observe the drawdown limit for one strategy's account."""
+    """Observe the drawdown limit for one strategy's account.
 
+    ``since`` starts the measurement at a moment rather than at the first point
+    supplied: readings before it are ignored, so the peak is the highest equity
+    seen from then on. The Risk Officer passes the time a human last cleared
+    this strategy's switch.
+
+    Without it the limit could be set and never released. :func:`peak_drawdown`
+    is the worst drawdown *anywhere* in the series, so an account that halved in
+    March still reads 50% in November at a new high, and a sweep that sets the
+    switch on that reading re-sets it five minutes after anyone clears it. The
+    clear is the ruling that the drawdown has been looked at; what the limit
+    owes after it is a fresh 25% from there, not the same one again.
+    """
+
+    if since is not None:
+        start = _utc(since)
+        points = [p for p in points if _utc(p.at) >= start]
     drawdown = peak_drawdown(points)
     if drawdown is None:
         return None
