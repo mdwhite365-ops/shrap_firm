@@ -1,4 +1,4 @@
-# Session handoff — 2026-09-23 (`main` at #270, audit PRs #271–#276 open)
+# Session handoff: 2026-11-10 (`main` at #293)
 
 **Read this first, then `docs/roadmap/implementation-timeline.md`.**
 
@@ -14,7 +14,81 @@ them, and `git log` has the history.
 
 ---
 
-## Pick up here: the 2026-09-23 audit (#271–#276)
+## Pick up here: 2026-11-10 (`main` at #293)
+
+**This section was written from the repo, not from the Dell.** The session that
+wrote it had the code, `git log` and the changelog, and no access to the box.
+Every statement below about what is *running* is taken from a changelog entry
+and is dated; none was re-measured. Start with `make firm-health` on the Dell
+and believe it over this file.
+
+**The firm was halted for over a week in late October and nothing noticed
+(#291).** The `daily_loss` switch tripped on a 2% session loss and stayed set,
+because the clear its docstring described had no caller. The switch blocks buys
+and never sells, so all three accounts kept exiting on signal and were refused
+every replacement: 92, 113 and 100 refused buys, and the books drained to about
+30% invested. Every container was up and every table was filling. That is the
+firm's most expensive silent fault so far, and it sat in the one component
+whose job is to stop the firm.
+
+What has merged since the factory cards (#277–#284), in order:
+
+| PR | Merged | What | Rebuild |
+|---|---|---|---|
+| #286 | 09-27 | A filed metric's own name is one of its wordings (`rd expense`) | `hypothesis-generator` |
+| #287 | 09-27 | **Mike's ruling:** under 150 backtest trades is `hold-for-data`, not `kill`. Never promoted either | `strategy-evaluator` |
+| #288 | 09-27 | Third spec batch, nine specs from the Chen and Zimmermann catalogue | none (specs are loaded by hand) |
+| #289 | 09-27 | Proposer prompt v5 shows the parser's real grammar; v4 had every one-operand formula refused | `hypothesis-generator` |
+| #290 | 10-11 | A split restates the whole history. ETHA's 1-for-3 showed a 198% one-day return and the MACD account traded on it | `market-data`, plus a one-off re-fetch of the launch list |
+| #291 | 11-06 | `daily_loss` clears at the session boundary; Health Monitor alerts on a latched switch; `make firm-health` | `pre-trade-checker`, `health-monitor` |
+| #292 | 11-06 | Changelog heading for #291 | none |
+| #293 | 11-10 | A strategy drawdown switch a human clears stays cleared; `shrap-risk-switch show / set / clear` | `pre-trade-checker` |
+
+**Not verified, and each is the first thing to check:**
+
+- **Whether #291 and #293 are deployed.** #291's merge accepted that the
+  latched switch clears on the first sweep after deploy and the accounts resume
+  buying. Confirm in `risk.kill_switches` (a `daily_loss` row with
+  `active = false` after 11-06) and in fills, by image ID per KI-039.
+- **`shrap-risk-switch` has never run against the real Redis and Postgres.** It
+  was tested against fakes. Run `show` first: it writes nothing.
+  `docker compose exec pre-trade-checker shrap-risk-switch show`
+- **What the week of refused buys did to the record.** The live accounts were
+  about 30% invested through late October and early November, so their returns
+  over that window measure the halt, not the strategies. Any live-versus-shadow
+  comparison that spans it needs the window excluded or named.
+- **Whether the rotation report has anything to say.** It needs 60 shared
+  settled sessions, and the ledger's first was 09-25, so that count is not
+  reached until roughly the second half of December.
+
+**Open, and they are rulings rather than code:**
+
+- **A strategy rotated into an account inherits the previous occupant's
+  drawdown** (#293). The equity curve is the account's, and
+  `research.strategies` records no assignment time. One
+  `shrap-risk-switch clear` after a rotation is the workaround. A column and a
+  ruling would fix it.
+- **The −10% stop fights rank-based strategies** (AFRM, stopped 09-23, re-bought
+  09-24). A re-entry cooldown, or no stop on rank-based strategies. Still
+  unruled; no card has touched it.
+- **The Hypothesis Generator is unstable on direction** (#284, #289): the same
+  paper gave `top` in one run and `bottom` in another. Its spec proposals need
+  reading before they are loaded.
+- **The audit's four hand actions below** (rotate the webhook, disarm the
+  fixture, clear the dust, decide where backups live). Nothing in the repo
+  records any of them as done.
+
+**Where the research constraint stands.** The factory moved it. A strategy is
+now a JSON document, 22 specs are committed across three batches, and every
+one of them, killed or not, is forward-tested daily with no broker. What limits
+the firm is no longer the ability to state or test an idea. It is that the
+ideas come from Mike and a catalogue (the autonomous loop proposed 1 of 44),
+and that the only evidence which can separate them, shadow sessions, arrives
+at one per trading day.
+
+---
+
+## The 2026-09-23 audit (#271–#276)
 
 A full audit through #270: code, git, docs, and the live Dell. **The code was
 clean** (2,172 tests, ruff, mypy --strict), **and the order path works** (fills

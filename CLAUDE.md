@@ -172,7 +172,7 @@ since-entry take-profit is deliberately unarmed — it would sell a position the
 there to be used"), so a buy is sized at 0.80 x regime 0.75 = **0.60** (it was
 0.1875, and the accounts were 84% cash). Holding selection constant, **IR is
 `-Sharpe(benchmark)` at every exposure below 1.0**, which is why it mattered.
-**But the raise applies only to new buys** (measured 2026-09-23): nothing resized
+**But the raise applied only to new buys until #277** (measured 2026-09-23): nothing resized
 held positions, so the momentum account was still ~29% invested, with six
 positions at ~$190 (the old size) next to three at ~$600. **The third account is
 idle because nothing has reached `paper`**, and it stays empty (Mike, 2026-09-23)
@@ -218,6 +218,41 @@ asked it.**
 
 **Always-on services (verified 2026-09-23, 35 containers; 36 once #273 deploys the Corpus Index):** Health Monitor, Audit Logger, Pre-Trade Checker, Execution Agent ×3 (one per paper account), Paper Order Store, Reconciliation Agent ×3, Decision Maker, Strategy Fixture (meant to be disarmed — the Dell's `infra/.env` had `STRATEGY_FIXTURE_ENABLED=true` three times until the 2026-09-23 audit), Strategy Librarian, Strategy Runner, Regime Classifier, Market Phase Scheduler, Tech Watcher, News Analyzer, Filing Processor, Universe Curator, Strategy Evaluator Trigger, Hypothesis Generator Trigger, Market Data Trigger, **Market Data Intraday Trigger** (#236), **Shadow Ledger** (#279), **Corpus Index** (#273), **SEC Facts Refresh** (weekly share counts and XBRL figures), plus the substrate: Postgres/TimescaleDB, Redis, Qdrant, Ollama, Prometheus, Grafana, cAdvisor, node-exporter, postgres-exporter, redis-exporter and **docker-state-exporter** (#239). **On-demand (`--profile tools`):** Strategy Evaluator, Hypothesis Generator, Market Data backfill, Infrastructure Mapper. The **Risk Officer is a library**, not a service — it is enforced inside the Pre-Trade Checker. **`ib-gateway` was stopped and removed 2026-09-18**; its compose project lives at `infra/ibgateway/` (#243) and needs a gitignored `.env` to revive — ADR-0003 gates IBKR on live capital.
 
+**The strategy factory shipped 2026-09-27 (#277–#289), and it moved the
+constraint.** A strategy is a JSON `signal-spec` (#278), not a class and a PR;
+22 are committed in `docs/strategies/specs/` across three batches (#281, #288).
+Every enrolled strategy, killed ones included, is decided on each completed
+session and settled on the next with no broker (the Shadow Ledger, #279), and
+`shrap-shadow-ledger rotation` recommends account swaps from the paired record
+and never moves anything (#283). SEC XBRL fundamentals are in the panel, point
+in time, refreshed weekly (#280, #282). **Under 150 backtest trades is
+`hold-for-data`, not `kill`** (Mike's ruling, #287). The autonomous loop is
+still nearly silent: the Hypothesis Generator proposed 1 of 44 real items
+(#284) and gave opposite directions for the same paper across runs (#289), so
+its proposals are read, not trusted. Do not answer 22 specs by looking for a
+23rd with a better backtest; KI-036 applies to a batch more than to one.
+
+**The exposure raise now reaches held positions (#277).** The Runner tops up or
+trims a holding that drifts more than 25% (and $25) from target, using the
+scale the Risk Officer *recorded*, not a second copy of the sizing rule.
+
+**A split restates the whole history (#290).** ETHA's 1-for-3 left a 198%
+one-day "return" in `daily_bars` because the sweep re-fetched five days of a
+series the vendor had rescaled end to end, and an account traded on it. The
+sweep now compares settled closes before and after it writes.
+
+**The firm was halted for over a week in late October and nothing noticed
+(#291).** `daily_loss` tripped and stayed set; the clear its docstring promised
+had no caller. Buys were refused firm-wide (92, 113 and 100 of them) while
+exits went through, and the books drained to about 30% invested with every
+container up. **#293 found the same shape in the strategy drawdown switch**:
+set from the worst drawdown in the account's last year, so a clear was undone
+on the next sweep, and nothing could make the clear anyway. Both are fixed;
+`shrap-risk-switch show | set | clear` is the manual flag the policy always
+described. **The lesson is about releases, not sets: for every latch, find the
+line of code that undoes it, and if it is a docstring, it is not there.** Run
+**`make firm-health`** at the start of every session (`docs/runbooks/firm-health.md`).
+
 Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike reviews and merges; never stack PRs — see KI-001).
 
 **Ground truth for what's next, in reading order:** **`docs/status/session-handoff.md`** (latest rulings + what to pick up), then **`docs/roadmap/implementation-timeline.md`** (the ordered plan). `docs/status/current-sprint.md` is longer-form history. `docs/roadmap/paper-spine-tree.md` is history — its last card shipped weeks ago.
@@ -225,7 +260,7 @@ Work proceeds as one-card-per-PR (`phase1/<card-name>` branches off `main`; Mike
 > **Check the status docs before trusting them.** They have now fallen behind
 > `main` four times — #72–#80, #92–#101, #129–#175 (forty-six PRs of finished
 > work still described as pending), and #232–#247. Run **`make doc-drift`**
-> first (last reconciled at **#247**). When it fails, trust `git log`,
+> first (last reconciled at **#293**). When it fails, trust `git log`,
 > `docker compose ps` and the database over any document.
 >
 > **Mike's ruling, 2026-09-18: update the docs and the session memory with the
