@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     # falling back to the larger flat fraction.
     posterior_sizing: bool = False
 
+    # Let event plans (ADR-0018) scale or pause new buys. Off by default: with
+    # it on, `risk.event_plans` is read on every buy and a failed read refuses
+    # the buy. Needs `portfolio_limits_enforcement`, since the plans act inside
+    # the Risk Officer. Turning it on with no plans stored changes nothing.
+    event_plans_enforcement: bool = False
+
     # Limits. Defaults mirror `docs/risk/policy.md` v0.1, which is authoritative
     # — these exist so an operator can tighten one without a deploy, not so the
     # numbers can drift. `test_config_defaults_match_the_policy_doc` pins them.
@@ -184,6 +190,7 @@ class Settings(BaseSettings):
             "log_level": self.log_level,
             "portfolio_limits_enforcement": self.portfolio_limits_enforcement,
             "posterior_sizing": self.posterior_sizing,
+            "event_plans_enforcement": self.event_plans_enforcement,
             "monitor_interval_seconds": self.monitor_interval_seconds,
             "portfolio_limits": {
                 "max_ticker_weight": self.max_ticker_weight,

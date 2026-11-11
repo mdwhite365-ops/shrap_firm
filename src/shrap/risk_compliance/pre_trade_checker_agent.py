@@ -35,7 +35,7 @@ import signal
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 import structlog
@@ -52,6 +52,7 @@ from shrap.events import (
 )
 from shrap.events.groups import GroupEventSubscriber, RedisGroupClient
 from shrap.research.strategy_registry import PostgresStrategyRegistry
+from shrap.risk_compliance.event_plans.store import EventPlanStore, sweep_triggers
 from shrap.risk_compliance.pre_trade import PreTradeChecker, RiskPolicy
 from shrap.risk_compliance.rate_limit import RateLimitConfig, RateLimitRedis, RedisRateLimiter
 from shrap.risk_compliance.risk_officer.limits import PortfolioLimits
@@ -71,6 +72,7 @@ STREAM_DECISION_INTENT = "trading.decision.intent"
 STREAM_RISK_APPROVED = "risk.intent.approved"
 STREAM_RISK_VETOED = "risk.intent.vetoed"
 STREAM_RISK_ALERT = "risk.alert"
+STREAM_EVENT_PLAN_ACTIVATED = "risk.event_plan.activated"
 STREAM_KILL_SWITCH_SET = "risk.kill_switch.set"
 STREAM_KILL_SWITCH_CLEAR = "risk.kill_switch.clear"
 STREAM_REGIME_SIZING_MODIFIER = "intel.regime.sizing-modifier"
@@ -486,6 +488,46 @@ async def monitor_once(
     return result
 
 
+async def event_plans_once(
+    redis: RedisStreamClient,
+    plans: EventPlanStore,
+    produced_by: str = PRODUCED_BY,
+    now: datetime | None = None,
+) -> int:
+    """Fire any trigger plan the last completed session met, and say so.
+
+    Only *activation* is swept. There is no matching pass that ends a plan,
+    because nothing ends one: its effect stops when the clock passes its end
+    time, whether or not this function ever runs again (ADR-0018 §1).
+    """
+
+    fired = await sweep_triggers(plans, now or datetime.now(UTC))
+    publisher = EventPublisher(redis)
+    for plan, activation in fired:
+        await publisher.publish(
+            stream=STREAM_EVENT_PLAN_ACTIVATED,
+            produced_by=produced_by,
+            schema_version=SCHEMA_VERSION,
+            payload={
+                **plan.to_payload(),
+                "session_date": activation.session_date.isoformat(),
+                "observed": activation.observed,
+                "activated_at": activation.activated_at.isoformat(),
+                "until": activation.until.isoformat(),
+            },
+        )
+        log.warning(
+            "risk_officer.event_plan_activated",
+            plan=plan.name,
+            action=plan.action,
+            multiplier=plan.multiplier,
+            ticker=plan.ticker,
+            observed=activation.observed,
+            until=activation.until.isoformat(),
+        )
+    return len(fired)
+
+
 async def monitor_loop(
     redis: RedisStreamClient,
     officer: RiskOfficer,
@@ -493,6 +535,7 @@ async def monitor_loop(
     stop: asyncio.Event,
     interval_seconds: float = 300.0,
     produced_by: str = PRODUCED_BY,
+    event_plans: EventPlanStore | None = None,
 ) -> None:
     """Re-check the continuous limits every ``interval_seconds``.
 
@@ -509,6 +552,14 @@ async def monitor_loop(
                 await monitor_once(redis, officer, assignments, produced_by=produced_by)
         except Exception:
             log.exception("risk_officer.monitor_failed")
+        # Its own try: a failed limits sweep must not stop a shock plan from
+        # firing, and the reverse. Runs with no assignments too, since a plan
+        # is about the firm and not about any one account.
+        if event_plans is not None:
+            try:
+                await event_plans_once(redis, event_plans, produced_by=produced_by)
+            except Exception:
+                log.exception("risk_officer.event_plan_sweep_failed")
         await _interruptible_sleep(stop, interval_seconds)
 
 
@@ -600,6 +651,7 @@ async def run(
     consumer: str | None = None,
     portfolio_limits_enforcement: bool = False,
     posterior_sizing: bool = False,
+    event_plans_enforcement: bool = False,
     portfolio_limits: PortfolioLimits | None = None,
     monitor_interval_seconds: float = 300.0,
 ) -> None:
@@ -681,6 +733,7 @@ async def run(
     # indistinguishable from an unmeasured one, the gate fails closed on the
     # latter, and every order would be vetoed — including the smoke path.
     officer: RiskOfficer | None = None
+    plan_store: EventPlanStore | None = None
     monitor_task: asyncio.Task[None] | None = None
     if portfolio_limits_enforcement:
         limits = portfolio_limits or PortfolioLimits()
@@ -697,13 +750,29 @@ async def run(
             if posterior_sizing
             else None
         )
+        # Opt-in, like the posterior and for the same reason: this changes what
+        # a buy is sized at, and that must arrive by a decision and not with a
+        # rebuild (#221). Off, no plan is read and none can fire.
+        if event_plans_enforcement:
+            plan_store = EventPlanStore(cast(Any, pool))
+            await plan_store.ensure_schema()
         officer = RiskOfficer(
             store=risk_store,
             switch_store=RedisSwitchStore(cast(SwitchRedis, redis)),
             registry=PostgresStrategyRegistry(pool),
             limits=limits,
             posteriors=posteriors,
+            event_plans=plan_store,
         )
+        if plan_store is not None:
+            log.warning(
+                "risk_officer.event_plans_on",
+                note=(
+                    "event plans (ADR-0018) can scale or pause new buys; an "
+                    "unreadable plan table refuses buys rather than sizing them "
+                    "in full. Exits are never affected."
+                ),
+            )
         if posterior_sizing:
             log.warning(
                 "risk_officer.posterior_sizing_on",
@@ -731,6 +800,7 @@ async def run(
                 lambda: _account_assignments(cast(Any, pool)),
                 stop,
                 interval_seconds=monitor_interval_seconds,
+                event_plans=plan_store,
             )
         )
     else:
@@ -787,6 +857,7 @@ __all__ = [
     "PRODUCED_BY",
     "SCHEMA_VERSION",
     "STREAM_DECISION_INTENT",
+    "STREAM_EVENT_PLAN_ACTIVATED",
     "STREAM_KILL_SWITCH_CLEAR",
     "STREAM_KILL_SWITCH_SET",
     "STREAM_REGIME_SIZING_MODIFIER",

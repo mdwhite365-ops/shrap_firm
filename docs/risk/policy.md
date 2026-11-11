@@ -279,3 +279,60 @@ remedy is the clear above, once, after the rotation.
 
 - **v0.1** (2026-07-29) — first cuts. Created alongside the Risk Officer implementation;
   the document the spec had assumed existed since 2026-05-29.
+
+## Event plans (ADR-0018)
+
+An event plan is a written rule that makes the firm smaller around an event. It
+is **off unless `PRE_TRADE_CHECKER_EVENT_PLANS_ENFORCEMENT=true`**, and with it
+off no plan is read and none can fire.
+
+A plan does one of two things, and only to a trade that adds risk:
+
+- **scale-buys**: every new buy is sized at a fraction of what stage and regime
+  would otherwise allow.
+- **pause-buys**: no new buy is approved (`EVENT_PLAN_PAUSE`).
+
+Exits are never scaled or paused, for the same reason the kill switches never
+block one.
+
+It applies in one of two ways:
+
+- **window**: between two instants, for a scheduled event. At most 14 days.
+- **daily-return**: for a fixed hold (at most 5 days) after a named ticker's
+  last *completed* session moved by a threshold or more. The plan stays armed
+  for at most 366 days, then has to be renewed.
+
+**No plan is ever switched off, because none is ever switched on.** Whether a
+plan applies is computed from its row and the clock each time a buy is sized.
+There is no `active` column and no code that ends a plan, so there is nothing to
+fail to run. This is the #291 and #293 lesson applied to the design, not to a
+check on it.
+
+When several plans apply the smallest multiplier wins and any pause pauses.
+`shrap-event-plan cancel` ends one immediately, including through a hold.
+
+**A scale-buys plan also reaches held positions, after the first buy under it.**
+The Runner resizes holdings toward the scale the Risk Officer recorded on the
+account's newest approved buy (#277), and that ratio now includes the plan. Once
+a buy is approved under a plan, holdings more than 25% over the smaller target
+are trimmed; once a buy is approved after it ends, they are topped back up. A
+pause-buys plan approves nothing and so moves nothing.
+
+**If the plan table cannot be read, buys are refused**
+(`EVENT_PLANS_UNAVAILABLE`), not sized in full. Sizing in full when the control
+cannot be read is fail-open on something whose whole purpose is timing.
+
+```bash
+docker compose exec pre-trade-checker shrap-event-plan show
+docker compose exec pre-trade-checker shrap-event-plan add-window --name "FOMC Dec" \
+    --kind fed --start 2026-12-08T16:00-05:00 --end 2026-12-09T16:00-05:00 \
+    --scale 0.5 --reason "decision at 14:00 ET on the 9th"
+docker compose exec pre-trade-checker shrap-event-plan add-trigger --name "SPY down 3%" \
+    --kind shock --ticker SPY --threshold -0.03 --hold-hours 48 --pause \
+    --reason "stand aside for two days after a 3% fall"
+```
+
+Not built yet: nothing posts an activation to the alert channel (it is logged at
+WARNING and published on `risk.event_plan.activated`, which has no consumer);
+triggers read completed sessions only, so a fall is seen the next day; and plans
+are firm-wide, with no per-ticker scope.
