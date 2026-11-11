@@ -78,6 +78,17 @@ What has merged since the factory cards (#277–#284), in order:
   fixture, clear the dust, decide where backups live). Nothing in the repo
   records any of them as done.
 
+**ADR-0018, event plans, is accepted (#295), and its first card is built
+(#296).** The firm is to keep written, expiring plans for scheduled events and
+for shocks, activate them itself, and grade each one against the account's own
+no-plan shadow. Defensive actions are live from the first lever card; offensive
+ones only for a plan type with a graded record. Eight cards are sequenced in
+the ADR. Card 1, `shrap-event-lookback`, is read-only and **has not been run
+against the database**: run it once the Dell is rebuilt, and read its
+"unexplained" share before scoping card 2. The ADR's prerequisite still stands:
+something must run `make firm-health` on a schedule before a lever that reduces
+exposure ships.
+
 **Where the research constraint stands.** The factory moved it. A strategy is
 now a JSON document, 22 specs are committed across three batches, and every
 one of them, killed or not, is forward-tested daily with no broker. What limits
