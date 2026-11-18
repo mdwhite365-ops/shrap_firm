@@ -15,10 +15,13 @@ from typing import Any
 
 import pytest
 
+from shrap.risk_compliance.event_plans.plans import NO_EFFECT, Effect
 from shrap.risk_compliance.risk_officer.exposure import Position
 from shrap.risk_compliance.risk_officer.limits import PortfolioLimits
 from shrap.risk_compliance.risk_officer.monitor import EquityPoint
 from shrap.risk_compliance.risk_officer.officer import (
+    REASON_EVENT_PLAN_PAUSE,
+    REASON_EVENT_PLANS_UNAVAILABLE,
     REASON_NO_ACCOUNT,
     REASON_RISK_STATE_UNAVAILABLE,
     REASON_UNKNOWN_STRATEGY,
@@ -1026,3 +1029,121 @@ async def test_the_cluster_cap_starts_binding_at_the_raised_paper_fraction() -> 
     assert assessment.approved_quantity < assessment.sizing.approved_quantity
     assert assessment.reason_code == "SCALED_DOWN_PORTFOLIO_LIMIT"
     assert any("CLUSTER" in note for note in assessment.notes)
+
+
+# --- event plans (ADR-0018) ---------------------------------------------------
+
+
+class FakePlans:
+    """Stands in for ``EventPlanStore.effect``."""
+
+    def __init__(self, effect: Effect | None = None, fail: bool = False) -> None:
+        self._effect = effect or NO_EFFECT
+        self._fail = fail
+        self.asked: list[datetime] = []
+
+    async def effect(self, now: datetime) -> Effect:
+        self.asked.append(now)
+        if self._fail:
+            raise RuntimeError("relation risk.event_plans does not exist")
+        return self._effect
+
+
+def _officer_with_plans(store: FakeStore, switches: FakeSwitchStore, plans: Any) -> RiskOfficer:
+    return RiskOfficer(
+        store=store,  # type: ignore[arg-type]
+        switch_store=switches,  # type: ignore[arg-type]
+        registry=FakeRegistry(),
+        limits=PortfolioLimits(),
+        event_plans=plans,
+    )
+
+
+HALF = Effect(multiplier=0.5, plan_ids=("p1",), names=("FOMC Dec",))
+PAUSE = Effect(multiplier=0.0, pause_buys=True, plan_ids=("p2",), names=("SPY down 3%",))
+
+
+async def test_with_no_plan_lookup_a_buy_is_sized_exactly_as_before() -> None:
+    """Opt-in at construction. A rebuild must not change a size (#221)."""
+
+    baseline = await _assess(_officer(FakeStore(), FakeSwitchStore()))
+    with_nothing_in_force = await _assess(
+        _officer_with_plans(FakeStore(), FakeSwitchStore(), FakePlans())
+    )
+
+    assert baseline.approved and with_nothing_in_force.approved
+    assert with_nothing_in_force.approved_quantity == baseline.approved_quantity
+    assert baseline.sizing.event_multiplier == 1.0
+    assert baseline.sizing.event_plan_ids == ()
+
+
+async def test_a_plan_in_force_scales_a_buy_and_says_which_plan() -> None:
+    baseline = await _assess(_officer(FakeStore(), FakeSwitchStore()))
+
+    scaled = await _assess(_officer_with_plans(FakeStore(), FakeSwitchStore(), FakePlans(HALF)))
+
+    assert scaled.approved
+    assert scaled.approved_quantity == pytest.approx(baseline.approved_quantity * 0.5)
+    payload = scaled.sizing.to_payload()
+    assert payload["event_multiplier"] == 0.5
+    assert payload["event_plan_ids"] == ["p1"]
+    # Its own field: the regime multiplier still says what the regime did.
+    assert payload["regime_multiplier"] == baseline.sizing.regime_multiplier
+
+
+async def test_the_recorded_scale_carries_the_plan_so_the_runner_can_follow_it() -> None:
+    """The Runner resizes holdings from approved / requested on the newest
+    approved buy (#277). The plan has to be inside that ratio, or the Runner
+    would top a position back up against the plan that cut it."""
+
+    baseline = await _assess(_officer(FakeStore(), FakeSwitchStore()))
+    scaled = await _assess(_officer_with_plans(FakeStore(), FakeSwitchStore(), FakePlans(HALF)))
+
+    def recorded(a: Any) -> float:
+        return float(a.sizing.approved_quantity / a.sizing.requested_quantity)
+
+    assert recorded(scaled) == pytest.approx(recorded(baseline) * 0.5)
+
+
+async def test_a_pause_refuses_a_buy_and_names_the_plan() -> None:
+    result = await _assess(_officer_with_plans(FakeStore(), FakeSwitchStore(), FakePlans(PAUSE)))
+
+    assert not result.approved
+    assert result.reason_code == REASON_EVENT_PLAN_PAUSE
+    assert "SPY down 3%" in result.notes[0]
+
+
+@pytest.mark.parametrize("effect", [HALF, PAUSE])
+async def test_a_plan_never_touches_an_exit(effect: Effect) -> None:
+    """A plan that scaled or paused a sell would trap the firm in the position
+    it was written to make smaller. Same rule as the kill switches."""
+
+    store = FakeStore(positions=(Position(ticker="AAPL", quantity=10.0, market_value=1_000.0),))
+    plans = FakePlans(effect)
+
+    result = await _assess(_officer_with_plans(store, FakeSwitchStore(), plans), side="sell")
+
+    assert result.approved and result.approved_quantity == 4
+    assert plans.asked == []
+
+
+async def test_an_unreadable_plan_table_refuses_the_buy() -> None:
+    """Sizing in full when the plans cannot be read is fail-open on a control
+    whose whole job is to make the firm smaller at a particular moment."""
+
+    result = await _assess(
+        _officer_with_plans(FakeStore(), FakeSwitchStore(), FakePlans(fail=True))
+    )
+
+    assert not result.approved
+    assert result.reason_code == REASON_EVENT_PLANS_UNAVAILABLE
+
+
+async def test_an_unreadable_plan_table_still_lets_an_exit_through() -> None:
+    store = FakeStore(positions=(Position(ticker="AAPL", quantity=10.0, market_value=1_000.0),))
+
+    result = await _assess(
+        _officer_with_plans(store, FakeSwitchStore(), FakePlans(fail=True)), side="sell"
+    )
+
+    assert result.approved

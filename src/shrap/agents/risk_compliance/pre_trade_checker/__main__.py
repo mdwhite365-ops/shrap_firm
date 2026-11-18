@@ -30,6 +30,7 @@ def main() -> None:
             consumer=settings.instance_id,
             portfolio_limits_enforcement=settings.portfolio_limits_enforcement,
             posterior_sizing=settings.posterior_sizing,
+            event_plans_enforcement=settings.event_plans_enforcement,
             portfolio_limits=settings.portfolio_limits(),
             monitor_interval_seconds=settings.monitor_interval_seconds,
         )

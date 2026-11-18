@@ -27,6 +27,7 @@ from typing import Any, Protocol
 
 import structlog
 
+from shrap.risk_compliance.event_plans.plans import NO_EFFECT, Effect
 from shrap.risk_compliance.risk_officer.exposure import (
     ExposureUnavailable,
     build_book,
@@ -70,6 +71,8 @@ REASON_NO_ACCOUNT = "STRATEGY_HAS_NO_ACCOUNT"
 REASON_UNKNOWN_STRATEGY = "UNKNOWN_STRATEGY"
 REASON_SELL_WITHOUT_POSITION = "SELL_WITHOUT_POSITION"
 REASON_BELOW_BROKER_MINIMUM = "BELOW_BROKER_MINIMUM"
+REASON_EVENT_PLAN_PAUSE = "EVENT_PLAN_PAUSE"
+REASON_EVENT_PLANS_UNAVAILABLE = "EVENT_PLANS_UNAVAILABLE"
 
 # How much price history the correlation clustering reads per name. Roughly a
 # quarter of trading days — long enough for a 60-day correlation with slack,
@@ -98,6 +101,12 @@ class PosteriorLookup(Protocol):
     """
 
     async def latest_posterior(self, strategy_id: str) -> SkillPosterior | None: ...
+
+
+class EventPlanLookup(Protocol):
+    """What the event plans in force add up to at an instant (ADR-0018)."""
+
+    async def effect(self, now: datetime) -> Effect: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,12 +220,16 @@ class RiskOfficer:
         *,
         price_history_bars: int = PRICE_HISTORY_BARS,
         posteriors: PosteriorLookup | None = None,
+        event_plans: EventPlanLookup | None = None,
     ) -> None:
         self._store = store
         self._switches = switch_store
         self._registry = registry
         self._limits = limits or PortfolioLimits()
         self._history_bars = price_history_bars
+        self._event_plans = event_plans
+        """Left ``None`` and no plan is ever consulted. Opt-in at construction,
+        for the same reason as ``posteriors`` below."""
         self._posteriors = posteriors
         """Left ``None`` and every size is what it was before this existed.
 
@@ -438,6 +451,39 @@ class RiskOfficer:
                     reference_price=price,
                 )
             else:
+                # Event plans act here and nowhere else: on a trade that adds
+                # risk. Every branch above is an exit, and a plan that scaled
+                # or paused an exit would trap the firm in the position it was
+                # written to make smaller.
+                plan_effect = NO_EFFECT
+                if self._event_plans is not None:
+                    try:
+                        plan_effect = await self._event_plans.effect(moment)
+                    except Exception as exc:
+                        # Refuse rather than proceed at full size. A plan exists
+                        # to make the firm smaller at a specific moment, and
+                        # ignoring it when the read fails is fail-open on a risk
+                        # control: the failure nobody notices. Only buys are
+                        # refused; exits never reach this branch.
+                        log.error("risk_officer.event_plans_unavailable", exc_info=True)
+                        return RiskAssessment.refused(
+                            REASON_EVENT_PLANS_UNAVAILABLE,
+                            f"cannot read the event plans in force: {exc}",
+                            account_id,
+                        )
+                if plan_effect.pause_buys:
+                    return RiskAssessment(
+                        approved=False,
+                        approved_quantity=0,
+                        reason_code=REASON_EVENT_PLAN_PAUSE,
+                        notes=[
+                            "new buys are paused by event plan(s): " + ", ".join(plan_effect.names)
+                        ],
+                        account_id=account_id,
+                        binding_limit="event_plan",
+                        regime_label=regime_label,
+                        regime_multiplier=multiplier,
+                    )
                 posterior: SkillPosterior | None = None
                 if self._posteriors is not None:
                     try:
@@ -472,6 +518,8 @@ class RiskOfficer:
                     regime_multiplier=multiplier,
                     reference_price=price,
                     posterior=posterior,
+                    event_multiplier=plan_effect.multiplier,
+                    event_plan_ids=plan_effect.plan_ids,
                 )
         if sizing.approved_quantity <= 0:
             return RiskAssessment(
@@ -479,8 +527,9 @@ class RiskOfficer:
                 approved_quantity=0,
                 reason_code="SIZED_TO_ZERO",
                 notes=[
-                    f"stage {sizing.stage} at {sizing.stage_fraction:.2f} and regime "
-                    f"{multiplier:.2f} reduce {quantity} to nothing"
+                    f"stage {sizing.stage} at {sizing.stage_fraction:.2f}, regime "
+                    f"{multiplier:.2f} and event plans {sizing.event_multiplier:.2f} "
+                    f"reduce {quantity} to nothing"
                 ],
                 account_id=account_id,
                 sizing=sizing,
@@ -688,6 +737,8 @@ __all__ = [
     "DRAWDOWN_LOOKBACK",
     "PRICE_HISTORY_BARS",
     "REASON_BELOW_BROKER_MINIMUM",
+    "REASON_EVENT_PLANS_UNAVAILABLE",
+    "REASON_EVENT_PLAN_PAUSE",
     "REASON_NO_ACCOUNT",
     "REASON_POSTERIOR_UNAVAILABLE",
     "REASON_RISK_STATE_UNAVAILABLE",

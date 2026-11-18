@@ -89,6 +89,15 @@ against the database**: run it once the Dell is rebuilt, and read its
 something must run `make firm-health` on a schedule before a lever that reduces
 exposure ships.
 
+**The event plan engine is in (#297), switched off.** Cards 3 to 5 of ADR-0018:
+`shrap-event-plan` stores hand-written plans that scale or pause new buys over
+a window or after a ticker's daily move. It does nothing until
+`PRE_TRADE_CHECKER_EVENT_PLANS_ENFORCEMENT=true`. **Before turning it on:** run
+`shrap-event-plan show` against the real database (the SQL has only met fakes),
+and know that nothing alerts when a plan fires. Still to build from the ADR:
+the calendar (card 2), the alert, the grader (6), model-written plans (7) and
+the relationship map (8).
+
 **Where the research constraint stands.** The factory moved it. A strategy is
 now a JSON document, 22 specs are committed across three batches, and every
 one of them, killed or not, is forward-tested daily with no broker. What limits

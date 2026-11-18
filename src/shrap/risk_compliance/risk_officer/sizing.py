@@ -59,6 +59,11 @@ class SizingDecision:
     """Price the quantity was sized against, when the caller supplied one."""
     kelly_posterior: float | None = None
     """Always ``None`` until a Bayesian Updater exists. See the module docstring."""
+    event_multiplier: float = 1.0
+    """What the event plans in force scaled a buy by (ADR-0018). Its own field,
+    not folded into ``regime_multiplier``: a recorded scale that cannot say why
+    it was applied is no use to whoever grades the plan."""
+    event_plan_ids: tuple[str, ...] = ()
 
     @property
     def was_scaled(self) -> bool:
@@ -80,6 +85,8 @@ class SizingDecision:
             "reference_price": self.reference_price,
             "approved_notional": self.approved_notional,
             "kelly_posterior": self.kelly_posterior,
+            "event_multiplier": self.event_multiplier,
+            "event_plan_ids": list(self.event_plan_ids),
         }
 
 
@@ -90,6 +97,8 @@ def size_intent(
     regime_multiplier: float = 1.0,
     reference_price: float | None = None,
     posterior: SkillPosterior | None = None,
+    event_multiplier: float = 1.0,
+    event_plan_ids: tuple[str, ...] = (),
 ) -> SizingDecision:
     """Scale a requested quantity down to what the stage and regime permit.
 
@@ -125,6 +134,11 @@ def size_intent(
     # table does — see `posterior.py` for why that is not a coincidence.
     effective_fraction = fraction if posterior is None else posterior.fraction
     scale = effective_fraction * max(0.0, min(regime_multiplier, 1.0))
+    # Event plans multiply after everything else and are clamped to [0, 1]
+    # here as well as at validation and in the table: this is the one place a
+    # plan touches a quantity, and it must not be able to raise one.
+    event_scale = max(0.0, min(event_multiplier, 1.0))
+    scale *= event_scale
     approved = requested_quantity * scale if requested_quantity > 0 else 0.0
     approved = max(0.0, min(approved, requested_quantity))
 
@@ -142,6 +156,8 @@ def size_intent(
         regime_multiplier=regime_multiplier,
         reference_price=reference_price,
         kelly_posterior=None if posterior is None else posterior.fraction,
+        event_multiplier=event_scale,
+        event_plan_ids=event_plan_ids,
     )
 
 

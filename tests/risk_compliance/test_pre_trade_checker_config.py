@@ -50,6 +50,7 @@ def test_settings_redacted_output_is_log_safe() -> None:
         # position sizes (KI-036) and makes the gate refuse on an unreadable
         # posterior, so it is a governance decision rather than a default.
         "posterior_sizing": False,
+        "event_plans_enforcement": False,
         "monitor_interval_seconds": 300.0,
         "portfolio_limits": {
             "max_ticker_weight": 0.20,
